@@ -10,7 +10,7 @@
 | 质量 | [设计评审](quality/design-review.md) · [测量与验收协议](quality/verification-protocol.md) | 设计缺口、处理记录、验证方法 |
 | 研究 | [基础假设审视](research/foundational-hypotheses-review.md) · [验证工具包](research/validation-kit.md) · [模拟协议](research/simulation-protocol.md) | 早期探索材料，不等同实际客户证据 |
 | 开发 | [Git协作约定](development/git-workflow.md) | 分支、提交与源码管理 |
-| 状态 | [骨架交付记录](status/implementation-status.md) | 已实现能力、实际测试和未完成范围 |
+| 状态 | [桌面角色交付](status/desktop-pet.md) · [骨架交付记录](status/implementation-status.md) | 已实现能力、实际测试和未完成范围 |
 
 [早期交互验证原型](../prototypes/companion-validation/index.html)是独立研究材料，不是桌面产品入口。统一执行 `npm run verify:docs` 和 `npm run verify:prototype` 检查文档及原型。
 

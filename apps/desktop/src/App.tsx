@@ -1,3 +1,5 @@
+import { listen } from '@tauri-apps/api/event';
+import { nativeDesktop, petAction } from './lib/surface';
 import { useCallback, useEffect, useState } from 'react';
 import type { RuntimeInfo, Task } from '@companion/contracts';
 import { client, errorMessage } from './lib/client';
@@ -18,7 +20,15 @@ export default function App() {
       setInfo(runtime); setTasks(items); setReady(true);
     } catch (e) { setError(errorMessage(e)); }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    let disposed = false;
+    let remove: (() => void) | undefined;
+    if (nativeDesktop) void listen('panel-refresh', () => { void load(); }).then(unlisten => {
+      if (disposed) unlisten(); else remove = unlisten;
+    }).catch(e => setError(errorMessage(e)));
+    return () => { disposed = true; remove?.(); };
+  }, [load]);
 
   async function create(title: string) {
     setBusy(true); setError(null);
@@ -47,7 +57,7 @@ export default function App() {
       <div className="build-tag"><span className="live-dot"/> 开发预览 <span>v0.1</span></div>
     </aside>
     <main id="home">
-      <header className="topbar"><span>个人空间 <span className="slash">/</span> 与栖栖的日常</span><span className="environment"><span className="live-dot"/>{info?.runtime === 'desktop' ? '桌面客户端' : info?.runtime === 'preview' ? '浏览器预览' : '正在连接本地服务…'}</span></header>
+      <header className="topbar">{nativeDesktop && <button className="text-button" onClick={() => { void petAction('restore').catch(e => setError(errorMessage(e))); }}>显示桌面角色</button>}<span>个人空间 <span className="slash">/</span> 与栖栖的日常</span><span className="environment"><span className="live-dot"/>{info?.runtime === 'desktop' ? '桌面客户端' : info?.runtime === 'preview' ? '浏览器预览' : '正在连接本地服务…'}</span></header>
       <div className="page-content">
         <div className="page-heading"><div><span className="eyebrow">YOUR EVERYDAY COMPANION</span><h1>今天，也一起慢慢来。</h1><p>想法可以先记下，陪伴可以很简单。</p></div><span className="chapter">01 <span>/ 我们的起点</span></span></div>
         {error && <div className="error-banner" role="alert"><span>{error}</span>{!ready && <button onClick={() => void load()}>重新连接</button>}</div>}

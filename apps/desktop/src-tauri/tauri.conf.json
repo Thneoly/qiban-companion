@@ -10,12 +10,45 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "栖伴 · Companion", "width": 1180, "height": 820, "minWidth": 820, "minHeight": 620 }],
+    "windows": [
+      {
+        "label": "pet",
+        "title": "栖栖 · 桌面伴侣",
+        "url": "index.html",
+        "width": 320,
+        "height": 440,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false
+      },
+      {
+        "label": "main",
+        "title": "栖伴 · 任务面板",
+        "url": "index.html?view=panel",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 820,
+        "minHeight": 620,
+        "visible": false,
+        "focus": false
+      }
+    ],
     "security": {
-      "capabilities": ["main"],
+      "capabilities": [
+        "main",
+        "pet"
+      ],
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'",
       "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'"
     }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": false
+  }
 }

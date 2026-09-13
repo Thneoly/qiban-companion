@@ -1,16 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main",
-  "description": "Local main window only; no shell, filesystem plugin or remote origin permissions.",
+  "identifier": "pet",
+  "description": "Local pet interaction, inbox creation, and its own hit-test regions only.",
   "windows": [
-    "main"
+    "pet"
   ],
   "permissions": [
     "allow-get-runtime-info",
-    "allow-list-tasks",
     "allow-create-task",
-    "allow-cancel-task",
     "allow-pet-action",
+    "allow-set-pet-regions",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]
