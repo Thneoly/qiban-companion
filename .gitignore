@@ -1,0 +1,14 @@
+node_modules/
+dist/
+target/
+.cache/
+*.tsbuildinfo
+apps/desktop/src-tauri/gen/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+test-results/
+playwright-report/

@@ -1,0 +1,19 @@
+[package]
+name = "companion-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+default-run = "companion-desktop"
+
+[lib]
+name = "companion_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+companion-core.workspace = true
+companion-storage.workspace = true

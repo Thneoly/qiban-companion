@@ -1,0 +1,38 @@
+{
+  "name": "companion-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/desktop",
+    "packages/contracts"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @companion/desktop",
+    "desktop": "npm run tauri --workspace @companion/desktop -- dev",
+    "build": "npm run build --workspace @companion/desktop",
+    "build:desktop": "npm run tauri --workspace @companion/desktop -- build --no-bundle",
+    "typecheck": "tsc --noEmit -p apps/desktop/tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "rust:check": "cargo check --workspace --locked",
+    "rust:test": "cargo test --workspace --locked",
+    "test:browser": "npm run test:browser --workspace @companion/desktop",
+    "verify:docs": "node scripts/verification/verify-docs.cjs && node scripts/verification/verify-plan.cjs",
+    "verify:prototype": "node scripts/verification/verify-prototype.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "26.5.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.0"
+  }
+}

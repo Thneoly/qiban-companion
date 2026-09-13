@@ -1,0 +1,20 @@
+{
+  "name": "@companion/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test:browser": "playwright test",
+    "icons": "tauri icon assets/brand/app-icon.svg"
+  },
+  "dependencies": {
+    "@companion/contracts": "*",
+    "@tauri-apps/api": "2.11.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}
