@@ -347,9 +347,11 @@ version = "0.1.0"
 dependencies = [
  "companion-core",
  "companion-storage",
+ "rusqlite",
  "serde",
  "tauri",
  "tauri-build",
+ "uuid",
  "windows",
 ]
 
