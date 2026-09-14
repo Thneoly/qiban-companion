@@ -1,5 +1,12 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "model_settings_get",
+        "model_settings_save",
+        "model_key_set",
+        "model_key_delete",
+        "chat_config",
+        "chat_generate",
+        "chat_cancel",
         "get_runtime_info",
         "list_tasks",
         "create_task",

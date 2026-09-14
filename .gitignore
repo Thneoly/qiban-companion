@@ -12,3 +12,6 @@ apps/desktop/src-tauri/gen/
 *.db-wal
 test-results/
 playwright-report/
+
+# Locally downloaded SDK/model samples; explicit preparation required.
+apps/desktop/public/live2d-local/

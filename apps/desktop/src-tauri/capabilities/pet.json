@@ -11,6 +11,9 @@
     "allow-pet-action",
     "allow-set-pet-regions",
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "allow-chat-config",
+    "allow-chat-generate",
+    "allow-chat-cancel"
   ]
 }

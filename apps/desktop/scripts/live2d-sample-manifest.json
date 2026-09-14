@@ -1,0 +1,122 @@
+[
+    {
+        "gitBlob":  "efbe71df1a225d5b268379165033af1adb44d42d",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/LICENSE.md",
+        "file":  "licenses/samples-LICENSE.md"
+    },
+    {
+        "gitBlob":  "ebe735dd5a95ad5519cfc1f18c3e996522b93d1d",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/NOTICE.md",
+        "file":  "licenses/samples-NOTICE.md"
+    },
+    {
+        "gitBlob":  "8ff89e5de2c07767581d018748a60e854771afed",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.2048/texture_00.png",
+        "file":  "Hiyori/Hiyori.2048/texture_00.png"
+    },
+    {
+        "gitBlob":  "2f50d2fd7c76069e49ee4e1ca61fe66e3ed92c50",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.2048/texture_01.png",
+        "file":  "Hiyori/Hiyori.2048/texture_01.png"
+    },
+    {
+        "gitBlob":  "234dff38be1a48966283731b81d68cd142084bc5",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.cdi3.json",
+        "file":  "Hiyori/Hiyori.cdi3.json"
+    },
+    {
+        "gitBlob":  "7231288fc2ce85ae000c376a11b3f41bcb9cae03",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.moc3",
+        "file":  "Hiyori/Hiyori.moc3"
+    },
+    {
+        "gitBlob":  "b93e4506b1d6e3728599e06eaef3f0171fafba86",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.model3.json",
+        "file":  "Hiyori/Hiyori.model3.json"
+    },
+    {
+        "gitBlob":  "d1f2f96c2df766bd5b8a77e22cd2fe7fa1f181e5",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.physics3.json",
+        "file":  "Hiyori/Hiyori.physics3.json"
+    },
+    {
+        "gitBlob":  "297fc782cc3a3c06e6765ae25a590158f47b49d1",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.pose3.json",
+        "file":  "Hiyori/Hiyori.pose3.json"
+    },
+    {
+        "gitBlob":  "5dd9fdf316db39c2e37f075c365cd66d416aa305",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/Hiyori.userdata3.json",
+        "file":  "Hiyori/Hiyori.userdata3.json"
+    },
+    {
+        "gitBlob":  "5adb2295cfbb60bc94e4b2049b8381ae1a649ea6",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m01.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m01.motion3.json"
+    },
+    {
+        "gitBlob":  "bb652b1c1ef0c0fc06d5e0a1c09ed948ad918373",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m02.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m02.motion3.json"
+    },
+    {
+        "gitBlob":  "83c5c397143916860e2b9c7fedbd9fc384762c0e",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m03.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m03.motion3.json"
+    },
+    {
+        "gitBlob":  "aa8aa811b4534f7570b6429ee3f101eba07af38a",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m04.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m04.motion3.json"
+    },
+    {
+        "gitBlob":  "509924b71a6fddb142fe578a7adc5933e62e7f0e",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m05.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m05.motion3.json"
+    },
+    {
+        "gitBlob":  "0bfe6003b85de8d4d0fa6e5ad198aa61f84b8134",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m06.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m06.motion3.json"
+    },
+    {
+        "gitBlob":  "b19014889c164696db554af7ae19fef97cffcb22",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m07.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m07.motion3.json"
+    },
+    {
+        "gitBlob":  "94b9c88400b352331cc3b1fa52f149d69de29cba",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m08.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m08.motion3.json"
+    },
+    {
+        "gitBlob":  "47f74bfc9c459530297ea252311bfe6e080734e8",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m09.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m09.motion3.json"
+    },
+    {
+        "gitBlob":  "341f9ec87d040b4f1a36f59dc86ffb6240e6b4b5",
+        "url":  "https://raw.githubusercontent.com/Live2D/CubismWebSamples/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Hiyori/motions/Hiyori_m10.motion3.json",
+        "file":  "Hiyori/motions/Hiyori_m10.motion3.json"
+    },
+    {
+        "gitBlob":  "4139d4f3b286105705790e02aba8539fc6150020",
+        "url":  "https://raw.githubusercontent.com/wan-h/awesome-digital-human-live2d/69f9c022cea8a5804759ad4a81882eb537445e2d/web/lib/live2d/Core/LICENSE.md",
+        "file":  "licenses/cubism-core-LICENSE.md"
+    },
+    {
+        "gitBlob":  "4017da4ced803681ec93378200cbb574bcd3e7f4",
+        "url":  "https://raw.githubusercontent.com/wan-h/awesome-digital-human-live2d/69f9c022cea8a5804759ad4a81882eb537445e2d/web/lib/live2d/Core/live2dcubismcore.min.js",
+        "file":  "live2dcubismcore.min.js"
+    },
+    {
+        "url":  "https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js",
+        "file":  "cubism4.min.js",
+        "sha256":  "af1267e6d52759b245766c578d905bfa025b532d5c3cc727c370957c4409e21b"
+    },
+    {
+        "url":  "https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/LICENSE",
+        "file":  "licenses/pixi-live2d-display-LICENSE",
+        "sha256":  "8ccace668a041e78ed525d091b0b5daf8b623ff447f912616de535415e4f302f"
+    }
+]

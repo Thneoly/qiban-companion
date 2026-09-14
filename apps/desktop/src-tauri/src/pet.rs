@@ -129,6 +129,7 @@ pub fn quiet(app: &AppHandle) -> Result<(), String> {
 pub enum PetAction {
     Ready,
     OpenPanel,
+    OpenSettings,
     Hide,
     Quiet,
     Restore,
@@ -140,6 +141,13 @@ pub fn pet_action(app: AppHandle, action: PetAction) -> Result<(), String> {
     match action {
         PetAction::Ready => pet(&app)?.show().map_err(message),
         PetAction::OpenPanel => open_panel(&app),
+        PetAction::OpenSettings => {
+            open_panel(&app)?;
+            app.get_webview_window("main")
+                .ok_or("设置窗口不可用")?
+                .emit("model-settings-open", ())
+                .map_err(message)
+        }
         PetAction::Hide => pet(&app)?.hide().map_err(message),
         PetAction::Quiet => quiet(&app),
         PetAction::Restore => restore(&app, false),
