@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
       unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
-        if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture' };
+        if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }
         if (cmd === 'chat_clear') { history.length = 0; return; }
         if (cmd === 'chat_cancel') { w.streamFixture.fail(); return; }

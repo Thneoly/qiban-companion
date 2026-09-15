@@ -3,21 +3,25 @@ import {listen} from '@tauri-apps/api/event';
 import {invoke} from '@tauri-apps/api/core';
 import {nativeDesktop} from '../../lib/surface';
 import {decodeModelSettings,type ModelSettingsConfig} from '@companion/contracts';
-const initial:ModelSettingsConfig={baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-5.3',useApiKey:true,hasApiKey:false};
+const initial:ModelSettingsConfig={baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-5.3',useApiKey:true,hasApiKey:false,maxOutputTokens:1024};
 export function ModelSettings() {
   const [saved,setSaved]=useState(initial);
   const [draft,setDraft]=useState(initial);
+  const [budget,setBudget]=useState('1024');
   const [busy,setBusy]=useState(false);
   const [note,setNote]=useState(nativeDesktop?'正在读取设置…':'浏览器仅预览；请在桌面版保存模型与密钥。');
-  const dirty=draft.baseUrl!==saved.baseUrl||draft.model!==saved.model||draft.useApiKey!==saved.useApiKey;
+  const dirty=draft.baseUrl!==saved.baseUrl||draft.model!==saved.model||draft.useApiKey!==saved.useApiKey||budget!==String(saved.maxOutputTokens);
   async function refresh() {
-    const value=decodeModelSettings(await invoke('model_settings_get'));setSaved(value);setDraft(value);return value;
+    const value=decodeModelSettings(await invoke('model_settings_get'));setSaved(value);setDraft(value);setBudget(String(value.maxOutputTokens));return value;
   }
   useEffect(()=>{if(nativeDesktop)void refresh().then(()=>setNote('支持兼容 OpenAI Chat Completions 的服务。')).catch(()=>setNote('读取设置失败'));},[]);
   useEffect(()=>{let disposed=false;let remove:(()=>void)|undefined;if(nativeDesktop)void listen('model-settings-open',()=>document.getElementById('model-settings-title')?.scrollIntoView()).then(fn=>{if(disposed)fn();else remove=fn;}).catch(()=>setNote('设置事件连接失败'));return ()=>{disposed=true;remove?.();};},[]);
   async function save(event:FormEvent) {
-    event.preventDefault();setBusy(true);
-    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；更换地址或模型会清空临时前文。');}
+    event.preventDefault();
+    const maxOutputTokens=Number(budget);
+    if(!Number.isInteger(maxOutputTokens)||maxOutputTokens<128||maxOutputTokens>8192){setNote("最大输出 tokens 需要是128～8192之间的整数");return;}
+    setBusy(true);
+    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,maxOutputTokens}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；更换地址或模型会清空临时前文。');}
     catch(e){setNote(typeof e==='string'?e:'保存失败');}finally{setBusy(false);}
   }
   async function key(action:'model_key_set'|'model_key_delete') {
@@ -30,9 +34,11 @@ export function ModelSettings() {
     <p>填写服务商提供的 API 基地址与模型编码。发送对话时，内容会传给这里配置的服务。</p>
     <form onSubmit={save}>
       <fieldset disabled={busy||!nativeDesktop}>
-        <div className="model-presets"><button type="button" onClick={()=>setDraft({...initial})}>智谱通用 API 预设</button><span>也可直接填写其他兼容服务</span></div>
+        <div className="model-presets"><button type="button" onClick={()=>{setDraft({...initial});setBudget(String(initial.maxOutputTokens));}}>智谱通用 API 预设</button><span>也可直接填写其他兼容服务</span></div>
         <label>API 基地址<input value={draft.baseUrl} onChange={e=>setDraft({...draft,baseUrl:e.target.value})} placeholder="https://your-provider.example/v1" maxLength={512}/></label>
         <label>模型编码<input value={draft.model} onChange={e=>setDraft({...draft,model:e.target.value})} maxLength={160}/></label>
+        <label>最大输出 tokens<input type="number" required min={128} max={8192} step={1} value={budget} onChange={e=>setBudget(e.target.value)} aria-describedby="output-budget-help"/></label>
+        <small id="output-budget-help">128～8192，默认1024。上限不是实际用量；调高可能增加等待和消耗，仍受服务商限制。</small>
         <label className="model-key-option"><input type="checkbox" checked={draft.useApiKey} onChange={e=>setDraft({...draft,useApiKey:e.target.checked})}/>此服务需要 API Key</label>
         <button type="submit">保存模型设置</button>
         <div className="model-key-controls"><span>{saved.hasApiKey?'此 API 地址已保存密钥':'此 API 地址尚未保存密钥'}</span>

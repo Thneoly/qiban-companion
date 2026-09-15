@@ -56,13 +56,13 @@ export function validateTitle(title: string): string {
   return cleaned;
 }
 
-export interface ChatConfig {configured:boolean;model:string}
+export interface ChatConfig {configured:boolean;model:string;maxOutputTokens:number}
 export interface ChatDelta {requestId:string;text:string}
 export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null}}
 export function decodeChatConfig(value:unknown):ChatConfig {
   const v=record(value);
-  if(typeof v.configured!=='boolean'||typeof v.model!=='string')throw Error('模型配置协议不兼容');
-  return {configured:v.configured,model:v.model};
+  if(typeof v.configured!=='boolean'||typeof v.model!=='string'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型配置协议不兼容');
+  return {configured:v.configured,model:v.model,maxOutputTokens:v.maxOutputTokens};
 }
 export function decodeChatDelta(value:unknown):ChatDelta {
   const v=record(value);
@@ -77,11 +77,11 @@ export function decodeChatResult(value:unknown):ChatResult {
   return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage};
 }
 
-export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean}
+export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean;maxOutputTokens:number}
 export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   const v=record(value);
-  if(typeof v.baseUrl!=='string'||typeof v.model!=='string'||typeof v.useApiKey!=='boolean'||typeof v.hasApiKey!=='boolean')throw Error('模型设置协议不兼容');
-  return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey};
+  if(typeof v.baseUrl!=='string'||typeof v.model!=='string'||typeof v.useApiKey!=='boolean'||typeof v.hasApiKey!=='boolean'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型设置协议不兼容');
+  return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens};
 }
 
 export interface ChatTurn {user:string;assistant:string}

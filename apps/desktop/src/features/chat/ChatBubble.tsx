@@ -9,6 +9,7 @@ const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等�
 export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boolean) => void; onReading: (active: boolean) => void }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
+  const [outputBudget, setOutputBudget] = useState(1024);
   const [draft, setDraft] = useState('');
   const [reply, setReply] = useState('');
   const [history, setHistory] = useState<ChatTurn[]>([]);
@@ -36,7 +37,7 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
       if (disposed) return;
       const config = decodeChatConfig(configValue);
       const turns = decodeChatHistory(historyValue);
-      setConfigured(config.configured); setModel(config.model); setHistory(turns);
+      setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setHistory(turns);
       setReply(turns.at(-1)?.assistant ?? '');
       setStatus(config.configured ? '临时会话 · 发送时携带最近前文' : '尚未配置密钥，请打开模型设置');
     }).catch(() => { if (!disposed) setStatus('读取模型或会话配置失败'); });
@@ -135,6 +136,6 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
       </div></details>}
       <button type="button" onClick={() => void clear()} disabled={!nativeDesktop || busy || (!history.length && !reply)}>清空对话</button>
     </div>
-    <small className="chat-model">{model || '未连接'} · 最多6轮/1.2万字 · 重启清空<br/>收起停止生成，已完成对话保留</small>
+    <small className="chat-model">{model || '未连接'} · 上限{outputBudget} tokens<br/>最近6轮/1.2万字 · 收起停生成 · 重启清空</small>
   </div>;
 }

@@ -10,6 +10,11 @@ pub struct ModelConfig {
     pub base_url: String,
     pub model: String,
     pub use_api_key: bool,
+    #[serde(default = "default_output_tokens")]
+    pub max_output_tokens: u32,
+}
+fn default_output_tokens() -> u32 {
+    1024
 }
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -17,11 +22,15 @@ impl Default for ModelConfig {
             base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
             model: "glm-5.3".into(),
             use_api_key: true,
+            max_output_tokens: default_output_tokens(),
         }
     }
 }
 impl ModelConfig {
     fn validated(mut self) -> Result<Self, String> {
+        if !(128..=8192).contains(&self.max_output_tokens) {
+            return Err("最大输出 tokens 需要是128～8192之间的整数".into());
+        }
         self.base_url = self.base_url.trim().trim_end_matches('/').into();
         self.model = self.model.trim().into();
         let url = reqwest::Url::parse(&self.base_url).map_err(|_| "API 地址无效")?;
@@ -182,6 +191,49 @@ mod tests {
         }
     }
     #[test]
+    fn legacy_config_defaults_without_rewriting_and_invalid_budget_is_not_saved() {
+        let path = std::env::temp_dir().join(format!("legacy-model-{}.db", uuid::Uuid::new_v4()));
+        let store = ModelStore::open(&path).unwrap();
+        let legacy = r#"{"baseUrl":"https://example.com/v1","model":"custom","useApiKey":false}"#;
+        store
+            .connection
+            .execute("INSERT INTO model_config VALUES(1,?1)", [legacy])
+            .unwrap();
+        drop(store);
+        let mut store = ModelStore::open(&path).unwrap();
+        assert_eq!(store.config.max_output_tokens, 1024);
+        assert_eq!(store.config.model, "custom");
+        let before: String = store
+            .connection
+            .query_row("SELECT body FROM model_config", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, legacy);
+        for budget in [0, 127, 8193, u32::MAX] {
+            assert!(store
+                .save(ModelConfig {
+                    max_output_tokens: budget,
+                    ..store.config.clone()
+                })
+                .is_err());
+            assert_eq!(store.config.max_output_tokens, 1024);
+        }
+        let after: String = store
+            .connection
+            .query_row("SELECT body FROM model_config", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, legacy);
+        for budget in [128, 8192] {
+            assert!(ModelConfig {
+                max_output_tokens: budget,
+                ..Default::default()
+            }
+            .validated()
+            .is_ok());
+        }
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn restores_custom_provider_without_storing_a_key() {
         let path = std::env::temp_dir().join(format!("model-config-{}.db", uuid::Uuid::new_v4()));
         {
@@ -191,6 +243,7 @@ mod tests {
                     base_url: "https://example.com/v1/".into(),
                     model: "org/custom:model".into(),
                     use_api_key: false,
+                    max_output_tokens: 4096,
                 })
                 .unwrap();
         }
@@ -201,6 +254,7 @@ mod tests {
         );
         assert_eq!(store.config.model, "org/custom:model");
         assert!(!store.config.use_api_key);
+        assert_eq!(store.config.max_output_tokens, 4096);
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
