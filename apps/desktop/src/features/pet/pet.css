@@ -46,3 +46,23 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 .chat-state-line{display:flex;gap:8px;align-items:center;font-size:9px;color:#87748c;margin:4px 0}.chat-phase{padding:2px 6px;border-radius:8px;background:#eee6f5;color:#705687}.chat-phase-streaming,.chat-phase-complete{background:#e2f0e8;color:#386851}.chat-phase-error,.chat-phase-stopped{background:#f6e9df;color:#89573b}
 .pet-dialog-reading{bottom:36px;height:auto;max-height:none;display:flex;flex-direction:column;overflow:hidden}.pet-dialog-reading>header,.pet-dialog-reading>.pet-mode,.pet-dialog-reading>.pet-actions{flex-shrink:0}.pet-dialog-reading>.pet-actions{margin-top:6px}.chat-bubble-reading{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}.chat-bubble-reading>form,.chat-bubble-reading>.chat-state-line,.chat-bubble-reading>.chat-status,.chat-bubble-reading>.chat-session-controls,.chat-bubble-reading>.chat-model{flex-shrink:0}.chat-bubble-reading>.chat-status{max-height:32px;overflow:auto}.chat-session-controls>button{align-self:flex-start}.chat-history-count{font-size:9px;line-height:20px;color:#87748c}
 .chat-reader{position:relative;display:flex;flex:1;min-height:70px;margin:5px 0 9px;background:#f8f3f9;border:1px solid #ece2ef;border-radius:10px;overflow:hidden}.chat-reading-thread{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;white-space:pre-wrap;padding:9px 10px;font-size:12px;line-height:1.7;overscroll-behavior:contain;scrollbar-width:thin}.chat-reading-thread:focus-visible{outline:2px solid #ad90bb;outline-offset:-2px}.chat-turn p{margin:0 0 8px}.chat-turn+.chat-turn{border-top:1px solid #e5d9eb;padding-top:10px}.chat-turn .chat-speaker{font-size:10px;font-weight:600;color:#745588;margin-bottom:2px}.chat-speaker span{font-weight:400;font-size:9px;color:#8d7e95;margin-left:5px}.chat-turn-pending{border-left:2px solid #c2a6d2;padding-left:7px}.chat-reader-empty{color:#8d7e95}.chat-jump{position:absolute;right:7px;bottom:6px;border:1px solid #d7c4e4;border-radius:12px;background:#fff9ff;color:#745588;font-size:10px;padding:4px 8px;box-shadow:0 2px 5px #3c234514}
+
+/* T08 text interaction: one state drives both artwork and readable feedback. */
+.pet-presence { display:flex; align-items:center; min-width:0; }
+.pet-dialog header .pet-portrait { display:block; width:34px; height:36px; margin:0 7px 0 0; flex-shrink:0; }
+.pet-portrait svg { width:100%; height:100%; display:block; }
+.pet-shell [data-expression="attentive"] .creature { animation:companion-attend .45s ease-out both; }
+.pet-shell [data-expression="thinking"] .creature { animation:companion-think 3s ease-in-out infinite; }
+.pet-shell .thought-dots { animation:companion-glow 1.8s ease-in-out infinite; }
+.pet-shell .reply-spark { animation:companion-glow 1.4s ease-in-out infinite; }
+.pet-shell [data-expression="pleased"] .companion-hand { transform-origin:214px 214px; animation:companion-wave .55s ease-in-out 2; }
+.pet-shell [data-expression="paused"] .creature,
+.pet-shell [data-expression="concerned"] .creature { animation:none; }
+.pet-shell[data-companion-state="quiet"] *,
+.pet-shell[data-companion-state="hidden"] * { animation:none!important; transition:none!important; }
+.pet-shell[data-companion-state="responding"] .pet-drag { background:#e9f3e9; color:#486954; }
+.pet-shell[data-companion-state="concerned"] .pet-drag { background:#faeee4; color:#895b44; }
+@keyframes companion-attend { from { transform:rotate(0); } to { transform:rotate(-3deg); } }
+@keyframes companion-think { 0%,100% { transform:translateY(0) rotate(2deg); } 50% { transform:translateY(-3px) rotate(2deg); } }
+@keyframes companion-glow { 0%,100% { opacity:.45; } 50% { opacity:1; } }
+@keyframes companion-wave { 0%,100% { transform:rotate(0); } 50% { transform:rotate(-22deg); } }
