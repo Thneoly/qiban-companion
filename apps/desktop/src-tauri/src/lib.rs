@@ -1,4 +1,5 @@
 mod chat;
+mod chat_session;
 mod commands;
 mod credentials;
 mod model_settings;
@@ -72,6 +73,8 @@ pub fn run() {
             model_settings::model_key_set,
             model_settings::model_key_delete,
             chat::chat_config,
+            chat::chat_history,
+            chat::chat_clear,
             chat::chat_generate,
             chat::chat_cancel,
             commands::get_runtime_info,
