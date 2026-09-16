@@ -1,0 +1,52 @@
+import { test, expect } from '@playwright/test';
+
+test('default entry is a pet; bubble records a task and opens the auxiliary panel', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.getByRole('button', { name:'和栖栖互动' })).toBeVisible();
+  await expect(page.getByRole('heading', { name:'今天，也一起慢慢来。' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name:'栖栖的交互气泡' })).toHaveCount(0);
+  await page.getByRole('button', { name:'和栖栖互动' }).click();
+  await expect(page.getByRole('region', { name:'栖栖的交互气泡' })).toBeVisible();
+  await expect(page.getByLabel('想记下什么？', { exact:true })).toBeEnabled();
+  await page.getByLabel('想记下什么？', { exact:true }).fill('从角色气泡记录的想法');
+  await page.getByRole('button', { name:'记下来', exact:true }).click();
+  await expect(page.getByRole('status')).toContainText('已经记下了');
+  await page.screenshot({ path:test.info().outputPath('pet-preview.png'), fullPage:true });
+  await page.getByRole('button', { name:'任务面板 ↗' }).click();
+  await expect(page.getByRole('heading', { name:'今天，也一起慢慢来。' })).toBeVisible();
+  await expect(page.getByText('从角色气泡记录的想法', { exact:true })).toBeVisible();
+  await page.getByRole('button', { name:'← 回到桌面角色预览' }).click();
+  await expect(page.getByRole('button', { name:'和栖栖互动' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('quiet and hidden pet can be recovered; dragging does not open the bubble', async ({ page }) => {
+  await page.setViewportSize({ width:390,height:844 });
+  await page.goto('/');
+  const character=page.getByRole('button',{name:'和栖栖互动'});
+  const handle=page.getByRole('button',{name:'拖动栖栖'});
+  const before=await handle.boundingBox();
+  if(!before) throw new Error('Missing drag handle');
+  await page.mouse.move(before.x+15,before.y+10);
+  await page.mouse.down();
+  await page.mouse.move(before.x+15,before.y-70,{steps:8});
+  await page.mouse.up();
+  const after=await handle.boundingBox();
+  expect(after!.y).toBeLessThan(before.y-50);
+  await expect(page.getByRole('region',{name:'栖栖的交互气泡'})).toHaveCount(0);
+  await character.click();
+  await page.getByRole('button',{name:'安静陪伴',exact:true}).click();
+  await expect(character).toBeDisabled();
+  await page.getByRole('button',{name:'恢复角色预览'}).click();
+  await expect(character).toBeEnabled();
+  await character.click();
+  await page.getByRole('button',{name:'隐藏',exact:true}).click();
+  await expect(character).toBeHidden();
+  await page.getByRole('button',{name:'恢复角色预览'}).click();
+  await expect(character).toBeVisible();
+  await character.click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('region',{name:'栖栖的交互气泡'})).toHaveCount(0);
+});

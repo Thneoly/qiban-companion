@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test('browser preview reports its limits and records/cancels a task without claiming execution', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/');
+  await page.goto('/?view=panel');
   await expect(page.getByText('浏览器预览', { exact: true })).toBeVisible();
   await expect(page.getByText('浏览器刷新后，待办会清空')).toBeVisible();
   await page.getByLabel('任务标题', { exact: true }).fill('整理一份周末阅读清单');
@@ -22,7 +22,7 @@ test('browser preview reports its limits and records/cancels a task without clai
 
 test('narrow preview remains usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/');
+  await page.goto('/?view=panel');
   await expect(page.getByRole('heading', { name: '今天，也一起慢慢来。' })).toBeVisible();
   await expect(page.getByLabel('任务标题', { exact: true })).toBeEnabled();
   const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);

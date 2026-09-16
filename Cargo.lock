@@ -350,6 +350,7 @@ dependencies = [
  "serde",
  "tauri",
  "tauri-build",
+ "windows",
 ]
 
 [[package]]
