@@ -37,6 +37,8 @@ Tauri命令提供运行信息、任务列表/创建/取消，以及角色窗口�
 
 Live2DRenderer与待办/模型协议独立，按需加载本地Core、固定浏览器运行时与模型。默认SVG，异常回退；安静和文档隐藏停止绘制，角色隐藏卸载释放画布。30fps上限不代表资源门禁通过。CSP只允许本地脚本与所需WebAssembly编译；未开放远程页面、任意浏览器HTTP或工具执行。完整边界与资源授权见[配置说明](../development/model-settings-live2d.md)，实际检查见[本轮状态](../status/model-settings-live2d.md)。
 
+阅读模式仍在pet窗口内，由前端切换气泡布局；原生窗口大小与权限不变，已有ResizeObserver上报变化后的命中区域。ConversationReader只显示记录及当前片段，用户上翻时停止跟随增量。ChatBubble把等待、流式中、成功、停止及失败分别显示；记录刷新失败不会改写已经成功的模型结果。详见[阅读增量](../status/chat-reading.md)。
+
 ## 协议和变化
 
 Rust的序列化对象与TypeScript共享包共同维护IPC v1，前端对未知状态、字段和协议版本拒绝解码。新增字段/状态需同时更新解码与边界测试；不兼容变化提升protocolVersion。当前不是自动生成类型，后续对象增多时再评估代码生成。

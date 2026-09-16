@@ -22,6 +22,10 @@
 
 `glm-5.3`是初始预设。现已在用户账号实测该型号及用户随后选择的`glm-5.3-flash`；新启动读取已保存的选择，不覆盖为预设。其他账号仍应以控制台实际可调用型号为准，不自动降级。智谱[通用 HTTP 接口](https://docs.bigmodel.cn/cn/guide/develop/http/introduction)与[Coding Plan 工具接入](https://docs.bigmodel.cn/cn/coding-plan/tool/others)属于不同使用范围；本应用按通用 API 接入。兼容服务是否接受当前参数、响应时间和费用，须用该服务实际验证。
 
+## 阅读与状态
+
+点击“展开阅读”在角色窗口内查看连续问答，“收回气泡”恢复紧凑形态。新回复默认跟随到底部；向上翻阅时停止自动滚动，点击“回到最新”恢复。状态区显示等待、回复中、完成、停止和未完成。部分失败不会加入前文，可编辑后重新发送；若仅记录读取失败，会保留回复完成状态并提示重开读取，不自动重发。实际结果见[阅读交付记录](../status/chat-reading.md)。
+
 ## 配置与对话的边界
 
 非密钥设置保存到本机应用数据目录的 `model-settings.db`。密钥按规范化后的完整 API 基地址分别保存到 Windows 凭据管理器，目标名为 `dev.qiban.companion/model/{baseUrl}`。切换地址不会把旧地址的 Key 发给新地址，也不会自动删除旧 Key；切回对应地址可删除。取消勾选 API Key 后该请求不发送 Authorization。此存储保护不等于隔离同一 Windows 用户下的恶意进程。

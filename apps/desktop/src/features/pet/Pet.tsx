@@ -9,6 +9,7 @@ import { nativeDesktop, petAction } from '../../lib/surface';
 
 export function Pet() {
   const [chat, setChat] = useState(false);
+  const [reading, setReading] = useState(false);
   const [thinking,setThinking] = useState(false);
   const [live2d,setLive2d] = useState(false);
   const live2dError=useCallback(()=>{setLive2d(false);setError('实验角色加载失败，已恢复栖栖。请先准备本机Live2D资源。');},[]);
@@ -108,10 +109,10 @@ export function Pet() {
   return <>
     {!nativeDesktop && <aside className="preview-desktop-note"><strong>栖伴 · 桌面角色预览</strong><p>这里模拟角色形态；真实透明悬浮、托盘和鼠标穿透请运行桌面版。</p><button onClick={restore}>恢复角色预览</button></aside>}
     <div ref={shell} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
-      {open && <section data-pet-hit className="pet-dialog" aria-label="栖栖的交互气泡">
+      {open && <section data-pet-hit className={reading ? "pet-dialog pet-dialog-reading" : "pet-dialog"} aria-label="栖栖的交互气泡">
         <header><strong>栖栖 <span>在你身边</span></strong><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
         <div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button aria-pressed={live2d} onClick={()=>setLive2d(v=>!v)}>Live2D 实验</button><button onClick={()=>void act('open_settings')}>模型设置</button></div>
-        {chat ? <ChatBubble onThinking={setThinking}/> : <>
+        {chat ? <ChatBubble onThinking={setThinking} onReading={setReading}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
           <label className="sr-only" htmlFor="pet-draft">想记下什么？</label>
