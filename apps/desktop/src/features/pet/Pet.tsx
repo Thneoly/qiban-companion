@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { ChatBubble } from '../chat/ChatBubble';
+import { Live2DRenderer } from '../companion/Live2DRenderer';
 import { AvatarArtwork } from '../companion/AvatarArtwork';
 import { client, errorMessage } from '../../lib/client';
 import { nativeDesktop, petAction } from '../../lib/surface';
 
 export function Pet() {
+  const [chat, setChat] = useState(false);
+  const [thinking,setThinking] = useState(false);
+  const [live2d,setLive2d] = useState(false);
+  const live2dError=useCallback(()=>{setLive2d(false);setError('实验角色加载失败，已恢复栖栖。请先准备本机Live2D资源。');},[]);
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [quiet, setQuiet] = useState(false);
@@ -67,7 +73,7 @@ export function Pet() {
     return () => { disposed = true; observer.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', report); };
   }, [open, quiet, hidden, error]);
 
-  async function act(action: 'hide' | 'quiet' | 'open_panel') {
+  async function act(action: 'hide' | 'quiet' | 'open_panel' | 'open_settings') {
     setError('');
     try {
       await petAction(action);
@@ -104,13 +110,16 @@ export function Pet() {
     <div ref={shell} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
       {open && <section data-pet-hit className="pet-dialog" aria-label="栖栖的交互气泡">
         <header><strong>栖栖 <span>在你身边</span></strong><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
+        <div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button aria-pressed={live2d} onClick={()=>setLive2d(v=>!v)}>Live2D 实验</button><button onClick={()=>void act('open_settings')}>模型设置</button></div>
+        {chat ? <ChatBubble onThinking={setThinking}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
           <label className="sr-only" htmlFor="pet-draft">想记下什么？</label>
           <input id="pet-draft" value={draft} onChange={e => setDraft(e.target.value)} placeholder="想做的事，先记下来…" disabled={busy || !ready}/>
           <button className="pet-save" disabled={busy || !ready || !draft.trim()}>{busy ? '保存中…' : '记下来'}</button>
         </form>
-        <p className="pet-limit">仅保存待办 · AI 对话和执行尚未接入</p>
+        <p className="pet-limit">仅保存待办 · 不自动执行</p></>}
+
         {error && <p role="alert" className="pet-error">{error}</p>}
         <div className="pet-actions">
           <button onClick={() => void act('open_panel')}>任务面板 ↗</button>
@@ -119,9 +128,9 @@ export function Pet() {
         </div>
       </section>}
       <button data-pet-hit className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet} onClick={() => { setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
-        <AvatarArtwork/>
+        {live2d && !hidden ? <Live2DRenderer active={!quiet} onError={live2dError}/> : <AvatarArtwork/>}
       </button>
-      <button data-pet-hit className="pet-drag" disabled={quiet} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} aria-label="拖动栖栖">⠿ <span>{quiet ? '安静陪伴中 · 托盘可唤回' : '栖栖 · 拖动这里'}</span></button>
+      <button data-pet-hit className="pet-drag" disabled={quiet} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} aria-label="拖动栖栖">⠿ <span>{quiet ? '安静陪伴中 · 托盘可唤回' : thinking ? '栖栖正在思考…' : '栖栖 · 拖动这里'}</span></button>
       {!open && error && <button data-pet-hit className="pet-error-reopen" onClick={() => setOpen(true)}>操作未完成，点击查看</button>}
     </div>
   </>;

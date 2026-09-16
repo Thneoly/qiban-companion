@@ -9,11 +9,14 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:browser": "playwright test",
-    "icons": "tauri icon assets/brand/app-icon.svg"
+    "icons": "tauri icon assets/brand/app-icon.svg",
+    "prepare:live2d": "node scripts/prepare-live2d-sample.mjs"
   },
   "dependencies": {
     "@companion/contracts": "*",
+    "@pixi/unsafe-eval": "6.5.10",
     "@tauri-apps/api": "2.11.1",
+    "pixi.js": "6.5.10",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   }

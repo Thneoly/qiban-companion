@@ -55,3 +55,31 @@ export function validateTitle(title: string): string {
   if (!cleaned || [...cleaned].length > 200) throw new Error('任务标题需要包含 1～200 个字符');
   return cleaned;
 }
+
+export interface ChatConfig {configured:boolean;model:string}
+export interface ChatDelta {requestId:string;text:string}
+export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null}}
+export function decodeChatConfig(value:unknown):ChatConfig {
+  const v=record(value);
+  if(typeof v.configured!=='boolean'||typeof v.model!=='string')throw Error('模型配置协议不兼容');
+  return {configured:v.configured,model:v.model};
+}
+export function decodeChatDelta(value:unknown):ChatDelta {
+  const v=record(value);
+  if(typeof v.requestId!=='string'||typeof v.text!=='string')throw Error('回复协议不兼容');
+  return {requestId:v.requestId,text:v.text};
+}
+export function decodeChatResult(value:unknown):ChatResult {
+  const v=record(value);
+  if(typeof v.requestId!=='string'||!integer(v.elapsedMs))throw Error('回复结果不兼容');
+  let usage:ChatResult['usage']=null;
+  if(v.usage!=null){const u=record(v.usage);if(u.total_tokens!==null&&!integer(u.total_tokens))throw Error('用量协议不兼容');usage={total_tokens:u.total_tokens as number|null};}
+  return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage};
+}
+
+export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean}
+export function decodeModelSettings(value:unknown):ModelSettingsConfig {
+  const v=record(value);
+  if(typeof v.baseUrl!=='string'||typeof v.model!=='string'||typeof v.useApiKey!=='boolean'||typeof v.hasApiKey!=='boolean')throw Error('模型设置协议不兼容');
+  return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey};
+}

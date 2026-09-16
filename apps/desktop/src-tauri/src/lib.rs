@@ -1,4 +1,7 @@
+mod chat;
 mod commands;
+mod credentials;
+mod model_settings;
 mod pet;
 mod placement;
 mod tray;
@@ -12,10 +15,14 @@ pub fn run() {
     let worker_state = state.clone();
     tauri::Builder::default()
         .manage(state)
+        .manage(chat::ChatState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
+            app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(
+                &data_dir.join("model-settings.db"),
+            )?));
             let saved_position =
                 match placement::PlacementStore::open(&data_dir.join("desktop-settings.db")) {
                     Ok(store) => {
@@ -60,6 +67,13 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            model_settings::model_settings_get,
+            model_settings::model_settings_save,
+            model_settings::model_key_set,
+            model_settings::model_key_delete,
+            chat::chat_config,
+            chat::chat_generate,
+            chat::chat_cancel,
             commands::get_runtime_info,
             commands::list_tasks,
             commands::create_task,

@@ -12,6 +12,10 @@
     "allow-cancel-task",
     "allow-pet-action",
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "allow-model-settings-get",
+    "allow-model-settings-save",
+    "allow-model-key-set",
+    "allow-model-key-delete"
   ]
 }

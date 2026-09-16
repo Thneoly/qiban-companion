@@ -13,7 +13,7 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 .pet-character svg { width:100%; height:100%; display:block; }
 .pet-character:hover .creature { filter:brightness(1.02); }
 .pet-character:disabled { opacity:1; cursor:default; }
-.pet-dialog { position:absolute; box-sizing:border-box; width:292px; max-height:224px; overflow:auto; top:8px; right:14px; background:#fffcf9f5; border:1px solid #e3d8ee; border-radius:18px 18px 5px 18px; padding:13px 14px 11px; box-shadow:0 4px 12px #3c23451c; pointer-events:auto; color:#51465e; user-select:text; }
+.pet-dialog { position:absolute; z-index:2; box-sizing:border-box; width:292px; max-height:224px; overflow:auto; top:8px; right:14px; background:#fffcf9f5; border:1px solid #e3d8ee; border-radius:18px 18px 5px 18px; padding:13px 14px 11px; box-shadow:0 4px 12px #3c23451c; pointer-events:auto; color:#51465e; user-select:text; }
 .pet-dialog header { display:flex; justify-content:space-between; align-items:center; }
 .pet-dialog header strong { font-size:14px; font-weight:600; }
 .pet-dialog header span { font-size:10px; font-weight:400; color:#7c6d86; margin-left:8px; }
@@ -38,3 +38,5 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 .preview-desktop-note button, .return-to-pet { background:#fffc; border:1px solid #ffffff88; border-radius:8px; padding:9px 12px; font-size:12px; color:#5d4b70; }
 .return-to-pet { position:fixed; left:20px; bottom:75px; z-index:10; }
 @media(max-height:640px) { .preview-desktop-note p { display:none; } .preview-desktop-note { top:12px; left:12px; } }
+
+.pet-mode{display:flex;gap:5px;margin:7px 0}.pet-mode button{font-size:10px;border:0;border-radius:6px;padding:4px 6px;background:#f0e9f7;color:#6e557f}.pet-mode button[aria-pressed=true]{background:#ddccec}.chat-output{max-height:62px;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.6;margin:6px 0}.chat-status{font-size:10px;line-height:1.5;margin:5px 0;color:#756282}.chat-model{font-size:9px;color:#887792}.live2d-canvas{width:180px;height:205px;display:block}

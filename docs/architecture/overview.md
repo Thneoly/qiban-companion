@@ -27,6 +27,14 @@ Tauri命令提供运行信息、任务列表/创建/取消，以及角色窗口�
 
 窗口与托盘由 apps/desktop/src-tauri 负责，core/storage不依赖Tauri。实现依据[Tauri窗口定制](https://v2.tauri.app/learn/window-customization/)与[系统托盘](https://v2.tauri.app/learn/system-tray/)；实测与限制见[交付记录](../status/desktop-pet.md)。
 
+## 模型配置与渲染增量
+
+模型HTTP适配、配置SQLite与Windows凭据封装归桌面宿主，不反向进入companion-core/storage。main独占模型设置读写、原生密钥输入与删除命令；pet独占配置状态、生成和停止命令。密钥按完整API基地址保存，只由Rust读取；非密钥配置保存在model-settings.db。IPC不返回原始Key。
+
+当前协议为可配置基地址与模型编码的Chat Completions SSE，智谱仅为默认预设。前端Channel逐请求接收增量并按requestId过滤迟到消息；宿主仅允许一个生成，锁内登记取消信号，退出时释放。停止先屏蔽旧回调，再通知Rust丢弃网络future；请求使用配置快照且不自动重试。收起气泡会停止并丢弃单轮对话，不声称远端已撤销计费。输入、输出、片段、总响应、连接和整体耗时均有限制。
+
+Live2DRenderer与待办/模型协议独立，按需加载本地Core、固定浏览器运行时与模型。默认SVG，异常回退；安静和文档隐藏停止绘制，角色隐藏卸载释放画布。30fps上限不代表资源门禁通过。CSP只允许本地脚本与所需WebAssembly编译；未开放远程页面、任意浏览器HTTP或工具执行。完整边界与资源授权见[配置说明](../development/model-settings-live2d.md)，实际检查见[本轮状态](../status/model-settings-live2d.md)。
+
 ## 协议和变化
 
 Rust的序列化对象与TypeScript共享包共同维护IPC v1，前端对未知状态、字段和协议版本拒绝解码。新增字段/状态需同时更新解码与边界测试；不兼容变化提升protocolVersion。当前不是自动生成类型，后续对象增多时再评估代码生成。
@@ -38,7 +46,7 @@ SQLite暂将领域对象保存为JSON及索引键，适合此小型骨架；需�
 1. T02/T03：透明宠物窗口、气泡收起和托盘基础已实现；下一步补齐混合DPI/多屏拔插、托盘实点回归、资源测量；位置持久化已加入，见[位置恢复实测](../status/pet-position-memory.md)。
 2. T05/T16：执行事件及attempt/action模型，区分停止说话、取消请求、已取消和结果未知。
 3. T41/T42/T43：独立账号与云适配、资源隔离、最小运行基础；服务端保管模型凭据。
-4. 有上限的文本模型适配，再接PTT语音及角色状态；先验证时延、取消与费用。
+4. 通用文本模型适配与本机配置已加入；实际服务商、时延及费用仍待真实调用验收，再接PTT语音及角色状态。
 
 手机前端可复用contracts，但必须经账号及设备授权，不能直接复制桌面invoke适配。角色呈现通过Avatar组件边界替换为经许可Live2D/VRM资产。Wasm仅在具体渲染/算法库需要时使用；WASI、摄像头和硬件保持后续独立增量。
 
