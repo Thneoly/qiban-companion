@@ -17,7 +17,7 @@ export function ModelSettings() {
   useEffect(()=>{let disposed=false;let remove:(()=>void)|undefined;if(nativeDesktop)void listen('model-settings-open',()=>document.getElementById('model-settings-title')?.scrollIntoView()).then(fn=>{if(disposed)fn();else remove=fn;}).catch(()=>setNote('设置事件连接失败'));return ()=>{disposed=true;remove?.();};},[]);
   async function save(event:FormEvent) {
     event.preventDefault();setBusy(true);
-    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置。');}
+    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；更换地址或模型会清空临时前文。');}
     catch(e){setNote(typeof e==='string'?e:'保存失败');}finally{setBusy(false);}
   }
   async function key(action:'model_key_set'|'model_key_delete') {

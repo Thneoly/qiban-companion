@@ -109,9 +109,12 @@ pub fn model_settings_get(state: State<'_, ModelState>) -> Result<ModelSettings,
 #[tauri::command]
 pub fn model_settings_save(
     state: State<'_, ModelState>,
+    chat: State<'_, crate::chat::ChatState>,
     config: ModelConfig,
 ) -> Result<(), String> {
-    state.lock().map_err(|_| "模型设置不可用")?.save(config)
+    let mut store = state.lock().map_err(|_| "模型设置不可用")?;
+    store.save(config)?;
+    crate::chat::select_config(&chat, &store.config.base_url, &store.config.model)
 }
 #[tauri::command]
 pub async fn model_key_set(

@@ -1,4 +1,5 @@
-//! OpenAI-compatible Chat Completions single-turn transport. Credentials stay in this process; no tool execution.
+//! OpenAI-compatible Chat Completions bounded-session transport. Credentials stay in this process; no tool execution.
+use crate::chat_session::{ChatTurn, Conversation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -9,7 +10,45 @@ use tauri::{ipc::Channel, State};
 use tokio::sync::watch;
 
 #[derive(Default)]
-pub struct ChatState(Mutex<Option<(String, watch::Sender<bool>)>>);
+struct ChatInner {
+    active: Option<(String, watch::Sender<bool>)>,
+    conversation: Conversation,
+}
+#[derive(Default)]
+pub struct ChatState(Mutex<ChatInner>);
+
+pub fn select_config(state: &ChatState, base: &str, model: &str) -> Result<(), String> {
+    state
+        .0
+        .lock()
+        .map_err(|_| "对话状态不可用")?
+        .conversation
+        .select(base, model);
+    Ok(())
+}
+#[tauri::command]
+pub fn chat_history(
+    state: State<'_, ChatState>,
+    settings: State<'_, crate::model_settings::ModelState>,
+) -> Result<Vec<ChatTurn>, String> {
+    let config = settings
+        .lock()
+        .map_err(|_| "模型设置不可用")?
+        .config
+        .clone();
+    let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+    inner.conversation.select(&config.base_url, &config.model);
+    Ok(inner.conversation.history())
+}
+#[tauri::command]
+pub fn chat_clear(state: State<'_, ChatState>) -> Result<(), String> {
+    let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+    if inner.active.is_some() {
+        return Err("请先停止当前回复，再清空对话".into());
+    }
+    inner.conversation.clear();
+    Ok(())
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatConfig {
@@ -55,14 +94,14 @@ struct ActiveGuard<'a>(&'a ChatState);
 impl Drop for ActiveGuard<'_> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.0 .0.lock() {
-            *state = None;
+            state.active = None;
         }
     }
 }
 #[tauri::command]
 pub fn chat_cancel(state: State<'_, ChatState>, request_id: String) -> Result<(), String> {
     let active = state.0.lock().map_err(|_| "对话状态不可用")?;
-    if let Some((id, signal)) = active.as_ref() {
+    if let Some((id, signal)) = active.active.as_ref() {
         if *id == request_id {
             let _ = signal.send(true);
         }
@@ -100,19 +139,22 @@ pub async fn chat_generate(
     let selected = config.model.clone();
     let endpoint = config.endpoint();
     let (signal, mut cancelled) = watch::channel(false);
-    {
+    let (history, version) = {
         let mut active = state.0.lock().map_err(|_| "对话状态不可用")?;
-        if active.is_some() {
+        if active.active.is_some() {
             return Err("上一条回复仍在结束，请稍后再试".into());
         }
-        *active = Some((request.request_id.clone(), signal));
-    }
+        active.conversation.select(&config.base_url, &config.model);
+        active.active = Some((request.request_id.clone(), signal));
+        (active.conversation.history(), active.conversation.version())
+    };
     let _guard = ActiveGuard(&state);
     let started = Instant::now();
     let run = stream(
         &endpoint,
         key.as_deref().map(|s| s.as_str()).unwrap_or(""),
         &selected,
+        &history,
         &request.prompt,
         |text| {
             on_delta
@@ -127,7 +169,8 @@ pub async fn chat_generate(
         biased;
         _ = cancelled.changed() => Err("已停止生成；已产生的服务用量仍可能计费".into()),
         result = tokio::time::timeout(Duration::from_secs(90),run) => {
-            let usage=result.map_err(|_| "回复超时，请稍后重试")??;
+            let (usage, reply)=result.map_err(|_| "回复超时，请稍后重试")??;
+            state.0.lock().map_err(|_| "对话状态不可用")?.conversation.complete(&config.base_url, &config.model, version, request.prompt.clone(), reply);
             Ok(ChatResult { request_id:request.request_id, elapsed_ms:started.elapsed().as_millis(), usage })
         }
     }
@@ -178,9 +221,10 @@ async fn stream(
     endpoint: &str,
     key: &str,
     selected: &str,
+    history: &[ChatTurn],
     prompt: &str,
     mut emit: impl FnMut(String) -> Result<(), String>,
-) -> Result<Option<Value>, String> {
+) -> Result<(Option<Value>, String), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
@@ -192,12 +236,23 @@ async fn stream(
     } else {
         request.bearer_auth(key)
     };
-    let mut response=request.json(&json!({
-        "model":selected,"stream":true,"max_tokens":1024,
+    let mut messages = vec![
+        json!({"role":"system","content":"你是栖栖，一个温和、诚实的桌面AI伙伴。用简洁中文交流。这是有限上下文的临时会话，你不能访问电脑、文件或执行任务，也没有长期记忆。不要声称已经做过未执行的事情。"}),
+    ];
+    for turn in history {
+        messages.push(json!({"role":"user","content":turn.user}));
+        messages.push(json!({"role":"assistant","content":turn.assistant}));
+    }
+    messages.push(json!({"role":"user","content":prompt}));
+    let mut response = request
+        .json(&json!({
+            "model":selected,"stream":true,"max_tokens":1024,
 
-        "messages":[{"role":"system","content":"你是栖栖，一个温和、诚实的桌面AI伙伴。用简洁中文交流。这是单轮对话，你不能访问电脑、文件或执行任务，也没有长期记忆。不要声称已经做过未执行的事情。"},
-        {"role":"user","content":prompt}]
-    })).send().await.map_err(|_| "无法连接模型服务，请检查网络后重试")?;
+            "messages":messages
+        }))
+        .send()
+        .await
+        .map_err(|_| "无法连接模型服务，请检查网络后重试")?;
     if !response.status().is_success() {
         return Err(match response.status().as_u16() {
             401 | 403 => "鉴权失败，请检查API Key 和模型权限",
@@ -212,6 +267,7 @@ async fn stream(
     let mut usage = None;
     let mut bytes = 0usize;
     let mut text_len = 0usize;
+    let mut reply = String::new();
     let mut finished = false;
     while let Some(chunk) = response.chunk().await.map_err(|_| "回复连接中断，请重试")? {
         bytes += chunk.len();
@@ -224,7 +280,7 @@ async fn stream(
             }
             if event.get("done") == Some(&Value::Bool(true)) {
                 return if finished && text_len > 0 {
-                    Ok(usage)
+                    Ok((usage, reply))
                 } else {
                     Err("回复未正常完成，请重试".into())
                 };
@@ -246,6 +302,7 @@ async fn stream(
                     return Err("回复达到显示上限，已停止".into());
                 }
                 if !text.is_empty() {
+                    reply.push_str(text);
                     emit(text.into())?;
                 }
             }
@@ -266,7 +323,7 @@ async fn stream(
         }
     }
     if finished && text_len > 0 {
-        Ok(usage)
+        Ok((usage, reply))
     } else {
         Err("回复连接提前结束，请重试".into())
     }
@@ -332,20 +389,21 @@ mod tests {
     async fn streams_over_http_and_requires_completion() {
         let endpoint=fixture("200 OK","data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":7}}\n\ndata: [DONE]\n\n");
         let mut text = String::new();
-        let usage = stream(&endpoint, "test-only", "fixture", "hello", |part| {
+        let (usage, reply) = stream(&endpoint, "test-only", "fixture", &[], "hello", |part| {
             text.push_str(&part);
             Ok(())
         })
         .await
         .unwrap();
         assert_eq!(text, "你好");
+        assert_eq!(reply, text);
         assert_eq!(usage.unwrap()["total_tokens"], 7);
         let endpoint = fixture(
             "200 OK",
             "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
         );
         assert!(
-            stream(&endpoint, "test-only", "fixture", "hello", |_| Ok(()))
+            stream(&endpoint, "test-only", "fixture", &[], "hello", |_| Ok(()))
                 .await
                 .is_err()
         );
@@ -353,9 +411,14 @@ mod tests {
     #[tokio::test]
     async fn provider_errors_never_forward_response_body_or_key() {
         let endpoint = fixture("401 Unauthorized", "fixture-private-provider-body");
-        let error = stream(&endpoint, "fixture-private-key", "fixture", "hello", |_| {
-            Ok(())
-        })
+        let error = stream(
+            &endpoint,
+            "fixture-private-key",
+            "fixture",
+            &[],
+            "hello",
+            |_| Ok(()),
+        )
         .await
         .unwrap_err();
         assert!(error.contains("鉴权失败"));

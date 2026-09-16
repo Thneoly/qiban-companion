@@ -5,6 +5,8 @@ fn main() {
         "model_key_set",
         "model_key_delete",
         "chat_config",
+        "chat_history",
+        "chat_clear",
         "chat_generate",
         "chat_cancel",
         "get_runtime_info",

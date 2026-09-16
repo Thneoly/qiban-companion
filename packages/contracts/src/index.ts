@@ -83,3 +83,9 @@ export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   if(typeof v.baseUrl!=='string'||typeof v.model!=='string'||typeof v.useApiKey!=='boolean'||typeof v.hasApiKey!=='boolean')throw Error('模型设置协议不兼容');
   return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey};
 }
+
+export interface ChatTurn {user:string;assistant:string}
+export function decodeChatHistory(value:unknown):ChatTurn[] {
+  if(!Array.isArray(value)||value.length>6)throw Error('会话记录协议不兼容');
+  return value.map(item=>{const v=record(item);if(typeof v.user!=='string'||typeof v.assistant!=='string')throw Error('会话记录协议不兼容');return {user:v.user,assistant:v.assistant};});
+}
