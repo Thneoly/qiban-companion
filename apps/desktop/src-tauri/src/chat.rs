@@ -220,7 +220,7 @@ impl SseDecoder {
         Ok(events)
     }
 }
-async fn stream(
+pub(crate) async fn stream(
     endpoint: &str,
     key: &str,
     selected: &str,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-probe"
+description = "Enables the voice_probe command without any pre-configured scope."
+commands.allow = ["voice_probe"]
+
+[[permission]]
+identifier = "deny-voice-probe"
+description = "Denies the voice_probe command without any pre-configured scope."
+commands.deny = ["voice_probe"]

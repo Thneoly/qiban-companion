@@ -1,5 +1,8 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "voice_probe",
+        "voice_cancel",
+        "voice_key_set",
         "model_settings_get",
         "model_settings_save",
         "model_key_set",

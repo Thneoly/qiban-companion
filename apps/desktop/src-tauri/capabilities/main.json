@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
+    "allow-voice-probe",
+    "allow-voice-cancel",
+    "allow-voice-key-set",
     "allow-get-runtime-info",
     "allow-list-tasks",
     "allow-create-task",

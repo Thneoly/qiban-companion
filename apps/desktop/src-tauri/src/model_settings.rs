@@ -27,7 +27,7 @@ impl Default for ModelConfig {
     }
 }
 impl ModelConfig {
-    fn validated(mut self) -> Result<Self, String> {
+    pub(crate) fn validated(mut self) -> Result<Self, String> {
         if !(128..=8192).contains(&self.max_output_tokens) {
             return Err("最大输出 tokens 需要是128～8192之间的整数".into());
         }

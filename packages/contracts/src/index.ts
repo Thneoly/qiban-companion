@@ -57,6 +57,21 @@ export function validateTitle(title: string): string {
 }
 
 export interface ChatConfig {configured:boolean;model:string;maxOutputTokens:number}
+export interface VoiceResult {
+  requestId: string; transcript: string; reply: string; wav: number[];
+  recognitionMs: number; generationMs: number; synthesisMs: number;
+  inputSeconds: number; outputSeconds: number; modelTotalTokens: number | null; audioCost: null;
+}
+export function decodeVoiceResult(value: unknown): VoiceResult {
+  const v = record(value);
+  if (typeof v.requestId !== 'string' || typeof v.transcript !== 'string' || typeof v.reply !== 'string' ||
+      !integer(v.recognitionMs) || !integer(v.generationMs) || !integer(v.synthesisMs) ||
+      typeof v.inputSeconds !== 'number' || !Number.isFinite(v.inputSeconds) || v.inputSeconds <= 0 || v.inputSeconds > 30 ||
+      typeof v.outputSeconds !== 'number' || !Number.isFinite(v.outputSeconds) || v.outputSeconds <= 0 || v.outputSeconds > 60 ||
+      (v.modelTotalTokens !== null && !integer(v.modelTotalTokens)) || v.audioCost !== null ||
+      !Array.isArray(v.wav) || v.wav.length < 44 || v.wav.length > 8 * 1024 * 1024 || !v.wav.every(b => integer(b) && b <= 255)) throw Error('语音响应协议不兼容');
+  return v as unknown as VoiceResult;
+}
 export interface ChatDelta {requestId:string;text:string}
 export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null}}
 export function decodeChatConfig(value:unknown):ChatConfig {
