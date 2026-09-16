@@ -21,7 +21,7 @@ export function ModelSettings() {
     const maxOutputTokens=Number(budget);
     if(!Number.isInteger(maxOutputTokens)||maxOutputTokens<128||maxOutputTokens>8192){setNote("最大输出 tokens 需要是128～8192之间的整数");return;}
     setBusy(true);
-    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,maxOutputTokens}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；更换地址或模型会清空临时前文。');}
+    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,maxOutputTokens}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；记录按地址和模型隔离，切换不会把旧前文发送给新服务。');}
     catch(e){setNote(typeof e==='string'?e:'保存失败');}finally{setBusy(false);}
   }
   async function key(action:'model_key_set'|'model_key_delete') {

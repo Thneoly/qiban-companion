@@ -69,7 +69,7 @@ export default function App() {
             <Avatar/>
             <div className="companion-footer"><div><h2>栖栖 <span>QIQI</span></h2><p>安静陪伴 · 一点点好奇心</p></div><span className="small-badge">互动样机</span></div>
           </section>
-          <aside className="today-card"><span className="eyebrow">HERE & NOW</span><h2>从一个小念头开始</h2><p className="today-intro">我们先建立一个可靠的起点：把想做的事记下来，随时回来看看。</p><div className="detail-item"><span className="detail-icon">✎</span><div><strong>待办有迹可循</strong><p>创建、查看与取消</p></div></div><div className="detail-item"><span className="detail-icon">◇</span><div><strong>{info?.persistence === 'sqlite' ? '记录留在这台电脑' : '当前为临时预览'}</strong><p>{info?.persistence === 'sqlite' ? 'SQLite 本地保存，重启可恢复' : '浏览器刷新后，待办会清空'}</p></div></div><div className="connection-note"><span className="outline-dot"/><div><strong>手机接续 · 尚未连接</strong><p>将在后续版本接入账号与设备配对。</p></div></div><p className="preview-note">可在角色气泡中发起临时多轮对话；语音和远程执行尚未接入。</p></aside>
+          <aside className="today-card"><span className="eyebrow">HERE & NOW</span><h2>从一个小念头开始</h2><p className="today-intro">我们先建立一个可靠的起点：把想做的事记下来，随时回来看看。</p><div className="detail-item"><span className="detail-icon">✎</span><div><strong>待办有迹可循</strong><p>创建、查看与取消</p></div></div><div className="detail-item"><span className="detail-icon">◇</span><div><strong>{info?.persistence === 'sqlite' ? '记录留在这台电脑' : '当前为临时预览'}</strong><p>{info?.persistence === 'sqlite' ? 'SQLite 本地保存，重启可恢复' : '浏览器刷新后，待办会清空'}</p></div></div><div className="connection-note"><span className="outline-dot"/><div><strong>手机接续 · 尚未连接</strong><p>将在后续版本接入账号与设备配对。</p></div></div><p className="preview-note">可在角色气泡中交流，完整问答在本机保存并可清空；桌宠语音和远程执行尚未接入。</p></aside>
         </div>
         <ModelSettings/>
         <VoiceLab/>

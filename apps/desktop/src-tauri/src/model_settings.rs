@@ -124,6 +124,7 @@ pub fn model_settings_save(
     let mut store = state.lock().map_err(|_| "模型设置不可用")?;
     store.save(config)?;
     crate::chat::select_config(&chat, &store.config.base_url, &store.config.model)
+        .map_err(|error| format!("模型设置已保存，但对话记录未就绪：{error}"))
 }
 #[tauri::command]
 pub async fn model_key_set(

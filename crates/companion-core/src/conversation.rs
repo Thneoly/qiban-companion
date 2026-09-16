@@ -1,19 +1,28 @@
 use serde::Serialize;
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ChatTurn {
     pub user: String,
     pub assistant: String,
 }
 
-/// Process-local, bounded history. Only completed pairs enter model context.
-#[derive(Default)]
+/// Bounded model context. Persistence is owned by the storage layer.
+#[derive(Default, Clone)]
 pub struct Conversation {
     identity: Option<(String, String)>,
     turns: Vec<ChatTurn>,
     version: u64,
 }
 impl Conversation {
+    pub fn matches(&self, base: &str, model: &str) -> bool {
+        self.identity
+            .as_ref()
+            .is_some_and(|(b, m)| b == base && m == model)
+    }
+    pub fn restore(&mut self, base: &str, model: &str, turns: Vec<ChatTurn>) {
+        self.select(base, model);
+        self.turns = turns;
+    }
     pub fn select(&mut self, base: &str, model: &str) {
         let identity = (base.to_owned(), model.to_owned());
         if self.identity.as_ref() != Some(&identity) {

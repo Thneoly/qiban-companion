@@ -24,7 +24,7 @@ export function ConversationReader({ history, prompt, reply, pending, label, wai
         <p className="chat-speaker">我</p><p>{prompt}</p>
         <p className="chat-speaker">栖栖 <span>{label}</span></p><p>{reply || (waiting ? '正在等待回复…' : '没有收到回复。')}</p>
       </article>}
-      {!history.length && !prompt && <p className="chat-reader-empty">从一句话开始。这里只保留本次运行的最近对话。</p>}
+      {!history.length && !prompt && <p className="chat-reader-empty">从一句话开始。完整问答保存在本机，重开后可继续。</p>}
     </div>
     {away && <button type="button" className="chat-jump" onClick={bottom}>回到最新 ↓</button>}
   </div>;

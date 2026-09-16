@@ -73,7 +73,7 @@ export function decodeVoiceResult(value: unknown): VoiceResult {
   return v as unknown as VoiceResult;
 }
 export interface ChatDelta {requestId:string;text:string}
-export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null}}
+export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null};historySaved:boolean}
 export function decodeChatConfig(value:unknown):ChatConfig {
   const v=record(value);
   if(typeof v.configured!=='boolean'||typeof v.model!=='string'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型配置协议不兼容');
@@ -86,10 +86,10 @@ export function decodeChatDelta(value:unknown):ChatDelta {
 }
 export function decodeChatResult(value:unknown):ChatResult {
   const v=record(value);
-  if(typeof v.requestId!=='string'||!integer(v.elapsedMs))throw Error('回复结果不兼容');
+  if(typeof v.requestId!=='string'||!integer(v.elapsedMs)||(v.historySaved!==undefined&&typeof v.historySaved!=='boolean'))throw Error('回复结果不兼容');
   let usage:ChatResult['usage']=null;
   if(v.usage!=null){const u=record(v.usage);if(u.total_tokens!==null&&!integer(u.total_tokens))throw Error('用量协议不兼容');usage={total_tokens:u.total_tokens as number|null};}
-  return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage};
+  return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage,historySaved:v.historySaved===true};
 }
 
 export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean;maxOutputTokens:number}

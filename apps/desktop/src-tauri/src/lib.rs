@@ -1,5 +1,4 @@
 mod chat;
-mod chat_session;
 mod commands;
 mod credentials;
 mod model_settings;
@@ -17,11 +16,11 @@ pub fn run() {
     let worker_state = state.clone();
     tauri::Builder::default()
         .manage(state)
-        .manage(chat::ChatState::default())
         .manage(voice::VoiceState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
             app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(
                 &data_dir.join("model-settings.db"),
