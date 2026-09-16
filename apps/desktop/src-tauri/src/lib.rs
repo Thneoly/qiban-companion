@@ -1,5 +1,6 @@
 mod commands;
 mod pet;
+mod placement;
 mod tray;
 
 use companion_storage::TaskStore;
@@ -15,15 +16,42 @@ pub fn run() {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
+            let saved_position =
+                match placement::PlacementStore::open(&data_dir.join("desktop-settings.db")) {
+                    Ok(store) => {
+                        let saved = store.saved();
+                        app.manage(std::sync::Mutex::new(store));
+                        saved
+                    }
+                    Err(error) => {
+                        eprintln!("pet placement unavailable; using default position: {error}");
+                        None
+                    }
+                };
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
             window.set_ignore_cursor_events(true)?;
-            pet::recover_position(&window, true)?;
+            if let Some(position) = saved_position {
+                window.set_position(tauri::PhysicalPosition::new(position.x, position.y))?;
+            }
+            pet::recover_position(&window, saved_position.is_none())?;
             pet::start_hit_testing(app.handle().clone(), worker_state.clone());
+            let persistence_app = app.handle().clone();
+            std::thread::spawn(move || {
+                while !worker_state.stopped.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    placement::flush(&persistence_app, false);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "pet" {
+                if let WindowEvent::Moved(position) = event {
+                    placement::moved(window.app_handle(), *position);
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if let Err(error) = window.hide() {
@@ -42,7 +70,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("桌面伴侣启动失败；请检查 WebView2、托盘和本地数据目录")
         .run(|app, event| {
+            if matches!(event, RunEvent::ExitRequested { .. }) {
+                placement::flush(app, true);
+            }
             if matches!(event, RunEvent::Exit) {
+                placement::flush(app, true);
                 app.state::<Arc<pet::PetState>>()
                     .stopped
                     .store(true, Ordering::Relaxed);
