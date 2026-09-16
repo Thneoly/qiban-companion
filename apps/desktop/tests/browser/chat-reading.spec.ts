@@ -72,6 +72,7 @@ test('partial failure stays distinct from completed reply whose history refresh 
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await page.evaluate(() => { (window as any).streamFixture.part('只有半句'); (window as any).streamFixture.fail(); });
   await expect(page.locator('.chat-phase')).toHaveText('未完成');
+  await expect(page.locator('.pet-shell')).toHaveAttribute('data-companion-state', 'concerned');
   await expect(page.getByRole('region', { name: '对话阅读区' })).toContainText('未加入前文');
   await expect(page.getByLabel('和栖栖说句话')).toHaveValue('重试的问题');
   await expect(page.getByText('最近 1 轮', { exact: true })).toBeVisible();
@@ -79,9 +80,59 @@ test('partial failure stays distinct from completed reply whose history refresh 
   await page.evaluate(() => { const w = window as any; w.streamFixture.part('完整的新回复'); w.failHistoryOnce = true; w.streamFixture.finish(); });
   await expect(page.locator('.chat-phase')).toHaveText('已完成');
   await expect(page.getByRole('status')).toContainText('回复已完成，但记录读取失败');
+  await expect(page.locator('.pet-shell')).toHaveAttribute('data-companion-state', 'pleased');
   expect(await page.evaluate(() => (window as any).requestCount)).toBe(2);
   await page.getByRole('button', { name: '收起气泡', exact: true }).click();
   await page.getByRole('button', { name: '和栖栖互动' }).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('完整的新回复');
   await expect(page.getByText('最近 2 轮', { exact: true })).toBeVisible();
+});
+
+test('companion follows real text phases and ignores late text after stopping or closing', async ({ page }) => {
+  const shell = page.locator('.pet-shell');
+  const portrait = page.locator('.pet-portrait svg');
+  await expect(shell).toHaveAttribute('data-companion-state', 'attentive');
+  await expect(portrait).toBeVisible();
+  await page.getByLabel('和栖栖说句话').fill('陪我理清今天的想法');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-companion-state', 'thinking');
+  await expect(portrait).toHaveAttribute('data-expression', 'thinking');
+  await expect(page.locator('.pet-portrait .thought-dots')).toBeVisible();
+  await page.evaluate(() => (window as any).streamFixture.part('我们可以从一件小事开始。'));
+  await expect(shell).toHaveAttribute('data-companion-state', 'responding');
+  await expect(page.locator('.pet-drag')).toContainText('正在回复你');
+  await page.evaluate(() => (window as any).streamFixture.finish());
+  await expect(portrait).toHaveAttribute('data-expression', 'pleased');
+  await page.screenshot({ path: test.info().outputPath('companion-reading.png') });
+  await page.getByRole('button', { name: '收起气泡', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-companion-state', 'idle');
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByLabel('和栖栖说句话').fill('先想一想');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-companion-state', 'thinking');
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await page.evaluate(() => (window as any).streamFixture.part('迟到的内容'));
+  await expect(shell).toHaveAttribute('data-companion-state', 'paused');
+  await expect(page.getByLabel('栖栖的回复')).not.toContainText('迟到');
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-companion-state', 'thinking');
+  await page.getByRole('button', { name: '收起气泡', exact: true }).click();
+  await page.evaluate(() => (window as any).streamFixture.part('收起后到达'));
+  await expect(shell).toHaveAttribute('data-companion-state', 'idle');
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByRole('button', { name: '安静陪伴', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-companion-state', 'quiet');
+  await expect(page.locator('.pet-character .resting-eyes')).toBeVisible();
+  expect(await page.locator('.pet-character .creature').evaluate(e => getComputedStyle(e).animationName)).toBe('none');
+});
+
+test('reduced motion preserves companion feedback without animation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByLabel('和栖栖说句话').fill('少一点动画');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.locator('.pet-shell')).toHaveAttribute('data-companion-state', 'thinking');
+  expect(await page.locator('.pet-portrait .creature').evaluate(e => getComputedStyle(e).animationName)).toBe('none');
+  expect(await page.locator('.pet-portrait .thought-dots').evaluate(e => getComputedStyle(e).animationName)).toBe('none');
+  await expect(page.locator('.pet-presence')).toContainText('正在等回复');
 });

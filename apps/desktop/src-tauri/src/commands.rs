@@ -1,7 +1,7 @@
 use companion_core::{Task, PROTOCOL_VERSION};
 use companion_storage::{StorageError, TaskStore};
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, State, WebviewWindow};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +51,22 @@ pub fn list_tasks(store: State<'_, TaskStore>) -> Result<Vec<Task>, CommandError
 }
 
 #[tauri::command]
-pub fn create_task(title: String, store: State<'_, TaskStore>) -> Result<Task, CommandError> {
-    store.create(&title).map_err(Into::into)
+pub fn create_task(
+    title: String,
+    store: State<'_, TaskStore>,
+    window: WebviewWindow,
+) -> Result<Task, CommandError> {
+    let task = store.create(&title)?;
+    // The panel updates its own create result locally. Other windows must notify it
+    // after persistence, without showing/focusing it or duplicating its own task.
+    if window.label() != "main" {
+        if let Err(error) = window.emit_to("main", "panel-refresh", ()) {
+            // The task is already saved; a notification failure must not encourage
+            // retrying the creation and producing a second task.
+            eprintln!("task panel refresh: {error}");
+        }
+    }
+    Ok(task)
 }
 
 #[tauri::command]

@@ -3,10 +3,10 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { nativeDesktop } from '../../lib/surface';
 import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, type ChatTurn } from '@companion/contracts';
 import { ConversationReader } from './ConversationReader';
+import type { ConversationPhase as Phase } from '../companion/presentation';
 
-type Phase = 'idle' | 'waiting' | 'streaming' | 'complete' | 'stopped' | 'error';
 const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等待回复', streaming: '正在回复', complete: '已完成', stopped: '已停止', error: '未完成' };
-export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boolean) => void; onReading: (active: boolean) => void }) {
+export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
   const [outputBudget, setOutputBudget] = useState(1024);
@@ -30,6 +30,7 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
     return () => clearInterval(timer);
   }, [generating]);
   useEffect(() => { onReading(reading); return () => onReading(false); }, [reading, onReading]);
+  useEffect(() => { onPhase(phase); }, [phase, onPhase]);
   useEffect(() => {
     alive.current = true;
     let disposed = false;
@@ -45,9 +46,9 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
       disposed = true; alive.current = false;
       const id = current.current; current.current = null;
       if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
-      onThinking(false);
+      onPhase('idle');
     };
-  }, [onThinking]);
+  }, [onPhase]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -56,7 +57,7 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
     const prompt = draft.trim();
     current.current = id;
     setBusy(true); setReply(''); setPhase('waiting'); setStatus('正在生成…');
-    setLastPrompt(prompt); setRecorded(false); onThinking(true);
+    setLastPrompt(prompt); setRecorded(false);
     const channel = new Channel<unknown>();
     let received = '';
     channel.onmessage = value => {
@@ -94,7 +95,7 @@ export function ChatBubble({ onThinking, onReading }: { onThinking: (active: boo
         setStatus((typeof error === 'string' ? error : '请求失败') + ' · 未加入前文，可编辑后重发');
       }
     } finally {
-      if (alive.current) { setBusy(false); onThinking(false); }
+      if (alive.current) setBusy(false);
       if (current.current === id) current.current = null;
     }
   }
