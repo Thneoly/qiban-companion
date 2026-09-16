@@ -54,6 +54,7 @@ pub fn chat_clear(state: State<'_, ChatState>) -> Result<(), String> {
 pub struct ChatConfig {
     configured: bool,
     model: String,
+    max_output_tokens: u32,
 }
 #[tauri::command]
 pub fn chat_config(
@@ -68,6 +69,7 @@ pub fn chat_config(
     Ok(ChatConfig {
         configured,
         model: config.model,
+        max_output_tokens: config.max_output_tokens,
     })
 }
 #[derive(Serialize, Clone)]
@@ -154,6 +156,7 @@ pub async fn chat_generate(
         &endpoint,
         key.as_deref().map(|s| s.as_str()).unwrap_or(""),
         &selected,
+        config.max_output_tokens,
         &history,
         &request.prompt,
         |text| {
@@ -221,6 +224,7 @@ async fn stream(
     endpoint: &str,
     key: &str,
     selected: &str,
+    max_output_tokens: u32,
     history: &[ChatTurn],
     prompt: &str,
     mut emit: impl FnMut(String) -> Result<(), String>,
@@ -246,7 +250,7 @@ async fn stream(
     messages.push(json!({"role":"user","content":prompt}));
     let mut response = request
         .json(&json!({
-            "model":selected,"stream":true,"max_tokens":1024,
+            "model":selected,"stream":true,"max_tokens":max_output_tokens,
 
             "messages":messages
         }))
@@ -311,12 +315,10 @@ async fn stream(
                 .and_then(Value::as_str)
             {
                 if reason != "stop" {
-                    return Err(if reason == "length" {
-                        "回复达到长度上限，可缩短问题后重试"
-                    } else {
-                        "回复未正常完成，请调整问题后重试"
+                    if reason == "length" {
+                        return Err(format!("回复达到长度限制（本次上限{max_output_tokens} tokens）；可缩短问题或在模型设置中调整最大输出后重试"));
                     }
-                    .into());
+                    return Err("回复未正常完成，请调整问题后重试".into());
                 }
                 finished = true;
             }
@@ -349,6 +351,9 @@ mod tests {
     }
 
     fn fixture(status: &str, body: &str) -> String {
+        fixture_budget(status, body, None)
+    }
+    fn fixture_budget(status: &str, body: &str, expected: Option<u32>) -> String {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -381,6 +386,11 @@ mod tests {
                     }
                 }
             }
+            if let Some(budget) = expected {
+                let start = request.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
+                let payload: Value = serde_json::from_slice(&request[start..]).unwrap();
+                assert_eq!(payload["max_tokens"], budget);
+            }
             socket.write_all(response.as_bytes()).unwrap();
         });
         format!("http://{address}")
@@ -389,10 +399,18 @@ mod tests {
     async fn streams_over_http_and_requires_completion() {
         let endpoint=fixture("200 OK","data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":7}}\n\ndata: [DONE]\n\n");
         let mut text = String::new();
-        let (usage, reply) = stream(&endpoint, "test-only", "fixture", &[], "hello", |part| {
-            text.push_str(&part);
-            Ok(())
-        })
+        let (usage, reply) = stream(
+            &endpoint,
+            "test-only",
+            "fixture",
+            1024,
+            &[],
+            "hello",
+            |part| {
+                text.push_str(&part);
+                Ok(())
+            },
+        )
         .await
         .unwrap();
         assert_eq!(text, "你好");
@@ -402,11 +420,34 @@ mod tests {
             "200 OK",
             "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
         );
-        assert!(
-            stream(&endpoint, "test-only", "fixture", &[], "hello", |_| Ok(()))
-                .await
-                .is_err()
-        );
+        assert!(stream(
+            &endpoint,
+            "test-only",
+            "fixture",
+            1024,
+            &[],
+            "hello",
+            |_| Ok(())
+        )
+        .await
+        .is_err());
+    }
+    #[tokio::test]
+    async fn sends_custom_budget_and_explains_length_limit() {
+        let endpoint = fixture_budget("200 OK", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\n", Some(4096));
+        let error = stream(
+            &endpoint,
+            "test-only",
+            "fixture",
+            4096,
+            &[],
+            "hello",
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("4096 tokens"));
+        assert!(error.contains("模型设置"));
     }
     #[tokio::test]
     async fn provider_errors_never_forward_response_body_or_key() {
@@ -415,6 +456,7 @@ mod tests {
             &endpoint,
             "fixture-private-key",
             "fixture",
+            1024,
             &[],
             "hello",
             |_| Ok(()),

@@ -39,6 +39,8 @@ Live2DRenderer与待办/模型协议独立，按需加载本地Core、固定浏�
 
 阅读模式仍在pet窗口内，由前端切换气泡布局；原生窗口大小与权限不变，已有ResizeObserver上报变化后的命中区域。ConversationReader只显示记录及当前片段，用户上翻时停止跟随增量。ChatBubble把等待、流式中、成功、停止及失败分别显示；记录刷新失败不会改写已经成功的模型结果。详见[阅读增量](../status/chat-reading.md)。
 
+ModelConfig新增带默认值的max_output_tokens，旧JSON缺字段仍按1024读取，保存前校验128～8192整数；ModelStore验证失败不落盘。ChatConfig只暴露数值，传输在请求开始时取快照并写入max_tokens。预算不参与会话身份，不会因调整预算清空记录；长度错误包含本次上限而非当前可能已变化的设置值。见[预算记录](../status/model-output-budget.md)。
+
 ## 协议和变化
 
 Rust的序列化对象与TypeScript共享包共同维护IPC v1，前端对未知状态、字段和协议版本拒绝解码。新增字段/状态需同时更新解码与边界测试；不兼容变化提升protocolVersion。当前不是自动生成类型，后续对象增多时再评估代码生成。
