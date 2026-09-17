@@ -1,6 +1,7 @@
 mod chat;
 mod commands;
 mod credentials;
+mod instance;
 mod model_settings;
 mod pet;
 mod placement;
@@ -15,11 +16,21 @@ pub fn run() {
     let state = Arc::new(pet::PetState::default());
     let worker_state = state.clone();
     tauri::Builder::default()
+        // First plugin, before setup opens any database. Ignore external argv/cwd.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Err(error) = pet::restore(app, false) {
+                eprintln!("restore existing instance: {error}");
+            }
+        }))
         .manage(state)
         .manage(voice::VoiceState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            let lease = instance::DataLease::acquire(&data_dir).inspect_err(|_| {
+                instance::report_unavailable();
+            })?;
+            app.manage(lease);
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
             app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(

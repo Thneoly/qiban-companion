@@ -22,6 +22,7 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 rusqlite.workspace = true
 companion-core.workspace = true
 companion-storage.workspace = true
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Security_Credentials", "Win32_Graphics_Gdi"] }

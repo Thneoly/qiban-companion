@@ -1,28 +1,32 @@
 //! One local archive, globally bounded; model context is scoped by endpoint and model.
 use crate::StorageError;
 use companion_core::conversation::ChatTurn;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
-pub struct HistoryStore(Connection);
+pub struct HistoryStore(pub(crate) Connection);
 impl HistoryStore {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         Self::from_connection(Connection::open(path)?)
     }
     fn from_connection(mut connection: Connection) -> Result<Self, StorageError> {
         connection.busy_timeout(Duration::from_millis(250))?;
-        let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version > 2 {
             return Err(StorageError::NewerSchema);
         }
-        if version == 0 {
-            let tx = connection.transaction()?;
-            tx.execute_batch("CREATE TABLE chat_turns (id INTEGER PRIMARY KEY, base TEXT NOT NULL, model TEXT NOT NULL, user TEXT NOT NULL, assistant TEXT NOT NULL); PRAGMA user_version=1;")?;
-            tx.commit()?;
+        let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
+        if integrity != "ok" {
+            return Err(StorageError::Unavailable);
         }
-        connection.pragma_update(None, "secure_delete", "ON")?;
+        if version == 0 {
+            tx.execute_batch("CREATE TABLE chat_turns (id INTEGER PRIMARY KEY, base TEXT NOT NULL, model TEXT NOT NULL, user TEXT NOT NULL, assistant TEXT NOT NULL); PRAGMA user_version=1;")?;
+        }
         // Fail closed on incompatible/corrupt data, without deleting or overwriting it.
-        let (count, size): (i64, i64) = connection.query_row(
+        let (count, size): (i64, i64) = tx.query_row(
             "SELECT count(*), coalesce(sum(length(user)+length(assistant)),0) FROM chat_turns",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -30,6 +34,13 @@ impl HistoryStore {
         if count > 6 || size > 12000 {
             return Err(StorageError::Unavailable);
         }
+        // Prepare the real read before migrating; a malformed v1 table must not become v2.
+        Self::read(&tx, "", "")?;
+        if version < 2 {
+            tx.execute_batch(include_str!("memory-schema.sql"))?;
+        }
+        crate::memory::validate_schema(&tx)?;
+        tx.commit()?;
         Ok(Self(connection))
     }
     pub fn load(&self, base: &str, model: &str) -> Result<Vec<ChatTurn>, StorageError> {
@@ -92,7 +103,21 @@ impl HistoryStore {
         Ok(turns)
     }
     pub fn clear(&mut self) -> Result<(), StorageError> {
-        self.0.execute("DELETE FROM chat_turns", [])?;
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let epoch: i64 = tx.query_row(
+            "SELECT context_epoch FROM memory_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        let next = companion_core::memory::next_counter(epoch)?;
+        tx.execute("DELETE FROM chat_turns", [])?;
+        tx.execute(
+            "UPDATE memory_meta SET context_epoch=?1 WHERE singleton=1",
+            [next],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 }
@@ -158,7 +183,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 2).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -176,5 +201,128 @@ mod tests {
         assert!(store.clear().is_err());
         assert!(store.append("a", "a", &turn(2)).is_err());
         assert_eq!(store.load("a", "a").unwrap(), vec![turn(1)]);
+    }
+
+    #[test]
+    fn migrates_real_v1_file_preserving_ids_and_all_scopes() {
+        let path = std::env::temp_dir().join(format!("migration-{}.db", uuid::Uuid::new_v4()));
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL); PRAGMA user_version=1;").unwrap();
+            for (id, base, model) in [(7, "a", "one"), (11, "a", "two"), (20, "b", "one")] {
+                db.execute(
+                    "INSERT INTO chat_turns VALUES(?1,?2,?3,'升级前问题🌱','升级前回答')",
+                    params![id, base, model],
+                )
+                .unwrap();
+            }
+        }
+        for _ in 0..2 {
+            let store = HistoryStore::open(&path).unwrap();
+            assert_eq!(
+                store
+                    .0
+                    .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(store.context_epoch().unwrap(), 0);
+            assert!(store.memory_list().unwrap().is_empty());
+            let policies: i64 = store
+                .0
+                .query_row("SELECT count(*) FROM memory_policy", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(policies, 0);
+            for (base, model) in [("a", "one"), ("a", "two"), ("b", "one")] {
+                assert_eq!(store.load(base, model).unwrap()[0].user, "升级前问题🌱");
+            }
+            let ids: Vec<i64> = store
+                .0
+                .prepare("SELECT id FROM chat_turns ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(ids, vec![7, 11, 20]);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn interrupted_migration_rolls_back_ddl_version_and_history() {
+        let path = std::env::temp_dir().join(format!("migration-fail-{}.db", uuid::Uuid::new_v4()));
+        {
+            let db = Connection::open(&path).unwrap();
+            // Collision halfway through DDL forces a failure after memory_meta creation.
+            db.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL); INSERT INTO chat_turns VALUES(9,'a','a','keep','answer'); CREATE TABLE memories(marker TEXT); PRAGMA user_version=1;").unwrap();
+        }
+        assert!(HistoryStore::open(&path).is_err());
+        {
+            let db = Connection::open(&path).unwrap();
+            assert_eq!(
+                db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                    .unwrap(),
+                1
+            );
+            let tables: Vec<String> = db
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(tables, vec!["chat_turns", "memories"]);
+            assert_eq!(HistoryStore::read(&db, "a", "a").unwrap()[0].user, "keep");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn memory_deletion_survives_reopen_and_future_version_is_untouched() {
+        use companion_core::memory::{MemoryDraft, MemoryKind};
+        let path = std::env::temp_dir().join(format!("memory-reopen-{}.db", uuid::Uuid::new_v4()));
+        let id;
+        {
+            let mut s = HistoryStore::open(&path).unwrap();
+            id = s
+                .memory_create(
+                    &MemoryDraft {
+                        kind: MemoryKind::Experience,
+                        body: "synthetic secret".into(),
+                        event_date: Some("2020-02-29".into()),
+                    },
+                    0,
+                )
+                .unwrap()
+                .value
+                .id;
+        }
+        {
+            let mut s = HistoryStore::open(&path).unwrap();
+            assert_eq!(s.memory_list().unwrap()[0].id, id);
+            s.memory_delete(&id, 1, 1).unwrap();
+        }
+        {
+            let s = HistoryStore::open(&path).unwrap();
+            assert!(s.memory_list().unwrap().is_empty());
+            assert_eq!(s.context_epoch().unwrap(), 2);
+            let marker: i64 =
+                s.0.query_row(
+                    "SELECT count(*) FROM memories WHERE body IS NULL AND deleted_at IS NOT NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(marker, 1);
+            s.0.pragma_update(None, "user_version", 3).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            HistoryStore::open(&path),
+            Err(StorageError::NewerSchema)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
     }
 }
