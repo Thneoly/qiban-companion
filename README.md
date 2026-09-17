@@ -4,7 +4,7 @@ React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“�
 
 当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**任务只进入待办，不会执行。** 已加入可配置的 Chat Completions 本机多轮对话与 Live2D 实验入口；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、长期记忆、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动底部把手移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
 
-最新增量见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
+最新增量见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
 
 ## 启动
 
@@ -31,6 +31,7 @@ npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 ```
 
 - 首次启动角色出现在主屏右下角；移动后重启恢复上次位置，并按当前屏幕边界修正。任务面板默认隐藏。
+- 首次点击角色显示使用指南；可进入模型设置、完成后不再自动提示，或本次跳过。之后从“使用指南”随时重看。
 - 点击角色展开气泡；输入内容后点“记下来”保存待办。
 - 按住角色下方“拖动这里”移动，停止后约一秒内自动保存位置；Esc 或切换到其他窗口收起气泡。
 - 气泡里的“任务面板”打开待办管理；关闭面板仍保留角色。

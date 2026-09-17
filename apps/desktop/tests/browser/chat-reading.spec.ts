@@ -13,6 +13,7 @@ test.beforeEach(async ({ page }) => {
       transformCallback: () => ++serial,
       unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
+        if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }

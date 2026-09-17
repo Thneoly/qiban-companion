@@ -69,6 +69,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            placement::guide_status,
+            placement::guide_complete,
             voice::voice_probe,
             voice::voice_cancel,
             voice::voice_key_set,

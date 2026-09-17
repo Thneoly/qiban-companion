@@ -13,6 +13,7 @@ test('an already open panel refreshes pet tasks without duplicating its own crea
       transformCallback: (callback: (value: unknown) => void) => { callbacks.set(++next, callback); return next; },
       unregisterCallback: (id: number) => callbacks.delete(id),
       invoke: async (cmd: string, args: any) => {
+        if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return tasks;
         if (cmd === 'model_settings_get') return { baseUrl: 'https://example.com/v1', model: 'test', useApiKey: false, hasApiKey: false, maxOutputTokens: 1024 };

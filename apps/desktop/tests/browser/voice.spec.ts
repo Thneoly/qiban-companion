@@ -11,6 +11,7 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
+        if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
         if (cmd === 'model_settings_get') return { baseUrl: 'https://example.com/v1', model: 'custom-chat', useApiKey: false, hasApiKey: false, maxOutputTokens: 1024 };

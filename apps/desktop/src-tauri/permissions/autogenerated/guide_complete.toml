@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guide-complete"
+description = "Enables the guide_complete command without any pre-configured scope."
+commands.allow = ["guide_complete"]
+
+[[permission]]
+identifier = "deny-guide-complete"
+description = "Denies the guide_complete command without any pre-configured scope."
+commands.deny = ["guide_complete"]

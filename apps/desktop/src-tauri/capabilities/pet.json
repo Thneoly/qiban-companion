@@ -6,6 +6,8 @@
     "pet"
   ],
   "permissions": [
+    "allow-guide-status",
+    "allow-guide-complete",
     "allow-get-runtime-info",
     "allow-create-task",
     "allow-pet-action",
