@@ -2,6 +2,8 @@ mod chat;
 mod commands;
 mod credentials;
 mod instance;
+mod memory;
+mod memory_export;
 mod model_settings;
 mod pet;
 mod placement;
@@ -24,6 +26,7 @@ pub fn run() {
         }))
         .manage(state)
         .manage(voice::VoiceState::default())
+        .manage(memory_export::ExportState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -80,6 +83,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            memory::memory_list,
+            memory::memory_mutate,
+            memory::chat_context_epoch,
+            memory_export::memory_export,
             placement::guide_status,
             placement::guide_complete,
             voice::voice_probe,

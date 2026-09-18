@@ -130,6 +130,7 @@ pub enum PetAction {
     Ready,
     OpenPanel,
     OpenSettings,
+    OpenMemory,
     Hide,
     Quiet,
     Restore,
@@ -146,6 +147,13 @@ pub fn pet_action(app: AppHandle, action: PetAction) -> Result<(), String> {
             app.get_webview_window("main")
                 .ok_or("设置窗口不可用")?
                 .emit("model-settings-open", ())
+                .map_err(message)
+        }
+        PetAction::OpenMemory => {
+            open_panel(&app)?;
+            app.get_webview_window("main")
+                .ok_or("记忆窗口不可用")?
+                .emit("memory-open", ())
                 .map_err(message)
         }
         PetAction::Hide => pet(&app)?.hide().map_err(message),

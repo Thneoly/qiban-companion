@@ -1,6 +1,6 @@
 # T13/T14：有限记忆产品设计
 
-版本：设计基线v0.1，2026-09-17。**本文件定义拟开发行为；当前应用尚未开放记忆管理与模型使用；底层[M1增量已实现](../status/memory-foundation.md)。** 对应[交付待办](../planning/delivery-backlog.md)T13/T14与[技术设计](../architecture/limited-memory.md)，不变更首版跨端候选范围或原人日基线。
+版本：设计基线v0.1，2026-09-17。**本文件定义拟开发行为；2026-09-19已实现[M2手动记忆管理与导出](../status/memory-panel.md)，模型使用尚未开放；底层见[M1](../status/memory-foundation.md)。** 对应[交付待办](../planning/delivery-backlog.md)T13/T14与[技术设计](../architecture/limited-memory.md)，不变更首版跨端候选范围或原人日基线。
 
 ## 1. 用户结果
 

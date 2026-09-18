@@ -18,6 +18,7 @@
     "allow-chat-generate",
     "allow-chat-cancel",
     "allow-chat-history",
-    "allow-chat-clear"
+    "allow-chat-clear",
+    "allow-chat-context-epoch"
   ]
 }

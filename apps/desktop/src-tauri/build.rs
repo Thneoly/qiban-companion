@@ -1,5 +1,9 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "memory_list",
+        "memory_mutate",
+        "chat_context_epoch",
+        "memory_export",
         "guide_status",
         "guide_complete",
         "voice_probe",

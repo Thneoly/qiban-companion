@@ -1,11 +1,21 @@
 import { expect, it } from 'vitest';
 import fixture from '../fixtures/manual-memory.json';
-import { decodeMemory, decodeMemories } from './memory';
+import { decodeMemory, decodeMemories, decodeMemorySnapshot, decodeMemoryReceipt, decodeMemoryExport, memoryErrorMessage } from './memory';
 
 it('accepts the same serialized fixture as Rust, preserving source and local date', () => {
   expect(decodeMemory(fixture)).toEqual(fixture);
   expect(decodeMemory({ ...fixture, body: '🌱'.repeat(200), revision: Number.MAX_SAFE_INTEGER })).toBeTruthy();
   expect(decodeMemory({ ...fixture, eventDate: null }).eventDate).toBeNull();
+});
+
+it('requires explicit snapshot, commit notification and export outcomes', () => {
+  expect(decodeMemorySnapshot({items: [], contextEpoch: 0, modelUseEnabled: false}).items).toEqual([]);
+  expect(() => decodeMemorySnapshot({items: [], contextEpoch: 0, modelUseEnabled: true})).toThrow();
+  expect(() => decodeMemoryReceipt({contextEpoch: 1, chatCleared: true})).toThrow();
+  expect(decodeMemoryReceipt({contextEpoch: 1, chatCleared: true, notificationsDelivered: false}).notificationsDelivered).toBe(false);
+  expect(decodeMemoryExport({status:'cancelled'})).toEqual({status:'cancelled'});
+  expect(() => decodeMemoryExport({status:'saved',count:31})).toThrow();
+  expect(memoryErrorMessage({code:'future_error'})).toContain('协议不兼容');
 });
 it('rejects invalid, untrusted, deleted and imprecise records', () => {
   for (const patch of [
