@@ -2,9 +2,9 @@
 
 React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“栖伴／栖栖”作为开发名称。产品、设计、计划与验证资料统一进入[文档中心](docs/README.md)。
 
-当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**任务只进入待办，不会执行。** 已加入可配置的 Chat Completions 本机多轮对话与 Live2D 实验入口；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、记忆模型使用、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动底部把手移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
+当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**任务只进入待办，不会执行。** 已加入可配置的 Chat Completions 本机多轮对话与 Live2D 实验入口；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动底部把手移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
 
-有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，模型注入仍待开发。最新记忆增量见[本机记忆面板](docs/status/memory-panel.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
+有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，[M3分模型许可、预览与受控注入](docs/status/memory-model-context.md)也已实现。最新记忆增量见[模型使用记录](docs/status/memory-model-context.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
 
 ## 启动
 
@@ -35,7 +35,7 @@ npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 - 点击角色展开气泡；输入内容后点“记下来”保存待办。
 - 按住角色下方“拖动这里”移动，停止后约一秒内自动保存位置；Esc 或切换到其他窗口收起气泡。
 - 气泡里的“任务面板”打开待办管理；关闭面板仍保留角色。
-- “我们的记忆”可手动保存偏好/经历、查看、更正、删除和导出JSON；上限30条、每条200字。更正/删除会先确认清空本机全部模型的聊天，当前记忆不会发给模型。
+- “我们的记忆”可手动保存偏好/经历、查看、更正、删除和导出JSON；上限30条、每条200字。更正/删除会先确认清空本机全部模型的聊天，每个模型默认关闭记忆使用，显式勾选最多5条/800字后，发送前可预览；停用或移除选择也须确认清空聊天。
 - “模型设置”可填写 API 基地址、模型编码、最大输出 tokens（128～8192）、是否使用 Key；保存后在原生密码窗口设置密钥，再回到“聊一聊”。智谱仅为可修改预设，支持其他兼容 Chat Completions 服务。
 - 完整问答在本机明文保存，所有模型合计最近6轮/1.2万字，退出重启可恢复。按地址和模型隔离前文，切回可查看尚未淘汰的记录；“最近 N 轮”查看，“清空对话”删除本机所有模型记录。收起停止生成，未完成片段不保存。
 - 点击“展开阅读”集中查看问答；向上翻阅时暂停自动跟随，“回到最新”恢复。生成状态区区分等待、回复中、完成、停止和失败。

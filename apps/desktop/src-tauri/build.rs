@@ -1,5 +1,7 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "chat_context_preview",
+        "memory_policy_set",
         "memory_list",
         "memory_mutate",
         "chat_context_epoch",

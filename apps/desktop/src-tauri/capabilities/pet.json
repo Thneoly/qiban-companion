@@ -19,6 +19,7 @@
     "allow-chat-cancel",
     "allow-chat-history",
     "allow-chat-clear",
-    "allow-chat-context-epoch"
+    "allow-chat-context-epoch",
+    "allow-chat-context-preview"
   ]
 }

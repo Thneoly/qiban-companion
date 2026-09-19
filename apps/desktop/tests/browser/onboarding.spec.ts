@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value:{
       transformCallback:()=>1, unregisterCallback:()=>{},
       invoke:async (cmd:string,args:any) => {
-        if(cmd==='get_runtime_info') return { protocolVersion:1,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false };
+        if(cmd==='get_runtime_info') return { protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false };
         if(cmd==='guide_status') return sessionStorage.getItem('guide-fixture')==='done';
         if(cmd==='guide_complete') { if(w.failSave) throw '保存使用指南状态失败'; sessionStorage.setItem('guide-fixture','done'); return; }
         if(cmd==='chat_config') return {configured:false,model:'fixture',maxOutputTokens:1024};

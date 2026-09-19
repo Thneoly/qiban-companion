@@ -10,14 +10,16 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.addInitScript(()=>{
     Object.defineProperty(window,'isTauri',{value:true});
     let next=0;let cancel=()=>{};let count=0;let history:{user:string;assistant:string}[]=[];
+    const usage={scope:{baseUrl:'https://fixture.test',model:'glm-test-fixture'},contextEpoch:1,memories:[],bodyChars:0,contextChars:0};
     const callbacks=new Map<number,(value:unknown)=>void>();
     Object.defineProperty(window,'__TAURI_EVENT_PLUGIN_INTERNALS__',{value:{unregisterListener:()=>{}}});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
       transformCallback:(cb:(value:unknown)=>void)=>{callbacks.set(++next,cb);return next;},
       unregisterCallback:(id:number)=>callbacks.delete(id),
       invoke:async(cmd:string,args:any)=>{
+        if(cmd==='chat_context_preview')return {...usage,items:[],policy:{enabled:false,revision:0,selectedIds:[]}};
         if(cmd==='guide_status')return true;
-        if(cmd==='get_runtime_info')return {protocolVersion:1,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
         if(cmd==='chat_config')return {configured:true,model:'glm-test-fixture',maxOutputTokens:1024};
         if(cmd==='chat_history')return history;
         if(cmd==='chat_clear'){history=[];return;}
@@ -25,17 +27,17 @@ test('mocked native stream stops late text and permits a fresh request',async({p
         if(cmd==='chat_generate'){
           count++;
           const id=args.request.requestId;
-          args.onDelta.onmessage({requestId:'another-request',text:'错误请求'});
+          args.onDelta.onmessage({requestId:'another-request',memoryUsage:null,text:'错误请求'});
           if(count===1) {
-            args.onDelta.onmessage({requestId:id,text:'第一段'});
+            args.onDelta.onmessage({requestId:id,memoryUsage:null,text:'第一段'});
             return new Promise((_,reject)=>{cancel=()=>{
               reject('fixture cancelled');
-              setTimeout(()=>args.onDelta.onmessage({requestId:id,text:'迟到旧文本'}),40);
+              setTimeout(()=>args.onDelta.onmessage({requestId:id,memoryUsage:null,text:'迟到旧文本'}),40);
             };});
           }
-          args.onDelta.onmessage({requestId:id,text:'新的回答'});
+          args.onDelta.onmessage({requestId:id,memoryUsage:usage,text:'新的回答'});
           history.push({user:args.request.prompt,assistant:'新的回答'});
-          return {requestId:id,elapsedMs:8,historySaved:true,usage:{total_tokens:12}};
+          return {requestId:id,elapsedMs:8,memoryUsage:usage,historySaved:true,usage:{total_tokens:12}};
         }
         return 1;
       }

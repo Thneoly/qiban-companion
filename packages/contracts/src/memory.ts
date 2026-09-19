@@ -1,4 +1,4 @@
-/** Manual memory DTOs and M2 IPC receipts. Model use remains disabled. */
+/** Manual memory DTOs and management IPC receipts. */
 export type MemoryKind = 'preference' | 'experience' | 'task_fact';
 export interface MemoryDraft {
   kind: Exclude<MemoryKind, 'task_fact'>;
@@ -46,7 +46,7 @@ export function decodeMemories(value: unknown): MemoryRecord[] {
   return memories;
 }
 
-export interface MemorySnapshot { items: MemoryRecord[]; contextEpoch: number; modelUseEnabled: false }
+export interface MemorySnapshot { items: MemoryRecord[]; contextEpoch: number }
 export interface MemoryReceipt { contextEpoch: number; chatCleared: boolean; notificationsDelivered: boolean }
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return incompatible();
@@ -55,8 +55,8 @@ function object(value: unknown): Record<string, unknown> {
 export function decodeContextEpoch(value: unknown): number { return integer(value) ? value : incompatible(); }
 export function decodeMemorySnapshot(value: unknown): MemorySnapshot {
   const v = object(value);
-  if (!integer(v.contextEpoch) || v.modelUseEnabled !== false) return incompatible();
-  return { items: decodeMemories(v.items), contextEpoch: v.contextEpoch, modelUseEnabled: false };
+  if (!integer(v.contextEpoch)) return incompatible();
+  return { items: decodeMemories(v.items), contextEpoch: v.contextEpoch };
 }
 export function decodeMemoryReceipt(value: unknown): MemoryReceipt {
   const v = object(value);
@@ -81,6 +81,13 @@ const memoryErrors: Record<string, string> = {
 };
 export function memoryErrorMessage(value: unknown): string {
   if (value && typeof value === 'object' && 'code' in value && typeof value.code === 'string') {
+    if (value.code==='selection_too_large' && 'affectedScopes' in value && Array.isArray(value.affectedScopes)) {
+      const labels=value.affectedScopes.map((scope:unknown)=>{
+        if(!scope||typeof scope!=='object'||!('baseUrl' in scope)||!('model' in scope)||typeof scope.baseUrl!=='string'||typeof scope.model!=='string')return '';
+        return `${scope.baseUrl} · ${scope.model}`;
+      }).filter(Boolean);
+      if(labels.length)return `更正会超出以下模型的记忆预算，请在模型设置中切换到对应模型、减少记忆选择后重试：${labels.join('；')}`;
+    }
     return memoryErrors[value.code] ?? '记忆错误协议不兼容，请更新客户端。';
   }
   return '记忆操作未完成，请刷新重试；若持续失败，请更新客户端。';

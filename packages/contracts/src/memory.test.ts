@@ -9,8 +9,8 @@ it('accepts the same serialized fixture as Rust, preserving source and local dat
 });
 
 it('requires explicit snapshot, commit notification and export outcomes', () => {
-  expect(decodeMemorySnapshot({items: [], contextEpoch: 0, modelUseEnabled: false}).items).toEqual([]);
-  expect(() => decodeMemorySnapshot({items: [], contextEpoch: 0, modelUseEnabled: true})).toThrow();
+  expect(decodeMemorySnapshot({items: [], contextEpoch: 0}).items).toEqual([]);
+  expect(() => decodeMemorySnapshot({items: [], contextEpoch: Number.MAX_SAFE_INTEGER + 1})).toThrow();
   expect(() => decodeMemoryReceipt({contextEpoch: 1, chatCleared: true})).toThrow();
   expect(decodeMemoryReceipt({contextEpoch: 1, chatCleared: true, notificationsDelivered: false}).notificationsDelivered).toBe(false);
   expect(decodeMemoryExport({status:'cancelled'})).toEqual({status:'cancelled'});

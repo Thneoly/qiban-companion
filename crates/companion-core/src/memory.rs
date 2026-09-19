@@ -27,6 +27,34 @@ pub enum MemoryError {
     CounterExhausted,
     #[error("记忆不存在或已删除")]
     NotFound,
+    #[error("请先确认清空全部聊天")]
+    ConfirmationRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryScope {
+    pub base_url: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryPolicy {
+    pub enabled: bool,
+    pub revision: i64,
+    pub selected_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryPolicyChange {
+    pub expected_scope: MemoryScope,
+    pub expected_revision: i64,
+    pub expected_epoch: i64,
+    pub enabled: bool,
+    pub selected_ids: Vec<String>,
+    pub restart_conversation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

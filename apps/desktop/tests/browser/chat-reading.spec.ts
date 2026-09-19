@@ -7,6 +7,9 @@ test.beforeEach(async ({ page }) => {
     const history = [{ user: '之前的问题', assistant: ('之前的回答，需要逐段阅读。\n').repeat(70) + 'x'.repeat(240) }];
     let serial = 0; const callbacks = new Map(); const listeners = new Map(); w.memoryEpoch=1;
     w.changeMemory = (notify = true) => { history.length=0; w.memoryEpoch++; if(notify) listeners.get("memory-changed")?.({payload:{contextEpoch:w.memoryEpoch,chatCleared:true}}); };
+    w.scope={baseUrl:'https://fixture.test',model:'reading-fixture'};w.previewItems=[];
+    w.context=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,items:w.previewItems,policy:{enabled:!!w.previewItems.length,revision:0,selectedIds:w.previewItems.map((m:any)=>m.id)},bodyChars:w.previewItems.reduce((n:number,m:any)=>n+[...m.body].length,0),contextChars:w.previewItems.length?500:0});
+    w.usage=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,memories:w.previewItems.map((m:any)=>({id:m.id,revision:m.revision})),bodyChars:w.context().bodyChars,contextChars:w.context().contextChars});
     w.requestCount = 0;
     w.failHistoryOnce = false;
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
@@ -15,21 +18,23 @@ test.beforeEach(async ({ page }) => {
       unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
         if (cmd === 'plugin:event|listen') { listeners.set(args.event,callbacks.get(args.handler)); return ++serial; }
+        if (cmd === 'chat_context_preview') return structuredClone(w.context());
         if (cmd === 'chat_context_epoch') return w.memoryEpoch;
         if (cmd === 'guide_status') return true;
-        if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }
         if (cmd === 'chat_clear') { if (w.failDelete) throw '删除本机对话失败，原记录仍保留'; history.length = 0; return; }
         if (cmd === 'chat_cancel') { w.streamFixture.fail(); return; }
         if (cmd === 'chat_generate') {
-          w.requestCount++;
+          w.requestCount++; w.lastRequest=args.request;
+          args.onDelta.onmessage({requestId:args.request.requestId,text:'',memoryUsage:w.usage()});
           return new Promise((resolve, reject) => {
             let reply = '';
             w.streamFixture = {
-              part: (text: string) => { reply += text; args.onDelta.onmessage({ requestId: args.request.requestId, text }); },
+              part: (text: string) => { reply += text; args.onDelta.onmessage({ requestId: args.request.requestId, text, memoryUsage:null }); },
               fail: () => reject('测试连接中断'),
-              finish: () => { if (!w.failSave) history.push({ user: args.request.prompt, assistant: reply }); resolve({ requestId: args.request.requestId, elapsedMs: 400, historySaved: !w.failSave, usage: { total_tokens: 10 } }); }
+              finish: () => { if (!w.failSave) history.push({ user: args.request.prompt, assistant: reply }); resolve({ requestId: args.request.requestId, elapsedMs: 400, memoryUsage:w.usage(), historySaved: !w.failSave, usage: { total_tokens: 10 } }); }
             };
           });
         }
@@ -190,4 +195,16 @@ test('missed memory notification is reconciled before another request can be sen
   await expect(page.getByRole('status')).toContainText('已刷新本机记录');
   expect(await page.evaluate(()=>(window as any).requestCount)).toBe(0);
   await expect(page.getByRole('region',{name:'对话阅读区'})).not.toContainText('之前的问题');
+});
+
+test('preview is visible before send and receipt describes the submitted snapshot',async({page})=>{
+  await page.evaluate(()=>{const w=window as any;w.previewItems=[{id:'00000000-0000-4000-8000-000000000001',kind:'experience',body:'合成经历：一起徒步',eventDate:'2024-02-29',sourceKind:'user_manual',sourceLabel:'用户在记忆面板填写',createdAt:1,confirmedAt:1,updatedAt:1,revision:1}];w.changeMemory();});
+  await page.getByText('下次发送的记忆 · 1条').click();await expect(page.locator('.chat-memory-preview')).toContainText('2024-02-29');
+  await expect(page.locator('.chat-memory-preview')).toContainText('用户在记忆面板填写');
+  await page.getByLabel('和栖栖说句话').fill('继续聊');await page.getByRole('button',{name:'发送',exact:true}).click();
+  await expect(page.locator('.chat-memory-receipt')).toContainText('本轮已提交 1 条');
+  await page.locator('.chat-memory-receipt summary').click();await expect(page.locator('.chat-memory-receipt')).toContainText('第1版');
+  const request=await page.evaluate(()=>(window as any).lastRequest);expect(request.expectedContextEpoch).toBe(2);expect(request.expectedScope.model).toBe('reading-fixture');expect(request).not.toHaveProperty('memories');
+  await page.evaluate(()=>{const w=window as any;w.previewItems=[];w.changeMemory();});
+  await expect(page.locator('.chat-memory-receipt')).toHaveCount(0);await expect(page.locator('.chat-memory-preview')).not.toContainText('合成经历');
 });

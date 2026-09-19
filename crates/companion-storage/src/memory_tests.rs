@@ -76,6 +76,121 @@ fn manual_capacity_source_and_stale_create() {
 }
 
 #[test]
+fn policy_is_explicit_scoped_versioned_and_revocation_is_atomic() {
+    let mut s = store();
+    let scope = MemoryScope {
+        base_url: "https://a".into(),
+        model: "model".into(),
+    };
+    let other = MemoryScope {
+        base_url: "https://b".into(),
+        model: "model".into(),
+    };
+    let one = s.memory_create(&draft("one"), 0).unwrap().value;
+    let two = s.memory_create(&draft("two"), 1).unwrap().value;
+    chat(&mut s);
+    assert_eq!(s.memory_policy(&scope).unwrap(), MemoryPolicy::default());
+    let mut change = MemoryPolicyChange {
+        expected_scope: scope.clone(),
+        expected_revision: 0,
+        expected_epoch: 2,
+        enabled: true,
+        selected_ids: vec![two.id.clone(), one.id.clone()],
+        restart_conversation: false,
+    };
+    assert!(s.memory_policy_set(&other, &change).is_err());
+    let commit = s.memory_policy_set(&scope, &change).unwrap();
+    assert!(!commit.chat_cleared);
+    assert_eq!(commit.value.selected_ids, change.selected_ids);
+    assert_eq!(chats(&s), 2);
+    assert_eq!(s.memory_policy(&other).unwrap(), MemoryPolicy::default());
+    assert!(s.memory_policy_set(&scope, &change).is_err());
+    change.expected_epoch = commit.context_epoch;
+    change.expected_revision = commit.value.revision;
+    change.selected_ids = vec![one.id.clone()];
+    assert!(matches!(
+        s.memory_policy_set(&scope, &change),
+        Err(StorageError::Memory(MemoryError::ConfirmationRequired))
+    ));
+    assert_eq!(s.context_epoch().unwrap(), 3);
+    assert_eq!(chats(&s), 2);
+    // Trigger a real write failure after the transaction has changed policy/epoch.
+    s.0.execute_batch("CREATE TRIGGER deny_chat_delete BEFORE DELETE ON chat_turns BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    change.restart_conversation = true;
+    assert!(s.memory_policy_set(&scope, &change).is_err());
+    assert_eq!(s.context_epoch().unwrap(), 3);
+    assert_eq!(s.memory_policy(&scope).unwrap().selected_ids.len(), 2);
+    s.0.execute_batch("DROP TRIGGER deny_chat_delete;").unwrap();
+    let commit = s.memory_policy_set(&scope, &change).unwrap();
+    assert!(commit.chat_cleared);
+    assert_eq!(chats(&s), 0);
+    change.expected_epoch = commit.context_epoch;
+    change.expected_revision = commit.value.revision;
+    let retry = s.memory_policy_set(&scope, &change).unwrap();
+    assert_eq!(retry.context_epoch, 4);
+    assert!(!retry.chat_cleared);
+    change.enabled = false;
+    change.selected_ids.clear();
+    let off = s.memory_policy_set(&scope, &change).unwrap();
+    assert!(!off.value.enabled);
+    assert_eq!(s.memory_list().unwrap().len(), 2);
+    assert!(s.memory_policy(&scope).unwrap().selected_ids.is_empty());
+}
+
+#[test]
+fn policy_budget_order_and_deleted_selections_survive_reopen() {
+    let path = std::env::temp_dir().join(format!("policy-{}.db", uuid::Uuid::new_v4()));
+    let scope = MemoryScope {
+        base_url: "https://a".into(),
+        model: "m".into(),
+    };
+    let mut s = HistoryStore::open(&path).unwrap();
+    let mut ids = Vec::new();
+    for n in 0..6 {
+        ids.push(
+            s.memory_create(&draft(&"🌱".repeat(160)), n)
+                .unwrap()
+                .value
+                .id,
+        );
+    }
+    let mut change = MemoryPolicyChange {
+        expected_scope: scope.clone(),
+        expected_revision: 0,
+        expected_epoch: 6,
+        enabled: true,
+        selected_ids: ids.clone(),
+        restart_conversation: false,
+    };
+    assert!(s.memory_policy_set(&scope, &change).is_err());
+    change.selected_ids = ids[..5].to_vec();
+    s.memory_policy_set(&scope, &change).unwrap();
+    assert_eq!(
+        s.memory_budget_conflicts(&ids[0], &draft(&"a".repeat(161)))
+            .unwrap(),
+        vec![scope.clone()]
+    );
+    assert!(matches!(
+        s.memory_update(&ids[0], 1, 7, &draft(&"a".repeat(161))),
+        Err(StorageError::Memory(MemoryError::SelectionTooLarge))
+    ));
+    assert_eq!(s.memory_list().unwrap()[0].revision, 1);
+    drop(s);
+    let mut s = HistoryStore::open(&path).unwrap();
+    assert_eq!(s.memory_policy(&scope).unwrap().selected_ids, ids[..5]);
+    s.memory_delete(&ids[2], 1, 7).unwrap();
+    assert!(!s
+        .memory_policy(&scope)
+        .unwrap()
+        .selected_ids
+        .contains(&ids[2]));
+    s.memory_delete_all(8).unwrap();
+    assert!(!s.memory_policy(&scope).unwrap().enabled);
+    drop(s);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn edit_conflicts_and_clear_all_scopes_atomically() {
     let mut s = store();
     let original = s.memory_create(&draft("before"), 0).unwrap().value;

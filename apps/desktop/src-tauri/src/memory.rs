@@ -1,4 +1,4 @@
-//! M2 host coordination. Memory never enters a model request in this increment.
+//! Host coordination for explicit manual memory mutations.
 use crate::chat::ChatState;
 use companion_core::memory::{Memory, MemoryDraft, MemoryError};
 use companion_storage::{memory::MemoryCommit, StorageError};
@@ -9,23 +9,28 @@ use tauri::{AppHandle, Emitter, State};
 #[serde(rename_all = "camelCase")]
 pub struct MemoryFailure {
     pub code: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub affected_scopes: Vec<companion_core::memory::MemoryScope>,
     pub message: &'static str,
 }
 impl MemoryFailure {
     pub(crate) fn unavailable() -> Self {
         Self {
+            affected_scopes: Vec::new(),
             code: "storage_unavailable",
             message: "本机记忆不可用，请刷新或检查数据目录",
         }
     }
     pub(crate) fn export() -> Self {
         Self {
+            affected_scopes: Vec::new(),
             code: "export_failed",
             message: "导出失败，未报告保存成功；请选择可写的JSON文件位置重试",
         }
     }
     pub(crate) fn changed() -> Self {
         Self {
+            affected_scopes: Vec::new(),
             code: "context_changed",
             message: "记忆或会话已变化，请刷新后重试",
         }
@@ -35,19 +40,28 @@ impl From<StorageError> for MemoryFailure {
     fn from(error: StorageError) -> Self {
         match error {
             StorageError::Memory(error) => match error {
+                MemoryError::ConfirmationRequired => Self {
+                    affected_scopes: Vec::new(),
+                    code: "confirmation_required",
+                    message: "请先确认清空本机全部聊天",
+                },
                 MemoryError::InvalidInput | MemoryError::UnsupportedKind => Self {
+                    affected_scopes: Vec::new(),
                     code: "invalid_input",
                     message: "仅可保存偏好或经历，正文需1～200字且日期有效",
                 },
                 MemoryError::CapacityExceeded => Self {
+                    affected_scopes: Vec::new(),
                     code: "capacity_exceeded",
                     message: "最多保留30条记忆，请先整理已有内容",
                 },
                 MemoryError::SelectionTooLarge => Self {
+                    affected_scopes: Vec::new(),
                     code: "selection_too_large",
                     message: "修改后超出已选记忆预算，请先调整选择",
                 },
                 MemoryError::Conflict | MemoryError::NotFound => Self {
+                    affected_scopes: Vec::new(),
                     code: "conflict",
                     message: "条目已更改或删除，请刷新后重试",
                 },
@@ -64,7 +78,6 @@ impl From<StorageError> for MemoryFailure {
 pub struct MemorySnapshot {
     pub items: Vec<Memory>,
     pub context_epoch: i64,
-    pub model_use_enabled: bool,
 }
 #[derive(Deserialize)]
 #[serde(
@@ -120,7 +133,6 @@ impl ChatState {
         Ok(MemorySnapshot {
             items: store.memory_list()?,
             context_epoch: store.context_epoch()?,
-            model_use_enabled: false,
         })
     }
     // Notification happens under the same lock so queued deltas cannot overtake invalidation.
@@ -146,6 +158,7 @@ impl ChatState {
         };
         if !confirmed {
             return Err(MemoryFailure {
+                affected_scopes: Vec::new(),
                 code: "confirmation_required",
                 message: "请先确认停止当前回复并清空本机全部模型的聊天记录",
             });
@@ -171,6 +184,17 @@ impl ChatState {
                 draft,
                 ..
             } => {
+                if previous_epoch != expected_epoch {
+                    return Err(MemoryFailure::changed());
+                }
+                let affected_scopes = store.memory_budget_conflicts(&id, &draft)?;
+                if !affected_scopes.is_empty() {
+                    return Err(MemoryFailure {
+                        code: "selection_too_large",
+                        message: "更正将超出这些模型的记忆预算，请先减少选择",
+                        affected_scopes,
+                    });
+                }
                 let result = store.memory_update(&id, expected_revision, expected_epoch, &draft)?;
                 (result.context_epoch, result.chat_cleared)
             }

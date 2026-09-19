@@ -2,7 +2,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,11 +117,31 @@ pub fn model_settings_get(state: State<'_, ModelState>) -> Result<ModelSettings,
 }
 #[tauri::command]
 pub fn model_settings_save(
+    app: AppHandle,
     state: State<'_, ModelState>,
     chat: State<'_, crate::chat::ChatState>,
     config: ModelConfig,
 ) -> Result<(), String> {
     let mut store = state.lock().map_err(|_| "模型设置不可用")?;
+    let config = config.validated()?;
+    if store.config.base_url != config.base_url || store.config.model != config.model {
+        // Invalidate first while holding the settings lock: a save failure is safe and keeps the old config.
+        let mut inner = chat.0.lock().map_err(|_| "对话状态不可用")?;
+        let epoch = inner
+            .store
+            .as_mut()
+            .ok_or("记忆存储不可用，模型未切换")?
+            .invalidate_context()
+            .map_err(|_| "无法使旧预览失效，模型未切换")?;
+        inner.invalidate_memory(false);
+        let _ = app.emit(
+            "memory-changed",
+            crate::memory::MemoryChanged {
+                context_epoch: epoch,
+                chat_cleared: false,
+            },
+        );
+    }
     store.save(config)?;
     crate::chat::select_config(&chat, &store.config.base_url, &store.config.model)
         .map_err(|error| format!("模型设置已保存，但对话记录未就绪：{error}"))

@@ -1,3 +1,4 @@
+import { MemoryPolicyPanel } from './MemoryPolicyPanel';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -60,7 +61,7 @@ export function MemoryPanel() {
     if (!snapshot || busy) return;
     if (!draft.body.trim() || [...draft.body.trim()].length > 200) { setError('正文需要包含1～200个字符，表情按Unicode字符计数。'); return; }
     if (editing) setPending({ action: 'update', id: editing.id, expectedRevision: editing.revision, expectedEpoch: snapshot.contextEpoch, draft: { ...draft } });
-    else void mutate({ action: 'create', draft, expectedEpoch: snapshot.contextEpoch }, '记忆已保存在本机，尚未用于模型对话。');
+    else void mutate({ action: 'create', draft, expectedEpoch: snapshot.contextEpoch }, '记忆已保存在本机，新增条目尚未被模型选用。');
   }
   async function exportMemories() {
     if (acting.current) return;
@@ -73,8 +74,8 @@ export function MemoryPanel() {
   }
   const count = [...draft.body].length;
   return <section className="memory-panel" aria-labelledby="memories-title">
-    <div className="memory-heading"><div><span className="eyebrow">LITTLE THINGS WE KEEP</span><h2 id="memories-title">我们的记忆</h2></div><span className="memory-badge">仅保存在本机 · 模型使用未启用</span></div>
-    <p>把希望留下的小事亲自写在这里。保存聊天不会自动生成记忆；目前这些内容不会加入模型请求。</p>
+    <div className="memory-heading"><div><span className="eyebrow">LITTLE THINGS WE KEEP</span><h2 id="memories-title">我们的记忆</h2></div><span className="memory-badge">本机记忆 · 模型使用需单独授权</span></div>
+    <p>把希望留下的小事亲自写在这里。保存聊天不会自动生成记忆；是否随对话发送，由下方每个模型的使用设置决定。</p>
     {!nativeDesktop && <p className="memory-notice">浏览器仅预览界面，不保存或导出记忆。请在桌面版使用。</p>}
     <div className="memory-toolbar"><span>{snapshot ? `${snapshot.items.length} / 30 条` : nativeDesktop ? '记录尚未载入' : '桌面功能预览'}</span><button disabled={busy || !nativeDesktop} onClick={() => void refresh()}>刷新记忆</button><button disabled={busy || !snapshot} onClick={() => void exportMemories()}>导出 JSON</button><button className="memory-danger" disabled={busy || !snapshot?.items.length} onClick={() => snapshot && setPending({ action: 'delete_all', expectedEpoch: snapshot.contextEpoch })}>删除全部记忆</button></div>
     {error && <p role="alert" className="memory-error">{error}</p>}
@@ -102,6 +103,7 @@ export function MemoryPanel() {
         {snapshot?.items.map(item => <article key={item.id} className="memory-card"><span className="memory-kind">{item.kind === 'preference' ? '我的偏好' : '共同经历'}</span><p className="memory-body">{item.body}</p><small>{item.sourceLabel}<br/>经历日期：{item.eventDate ?? '未指定日期'}<br/>创建：{formatTime(item.createdAt)}<br/>确认／更正：{formatTime(item.confirmedAt)}</small><div><button disabled={busy || !!pending} onClick={() => { setEditing(item); setDraft({ kind: item.kind, body: item.body, eventDate: item.eventDate }); setError(''); }}>更正</button><button disabled={busy || !!pending} onClick={() => snapshot && setPending({ action: 'delete', id: item.id, expectedRevision: item.revision, expectedEpoch: snapshot.contextEpoch })}>删除</button></div></article>)}
       </div>
     </div>
+    <MemoryPolicyPanel items={snapshot?.items ?? []} epoch={snapshot?.contextEpoch ?? -1} locked={busy || !snapshot || !!pending}/>
     <small className="memory-help">本机明文保存。导出仅包含有效记忆，不包含聊天或密钥；导出文件需要你自行保管。本版不支持导入。</small>
   </section>;
 }
