@@ -22,6 +22,8 @@
     "allow-model-key-delete",
     "allow-memory-list",
     "allow-memory-mutate",
-    "allow-memory-export"
+    "allow-memory-export",
+    "allow-chat-context-preview",
+    "allow-memory-policy-set"
   ]
 }

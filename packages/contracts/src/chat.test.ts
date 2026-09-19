@@ -1,13 +1,14 @@
 import {expect,test} from 'vitest';
 import {decodeChatConfig,decodeChatDelta,decodeChatResult,decodeChatHistory,decodeModelSettings} from './index';
+const memoryUsage={scope:{baseUrl:'https://fixture.test',model:'m'},contextEpoch:0,memories:[],bodyChars:0,contextChars:0};
 test('chat boundary rejects malformed events and preserves unknown usage',()=>{
-  expect(decodeChatResult({requestId:'a',elapsedMs:5,historySaved:true,usage:null}).usage).toBeNull();
-  expect(decodeChatResult({requestId:'a',elapsedMs:5,usage:null}).historySaved).toBe(false);
-  expect(()=>decodeChatResult({requestId:'a',elapsedMs:5,historySaved:'yes',usage:null})).toThrow();
+  expect(decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,historySaved:true,usage:null}).usage).toBeNull();
+  expect(decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,usage:null}).historySaved).toBe(false);
+  expect(()=>decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,historySaved:'yes',usage:null})).toThrow();
   expect(()=>decodeChatResult({requestId:'a',elapsedMs:-1,usage:null})).toThrow();
   expect(()=>decodeChatDelta({requestId:'a',text:42})).toThrow();
   expect(()=>decodeChatConfig({configured:'true',model:'glm-5.3'})).toThrow();
-  expect(()=>decodeChatResult({requestId:'a',elapsedMs:5,usage:{total_tokens:'secret'}})).toThrow();
+  expect(()=>decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,usage:{total_tokens:'secret'}})).toThrow();
 });
 
 test('history requires bounded complete text pairs',()=>{

@@ -141,11 +141,123 @@ pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
 }
 
 impl HistoryStore {
+    /// Switching providers invalidates previews even for A -> B -> A, without deleting chats.
+    pub fn invalidate_context(&mut self) -> Result<i64, StorageError> {
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let next = advance(&tx, epoch(&tx)?)?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    pub fn memory_policy(&self, scope: &MemoryScope) -> Result<MemoryPolicy, StorageError> {
+        read_policy(&self.0, scope)
+    }
+
+    pub fn memory_policy_set(
+        &mut self,
+        scope: &MemoryScope,
+        change: &MemoryPolicyChange,
+    ) -> Result<MemoryCommit<MemoryPolicy>, StorageError> {
+        if scope != &change.expected_scope || scope.base_url.is_empty() || scope.model.is_empty() {
+            return Err(MemoryError::ContextChanged.into());
+        }
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if epoch(&tx)? != change.expected_epoch {
+            return Err(MemoryError::ContextChanged.into());
+        }
+        let old = read_policy(&tx, scope)?;
+        if old.revision != change.expected_revision {
+            return Err(MemoryError::Conflict.into());
+        }
+        if !change.enabled && !change.selected_ids.is_empty() {
+            return Err(MemoryError::InvalidInput.into());
+        }
+        validate_selection(&change.selected_ids, &read_active(&tx)?)?;
+        let enabled = change.enabled && !change.selected_ids.is_empty();
+        let clear = old
+            .selected_ids
+            .iter()
+            .any(|id| !change.selected_ids.contains(id));
+        if clear && !change.restart_conversation {
+            return Err(MemoryError::ConfirmationRequired.into());
+        }
+        if enabled == old.enabled && change.selected_ids == old.selected_ids {
+            return Ok(MemoryCommit {
+                value: old,
+                context_epoch: change.expected_epoch,
+                chat_cleared: false,
+            });
+        }
+        let policy = MemoryPolicy {
+            enabled,
+            revision: next_counter(old.revision)?,
+            selected_ids: change.selected_ids.clone(),
+        };
+        let context_epoch = advance(&tx, change.expected_epoch)?;
+        tx.execute("INSERT INTO memory_policy(base_url,model,enabled,revision) VALUES(?1,?2,?3,?4) ON CONFLICT(base_url,model) DO UPDATE SET enabled=excluded.enabled,revision=excluded.revision", params![scope.base_url,scope.model,policy.enabled,policy.revision])?;
+        tx.execute(
+            "DELETE FROM memory_selection WHERE base_url=?1 AND model=?2",
+            params![scope.base_url, scope.model],
+        )?;
+        for (position, id) in policy.selected_ids.iter().enumerate() {
+            tx.execute("INSERT INTO memory_selection(base_url,model,memory_id,position) VALUES(?1,?2,?3,?4)", params![scope.base_url,scope.model,id,position as i64])?;
+        }
+        if clear {
+            tx.execute("DELETE FROM chat_turns", [])?;
+        }
+        tx.commit()?;
+        Ok(MemoryCommit {
+            value: policy,
+            context_epoch,
+            chat_cleared: clear,
+        })
+    }
+
     pub fn context_epoch(&self) -> Result<i64, StorageError> {
         epoch(&self.0)
     }
     pub fn memory_list(&self) -> Result<Vec<Memory>, StorageError> {
         read_active(&self.0)
+    }
+
+    /// Preflight for an actionable UI error. memory_update still validates inside its transaction.
+    pub fn memory_budget_conflicts(
+        &self,
+        id: &str,
+        draft: &MemoryDraft,
+    ) -> Result<Vec<MemoryScope>, StorageError> {
+        let draft = draft.validate()?;
+        let mut active = read_active(&self.0)?;
+        let item = active
+            .iter_mut()
+            .find(|m| m.id == id)
+            .ok_or(MemoryError::NotFound)?;
+        item.body = draft.body;
+        let mut stmt = self
+            .0
+            .prepare("SELECT base_url,model FROM memory_selection WHERE memory_id=?1")?;
+        let scopes = stmt
+            .query_map([id], |r| {
+                Ok(MemoryScope {
+                    base_url: r.get(0)?,
+                    model: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut conflicts = Vec::new();
+        for scope in scopes {
+            let policy = read_policy(&self.0, &scope)?;
+            match validate_selection(&policy.selected_ids, &active) {
+                Ok(_) => {}
+                Err(MemoryError::SelectionTooLarge) => conflicts.push(scope),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(conflicts)
     }
 
     /// Explicit user input only; no caller-controlled ID, provenance or timestamps.
@@ -287,6 +399,36 @@ impl HistoryStore {
             chat_cleared: true,
         })
     }
+}
+
+fn read_policy(db: &Connection, scope: &MemoryScope) -> Result<MemoryPolicy, StorageError> {
+    let row: Option<(bool, i64)> = db
+        .query_row(
+            "SELECT enabled,revision FROM memory_policy WHERE base_url=?1 AND model=?2",
+            params![scope.base_url, scope.model],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((enabled, revision)) = row else {
+        return Ok(MemoryPolicy::default());
+    };
+    let mut stmt = db.prepare(
+        "SELECT memory_id FROM memory_selection WHERE base_url=?1 AND model=?2 ORDER BY position",
+    )?;
+    let selected_ids = stmt
+        .query_map(params![scope.base_url, scope.model], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !(0..=MAX_COUNTER).contains(&revision) || enabled == selected_ids.is_empty() {
+        return Err(StorageError::Unavailable);
+    }
+    validate_selection(&selected_ids, &read_active(db)?)?;
+    Ok(MemoryPolicy {
+        enabled,
+        revision,
+        selected_ids,
+    })
 }
 
 fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageError> {

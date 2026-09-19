@@ -1,10 +1,10 @@
 # 有限记忆技术设计：T13/T14本地增量
 
-设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，2026-09-19已完成[M2面板与导出](../status/memory-panel.md)，M3～M4仍待实现。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
+设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，2026-09-19已完成[M2面板与导出](../status/memory-panel.md)，同日完成[M3模型使用](../status/memory-model-context.md)，M4完整验收仍待执行。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
 
 ## 1. 决策与现有代码差距
 
-M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁移，并增加Windows单实例保护和Rust/TypeScript数据契约。M2已接入记忆管理IPC、原生导出、提交后的缓存失效与在途取消，流式和完成提交比较请求ID/会话版本/epoch。`ChatRequest`仍只有requestId和prompt；策略写入、许可预览及注入尚未开放。下文继续作为完整设计，实际实现边界以M1/M2状态记录为准。
+M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁移，并增加Windows单实例保护和Rust/TypeScript数据契约。M2已接入记忆管理IPC、原生导出、提交后的缓存失效与在途取消，流式和完成提交比较请求ID/会话版本/epoch。M3已开放策略写入、许可预览及受控注入，`ChatRequest`升级协议2并要求expectedScope/expectedContextEpoch。模型切换递增epoch，即使切走再切回也拒绝旧预览。下文作为完整设计，实际实现与测试边界以M1～M3状态记录为准。
 
 首版不用向量库、图数据库、摘要模型或背景抽取。30条容量下按用户明确选择注入，选择超过5条或800字直接拒绝设置，不暗中截断，也不假装按语义相关性排序。记忆附加处理不产生独立推理请求；正文和元数据仍增加模型输入，实际tokens与供应商费用须测试，字符数不是tokens或人民币。
 
@@ -37,7 +37,7 @@ M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁
 
 ## 3. IPC草案
 
-下表保留目标设计契约。M2实际注册`memory_list`（items/contextEpoch/modelUseEnabled=false）、`memory_mutate`（action=create/update/delete/delete_all，对应下表四个写操作，统一返回contextEpoch/chatCleared/notificationsDelivered）、`memory_export`（status=cancelled或saved/count），并新增pet只读`chat_context_epoch`。M3的policy/preview与chat_generate扩展尚未注册。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
+下表保留目标设计契约。M2实际注册`memory_list`（items/contextEpoch/modelUseEnabled=false）、`memory_mutate`（action=create/update/delete/delete_all，对应下表四个写操作，统一返回contextEpoch/chatCleared/notificationsDelivered）、`memory_export`（status=cancelled或saved/count），并新增pet只读`chat_context_epoch`。M3已注册`memory_policy_set`与main/pet只读`chat_context_preview`，`chat_generate`按协议2要求预览的scope/epoch。M3的`memory_list`只返回items/contextEpoch，模型许可与使用预算由preview提供；policy写入亦要求expectedScope，但只能用于比较宿主当前范围。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
 
 | 命令 | 输入重点 | 回执/失败边界 |
 |---|---|---|

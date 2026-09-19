@@ -12,8 +12,9 @@ test.beforeEach(async ({ page }) => {
       transformCallback: (callback: any) => { callbacks.set(++sequence, callback); return sequence; }, unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
         if (cmd === 'plugin:event|listen') { events.set(args.event, callbacks.get(args.handler)); return ++sequence; }
-        if (cmd === 'get_runtime_info') return {protocolVersion:1,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if (cmd === 'get_runtime_info') return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
         if (cmd === 'list_tasks') return [];
+        if (cmd === 'chat_context_preview') return {scope:{baseUrl:'https://fixture.test',model:'fixture'},contextEpoch:w.memoryEpoch,policy:{enabled:false,revision:0,selectedIds:[]},items:[],bodyChars:0,contextChars:0};
         if (cmd === 'memory_list') { if (w.failRead) throw {code:'storage_unavailable'}; return {items:structuredClone(w.memoryItems),contextEpoch:w.memoryEpoch,modelUseEnabled:false}; }
         if (cmd === 'memory_export') { if (w.memoryFail) throw {code:w.memoryFail}; return w.exportOutcome; }
         if (cmd === 'memory_mutate') {
@@ -41,7 +42,7 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await expect(panel).toContainText('还没有留下记忆');
   await panel.getByLabel('记忆内容').fill('先说结论🌱');
   await panel.getByRole('button',{name:'保存记忆',exact:true}).click();
-  await expect(panel.getByRole('status')).toContainText('尚未用于模型对话');
+  await expect(panel.getByRole('status')).toContainText('尚未被模型选用');
   const card=panel.locator('article'); await expect(card).toContainText('用户在记忆面板填写'); await expect(card).toContainText('未指定日期');
   await card.getByRole('button',{name:'更正',exact:true}).click();
   await panel.getByLabel('记忆内容').fill('先说结论，再列证据');

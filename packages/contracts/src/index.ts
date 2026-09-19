@@ -1,5 +1,7 @@
-/** IPC v1. Mirror of companion-core; decode all native responses at the boundary. */
-export const PROTOCOL_VERSION = 1;
+import { decodeMemoryUsage, type MemoryUsage } from './memory-context';
+export * from './memory-context';
+/** IPC v2. Mirror of companion-core; decode all native responses at the boundary. */
+export const PROTOCOL_VERSION = 2;
 export * from './memory';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
@@ -73,8 +75,8 @@ export function decodeVoiceResult(value: unknown): VoiceResult {
       !Array.isArray(v.wav) || v.wav.length < 44 || v.wav.length > 8 * 1024 * 1024 || !v.wav.every(b => integer(b) && b <= 255)) throw Error('语音响应协议不兼容');
   return v as unknown as VoiceResult;
 }
-export interface ChatDelta {requestId:string;text:string}
-export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null};historySaved:boolean}
+export interface ChatDelta {requestId:string;text:string;memoryUsage:MemoryUsage|null}
+export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null};historySaved:boolean;memoryUsage:MemoryUsage}
 export function decodeChatConfig(value:unknown):ChatConfig {
   const v=record(value);
   if(typeof v.configured!=='boolean'||typeof v.model!=='string'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型配置协议不兼容');
@@ -83,14 +85,14 @@ export function decodeChatConfig(value:unknown):ChatConfig {
 export function decodeChatDelta(value:unknown):ChatDelta {
   const v=record(value);
   if(typeof v.requestId!=='string'||typeof v.text!=='string')throw Error('回复协议不兼容');
-  return {requestId:v.requestId,text:v.text};
+  return {requestId:v.requestId,text:v.text,memoryUsage:v.memoryUsage===null?null:decodeMemoryUsage(v.memoryUsage)};
 }
 export function decodeChatResult(value:unknown):ChatResult {
   const v=record(value);
   if(typeof v.requestId!=='string'||!integer(v.elapsedMs)||(v.historySaved!==undefined&&typeof v.historySaved!=='boolean'))throw Error('回复结果不兼容');
   let usage:ChatResult['usage']=null;
   if(v.usage!=null){const u=record(v.usage);if(u.total_tokens!==null&&!integer(u.total_tokens))throw Error('用量协议不兼容');usage={total_tokens:u.total_tokens as number|null};}
-  return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage,historySaved:v.historySaved===true};
+  return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage,historySaved:v.historySaved===true,memoryUsage:decodeMemoryUsage(v.memoryUsage)};
 }
 
 export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean;maxOutputTokens:number}

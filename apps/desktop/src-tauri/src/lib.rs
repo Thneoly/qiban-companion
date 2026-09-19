@@ -3,6 +3,7 @@ mod commands;
 mod credentials;
 mod instance;
 mod memory;
+mod memory_context;
 mod memory_export;
 mod model_settings;
 mod pet;
@@ -83,6 +84,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            memory_context::chat_context_preview,
+            memory_context::memory_policy_set,
             memory::memory_list,
             memory::memory_mutate,
             memory::chat_context_epoch,

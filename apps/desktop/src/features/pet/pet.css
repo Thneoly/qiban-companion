@@ -77,3 +77,5 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 @keyframes companion-think { 0%,100% { transform:translateY(0) rotate(2deg); } 50% { transform:translateY(-3px) rotate(2deg); } }
 @keyframes companion-glow { 0%,100% { opacity:.45; } 50% { opacity:1; } }
 @keyframes companion-wave { 0%,100% { transform:rotate(0); } 50% { transform:rotate(-22deg); } }
+
+.chat-memory-preview{font-size:10px;flex-shrink:0;margin:4px 0}.chat-memory-preview>div{max-height:110px;overflow:auto;overflow-wrap:anywhere}.chat-memory-preview p{white-space:pre-wrap}.chat-memory-receipt{font-size:9px;flex-shrink:0;color:#746681}

@@ -43,7 +43,7 @@ async function exportFile(destination,overwrite=false){
   await memory().getByLabel('记忆类型').selectOption('experience');await memory().getByLabel('记忆内容').fill('合成经历：完成一次徒步🌱');await memory().getByLabel('经历日期（可选）').fill('2024-02-29');
   await memory().getByRole('button',{name:'保存记忆',exact:true}).click();await expect(memory().locator('article')).toContainText('2024-02-29');
   await stop();await start();await expect(memory().locator('article')).toContainText('合成经历：完成一次徒步🌱');
-  let snapshot=await invoke(panel,'memory_list');assert.equal(snapshot.items.length,1);assert.equal(snapshot.modelUseEnabled,false);
+  let snapshot=await invoke(panel,'memory_list');assert.equal(snapshot.items.length,1);assert.equal((await invoke(pet,'chat_context_preview')).policy.enabled,false);
   await assert.rejects(invoke(pet,'memory_mutate',{request:{action:'delete_all',expectedEpoch:snapshot.contextEpoch,restartConversation:true}}));
   await assert.rejects(invoke(panel,'memory_mutate',{request:{action:'delete_all',expectedEpoch:snapshot.contextEpoch,restartConversation:false}}));
   assert.equal((await invoke(panel,'memory_list')).items.length,1);
@@ -54,10 +54,11 @@ async function exportFile(destination,overwrite=false){
   await exportFile(exported,true);assert.equal(JSON.parse(fs.readFileSync(exported,'utf8')).items[0].body,'合成经历：已更正');
   await memory().screenshot({path:path.join(evidence,'memory-panel.png')});
   await invoke(panel,'model_settings_save',{config:{baseUrl:`http://127.0.0.1:${server.address().port}`,model:'m2-fixture',useApiKey:false,maxOutputTokens:1024}});
-  await pet.evaluate(()=>{const native=window.__TAURI_INTERNALS__;window.testDeltas=[];window.testResult=null;
+  const requestContext=await invoke(pet,'chat_context_preview');
+  await pet.evaluate(requestContext=>{const native=window.__TAURI_INTERNALS__;window.testDeltas=[];window.testResult=null;
     const callback=native.transformCallback(raw=>{if(raw.message)window.testDeltas.push(raw.message);});
-    native.invoke('chat_generate',{request:{requestId:'m2-stream',prompt:'本机测试'},onDelta:`__CHANNEL__:${callback}`}).then(value=>{window.testResult={ok:true,value};},error=>{window.testResult={ok:false,error};});
-  });
+    native.invoke('chat_generate',{request:{requestId:'m2-stream',prompt:'本机测试',expectedScope:requestContext.scope,expectedContextEpoch:requestContext.contextEpoch},onDelta:`__CHANNEL__:${callback}`}).then(value=>{window.testResult={ok:true,value};},error=>{window.testResult={ok:false,error};});
+  },requestContext);
   for(let n=0;n<100&&!requests.length;n++)await delay(100);assert.equal(requests.length,1);
   assert(!JSON.stringify(requests[0]).includes('合成经历'),'M2 must not inject memory');
   await memory().getByRole('button',{name:'删除全部记忆'}).click();await memory().getByRole('button',{name:'确认并清空聊天'}).click();await expect(memory()).toContainText('还没有留下记忆');

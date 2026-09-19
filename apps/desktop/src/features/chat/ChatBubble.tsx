@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { nativeDesktop } from '../../lib/surface';
-import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeContextEpoch, type ChatTurn } from '@companion/contracts';
+import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeContextEpoch, type ChatTurn, decodeContextPreview, sameScope, type ContextPreview, type MemoryUsage } from '@companion/contracts';
 import { ConversationReader } from './ConversationReader';
 import type { ConversationPhase as Phase } from '../companion/presentation';
 
@@ -23,11 +23,15 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
   const [recorded, setRecorded] = useState(false);
   const current = useRef<string | null>(null);
   const alive = useRef(true);
+  const [preview,setPreview] = useState<ContextPreview|null>(null);
+  const previewRef = useRef<ContextPreview|null>(null);
+  const [memoryUsage,setMemoryUsage] = useState<MemoryUsage|null>(null);
   const contextEpoch = useRef<number | null>(null);
   const historySerial = useRef(0);
   function invalidateMemory(epoch: number) {
     if (contextEpoch.current !== null && epoch <= contextEpoch.current) return false;
     contextEpoch.current = epoch; historySerial.current++;
+    setPreview(null); previewRef.current=null; setMemoryUsage(null);
     const id = current.current; current.current = null;
     if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
     setConfigured(false); setBusy(false); setHistory([]); setReply(''); setDraft(''); setLastPrompt(''); setRecorded(false); setPhase('idle');
@@ -35,19 +39,21 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     return true;
   }
   async function checkEpoch() {
-    const epoch = decodeContextEpoch(await invoke('chat_context_epoch'));
+    const value = decodeContextPreview(await invoke('chat_context_preview'));
     if (!alive.current) return false;
-    if (contextEpoch.current === null) { contextEpoch.current = epoch; return true; }
-    return reconcileMemory(epoch);
+    if (contextEpoch.current === null) return false;
+    if (previewRef.current && sameScope(value.scope,previewRef.current.scope) && value.contextEpoch===contextEpoch.current) return true;
+    await reconcileMemory(value.contextEpoch);
+    return false;
   }
   async function loadHistory() {
     const serial = ++historySerial.current;
-    const epoch = decodeContextEpoch(await invoke('chat_context_epoch'));
+    const before = decodeContextPreview(await invoke('chat_context_preview'));
     const turns = decodeChatHistory(await invoke('chat_history'));
-    const after = decodeContextEpoch(await invoke('chat_context_epoch'));
-    if (epoch !== after) throw Error('会话已变化，请收起后重开');
+    const after = decodeContextPreview(await invoke('chat_context_preview'));
+    if (before.contextEpoch !== after.contextEpoch || !sameScope(before.scope,after.scope)) throw Error('会话已变化，请收起后重开');
     if (!alive.current || serial !== historySerial.current) return null;
-    contextEpoch.current = after;
+    contextEpoch.current = after.contextEpoch; previewRef.current=after; setPreview(after);
     return turns;
   }
   async function reconcileMemory(epoch: number) {
@@ -99,18 +105,20 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (busy || !configured || !draft.trim()) return;
+    if (busy || !configured || !draft.trim() || !previewRef.current) return;
+    const shownPreview=previewRef.current;
     const id = crypto.randomUUID();
     const prompt = draft.trim();
     current.current = id;
     setBusy(true); setReply(''); setPhase('waiting'); setStatus('正在生成…');
-    setLastPrompt(prompt); setRecorded(false);
+    setLastPrompt(prompt); setRecorded(false); setMemoryUsage(null);
     const channel = new Channel<unknown>();
     let received = '';
     channel.onmessage = value => {
       if (!alive.current || current.current !== id) return;
       try {
         const delta = decodeChatDelta(value);
+        if (delta.requestId === id && delta.memoryUsage) setMemoryUsage(delta.memoryUsage);
         if (delta.requestId === id && delta.text) {
           received += delta.text;
           setReply(received); setPhase('streaming');
@@ -123,9 +131,10 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     };
     try {
       if (!(await checkEpoch()) || current.current !== id) return;
-      const result = decodeChatResult(await invoke('chat_generate', { request: { requestId: id, prompt }, onDelta: channel }));
+      const result = decodeChatResult(await invoke('chat_generate', { request: { requestId: id, prompt, expectedScope: shownPreview.scope, expectedContextEpoch: shownPreview.contextEpoch }, onDelta: channel }));
       if (!(await checkEpoch())) return;
       if (alive.current && current.current === id && result.requestId === id) {
+        setMemoryUsage(result.memoryUsage);
         setPhase('complete');
         setStatus('回复结束 · ' + (result.usage?.total_tokens == null ? '用量未返回' : result.usage.total_tokens + ' tokens'));
         if (!result.historySaved) {
@@ -167,7 +176,7 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     try {
       await invoke('chat_clear');
       if (alive.current) {
-        setHistory([]); setReply(''); setDraft(''); setLastPrompt(''); setRecorded(false); setPhase('idle');
+        setMemoryUsage(null); setHistory([]); setReply(''); setDraft(''); setLastPrompt(''); setRecorded(false); setPhase('idle');
         setStatus('本机全部模型的对话记录已删除，重开不会恢复；服务商留存不受此操作影响');
       }
     } catch (error) { if (alive.current) setStatus(typeof error === 'string' ? error : '清空会话失败'); }
@@ -177,10 +186,16 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span></div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
       : <div className="chat-output" aria-label="栖栖的回复" aria-live="polite">{reply || '想聊点什么？'}</div>}
+    {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · {preview.items.length}条</summary><div>
+      <p>{preview.scope.baseUrl} · {preview.scope.model}</p>
+      {preview.items.length ? preview.items.map(item=><p key={item.id}>{item.body}<br/><small>{item.sourceLabel} · 经历日期：{item.eventDate ?? '未指定'} · 确认：{new Date(item.confirmedAt).toLocaleString()}</small></p>) : <p>当前模型未选用记忆。</p>}
+      <small>正文{preview.bodyChars}字，含来源等附加内容{preview.contextChars}字符；字符数不是tokens。</small>
+    </div></details>}
+    {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 {memoryUsage.memories.length} 条记忆</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}<small>{memoryUsage.contextChars} 附加字符；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
       <input id="chat-draft" maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder="和我说说…" disabled={busy}/>
-      {busy ? <button type="button" className="pet-save" onClick={event => { event.preventDefault(); void stop(); }} disabled={!current.current}>停止</button> : <button className="pet-save" disabled={!configured || !draft.trim()}>发送</button>}
+      {busy ? <button type="button" className="pet-save" onClick={event => { event.preventDefault(); void stop(); }} disabled={!current.current}>停止</button> : <button className="pet-save" disabled={!configured || !preview || !draft.trim()}>发送</button>}
     </form>
     <p className="chat-status" role="status">{status}</p>
     <div className="chat-session-controls">
