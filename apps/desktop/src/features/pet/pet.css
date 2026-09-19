@@ -48,6 +48,17 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 .chat-reader{position:relative;display:flex;flex:1;min-height:70px;margin:5px 0 9px;background:#f8f3f9;border:1px solid #ece2ef;border-radius:10px;overflow:hidden}.chat-reading-thread{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;white-space:pre-wrap;padding:9px 10px;font-size:12px;line-height:1.7;overscroll-behavior:contain;scrollbar-width:thin}.chat-reading-thread:focus-visible{outline:2px solid #ad90bb;outline-offset:-2px}.chat-turn p{margin:0 0 8px}.chat-turn+.chat-turn{border-top:1px solid #e5d9eb;padding-top:10px}.chat-turn .chat-speaker{font-size:10px;font-weight:600;color:#745588;margin-bottom:2px}.chat-speaker span{font-weight:400;font-size:9px;color:#8d7e95;margin-left:5px}.chat-turn-pending{border-left:2px solid #c2a6d2;padding-left:7px}.chat-reader-empty{color:#8d7e95}.chat-jump{position:absolute;right:7px;bottom:6px;border:1px solid #d7c4e4;border-radius:12px;background:#fff9ff;color:#745588;font-size:10px;padding:4px 8px;box-shadow:0 2px 5px #3c234514}
 
 /* T08 text interaction: one state drives both artwork and readable feedback. */
+.first-use-guide { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; font-size:12px; line-height:1.6; }
+.guide-content { min-height:0; overflow:auto; }
+.first-use-guide > small { flex-shrink:0; }
+.first-use-guide h2 { font-size:17px; margin:10px 0 6px; }
+.first-use-guide ol { padding-left:20px; }
+.first-use-guide li { margin:9px 0; }
+.first-use-guide small,.guide-configuration { font-size:10px; color:#756282; }
+.first-use-guide [role=alert] { color:#89573b; }
+.guide-buttons { display:flex; flex-shrink:0; flex-wrap:wrap; gap:6px; margin:10px 0; }
+.guide-buttons button { border:1px solid #ded2e8; border-radius:8px; padding:7px 9px; background:#f0e9f7; color:#614d73; font-size:11px; }
+.pet-mode { flex-wrap:wrap; }
 .pet-presence { display:flex; align-items:center; min-width:0; }
 .pet-dialog header .pet-portrait { display:block; width:34px; height:36px; margin:0 7px 0 0; flex-shrink:0; }
 .pet-portrait svg { width:100%; height:100%; display:block; }

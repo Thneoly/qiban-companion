@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guide-status"
+description = "Enables the guide_status command without any pre-configured scope."
+commands.allow = ["guide_status"]
+
+[[permission]]
+identifier = "deny-guide-status"
+description = "Denies the guide_status command without any pre-configured scope."
+commands.deny = ["guide_status"]

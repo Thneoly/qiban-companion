@@ -16,6 +16,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
       transformCallback:(cb:(value:unknown)=>void)=>{callbacks.set(++next,cb);return next;},
       unregisterCallback:(id:number)=>callbacks.delete(id),
       invoke:async(cmd:string,args:any)=>{
+        if(cmd==='guide_status')return true;
         if(cmd==='get_runtime_info')return {protocolVersion:1,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
         if(cmd==='chat_config')return {configured:true,model:'glm-test-fixture',maxOutputTokens:1024};
         if(cmd==='chat_history')return history;

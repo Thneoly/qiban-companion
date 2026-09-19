@@ -1,5 +1,7 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "guide_status",
+        "guide_complete",
         "voice_probe",
         "voice_cancel",
         "voice_key_set",

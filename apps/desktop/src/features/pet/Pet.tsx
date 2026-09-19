@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerE
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { ChatBubble } from '../chat/ChatBubble';
+import { FirstUseGuide } from '../onboarding/FirstUseGuide';
 import { Live2DRenderer } from '../companion/Live2DRenderer';
 import { AvatarArtwork } from '../companion/AvatarArtwork';
 import { companionLabels, companionState, type ConversationPhase } from '../companion/presentation';
@@ -9,6 +10,9 @@ import { client, errorMessage } from '../../lib/client';
 import { nativeDesktop, petAction } from '../../lib/surface';
 
 export function Pet() {
+  const [guide, setGuide] = useState(false);
+  const [needsGuide, setNeedsGuide] = useState(false);
+  const [guideError, setGuideError] = useState('');
   const [chat, setChat] = useState(false);
   const [reading, setReading] = useState(false);
   const [phase, setPhase] = useState<ConversationPhase>('idle');
@@ -35,6 +39,13 @@ export function Pet() {
       try {
         await client.getRuntimeInfo();
         if (nativeDesktop) {
+          try {
+            const completed: unknown = await invoke('guide_status');
+            if (typeof completed !== 'boolean') throw Error('Invalid guide status');
+            if (!disposed) setNeedsGuide(!completed);
+          } catch {
+            if (!disposed) { setNeedsGuide(true); setGuideError('未能读取引导状态，可能会在下次启动时再次出现。'); }
+          }
           for (const [name, callback] of [
             ['pet-restored', restore],
             ['pet-quiet', () => { setQuiet(true); setOpen(false); }],
@@ -74,7 +85,7 @@ export function Pet() {
     report();
     window.addEventListener('resize', report);
     return () => { disposed = true; observer.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', report); };
-  }, [open, quiet, hidden, error]);
+  }, [open, quiet, hidden, error, guide]);
 
   async function act(action: 'hide' | 'quiet' | 'open_panel' | 'open_settings') {
     setError('');
@@ -111,9 +122,10 @@ export function Pet() {
   return <>
     {!nativeDesktop && <aside className="preview-desktop-note"><strong>栖伴 · 桌面角色预览</strong><p>这里模拟角色形态；真实透明悬浮、托盘和鼠标穿透请运行桌面版。</p><button onClick={restore}>恢复角色预览</button></aside>}
     <div ref={shell} data-companion-state={presence} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
-      {open && <section data-pet-hit className={reading ? "pet-dialog pet-dialog-reading" : "pet-dialog"} aria-label="栖栖的交互气泡">
+      {open && <section data-pet-hit className={reading || guide ? "pet-dialog pet-dialog-reading" : "pet-dialog"} aria-label="栖栖的交互气泡">
         <header><div className="pet-presence">{reading && <span className="pet-portrait" aria-hidden="true"><AvatarArtwork state={presence}/></span>}<strong>栖栖 <span>{companionLabels[presence]}</span></strong></div><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
-        <div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button aria-pressed={live2d} onClick={()=>setLive2d(v=>!v)}>Live2D 实验</button><button onClick={()=>void act('open_settings')}>模型设置</button></div>
+        {guide ? <FirstUseGuide initialError={guideError} onSettings={() => void act('open_settings')} onLater={() => { setNeedsGuide(false); setGuide(false); }} onComplete={async () => { if (nativeDesktop) await invoke('guide_complete'); setGuideError(''); setNeedsGuide(false); setGuide(false); }}/>
+        : <><div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button aria-pressed={live2d} onClick={()=>setLive2d(v=>!v)}>Live2D 实验</button><button onClick={()=>void act('open_settings')}>模型设置</button><button onClick={() => setGuide(true)}>使用指南</button></div>
         {chat ? <ChatBubble onPhase={setPhase} onReading={setReading}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
@@ -128,9 +140,9 @@ export function Pet() {
           <button onClick={() => void act('open_panel')}>任务面板 ↗</button>
           <button onClick={() => void act('quiet')}>安静陪伴</button>
           <button onClick={() => void act('hide')}>隐藏</button>
-        </div>
+        </div></>}
       </section>}
-      <button data-pet-hit className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet} onClick={() => { setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
+      <button data-pet-hit className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
         {live2d && !hidden ? <Live2DRenderer active={!quiet} onError={live2dError}/> : <AvatarArtwork state={presence}/>}
       </button>
       <button data-pet-hit className="pet-drag" disabled={quiet} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} aria-label="拖动栖栖">⠿ <span>{quiet ? '安静陪伴中 · 托盘可唤回' : presence === 'idle' || presence === 'attentive' ? '栖栖 · 拖动这里' : companionLabels[presence]}</span></button>
