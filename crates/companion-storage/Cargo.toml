@@ -5,10 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+uuid.workspace = true
 companion-core.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-uuid.workspace = true

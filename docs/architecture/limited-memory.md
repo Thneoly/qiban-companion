@@ -1,10 +1,10 @@
 # 有限记忆技术设计：T13/T14本地增量
 
-设计基线v0.1，2026-09-17；尚未实现。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
+设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，M2～M4仍待实现。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
 
 ## 1. 决策与现有代码差距
 
-当前`HistoryStore`只保存有界问答，`ChatState`维护请求取消与进程内会话版本，`ChatRequest`只有requestId和prompt。当前没有记忆条目、使用范围、删除标记、导出或跨进程写入排他。这些不能靠前端卡片补齐。
+M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁移，并增加Windows单实例保护和Rust/TypeScript数据契约。`ChatState`仍维护旧有进程内会话版本，`ChatRequest`仍只有requestId和prompt；记忆管理IPC、策略写入、导出及注入协调均未开放。下文继续作为完整设计，实际实现边界以M1状态记录为准。
 
 首版不用向量库、图数据库、摘要模型或背景抽取。30条容量下按用户明确选择注入，选择超过5条或800字直接拒绝设置，不暗中截断，也不假装按语义相关性排序。记忆附加处理不产生独立推理请求；正文和元数据仍增加模型输入，实际tokens与供应商费用须测试，字符数不是tokens或人民币。
 
@@ -22,7 +22,7 @@
 
 | 对象 | 必需字段与约束 |
 |---|---|
-| memory_meta | 单行schema逻辑元数据、context_epoch（单调整数）；溢出拒绝写入，不回绕 |
+| memory_meta | 单行schema逻辑元数据、context_epoch（单调整数）；与revision共同限制在JavaScript安全整数范围0～9007199254740991，溢出拒绝写入，不回绕 |
 | memories | id（Rust生成UUID）、kind（preference/experience/task_fact）、body、source_kind、source_label、event_date可空、created_at、confirmed_at、updated_at、revision、deleted_at可空 |
 | memory_policy | 规范化base_url＋model联合唯一，enabled默认false、revision；不保存API Key |
 | memory_selection | scope引用＋memory_id联合唯一，position 0～4；只可选择未删除条目；明确排序 |
@@ -37,7 +37,7 @@
 
 ## 3. IPC草案
 
-均为设计契约，不表示命令已注册。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
+以下命令均为设计契约，M1未注册这些命令；当前仅落地条目DTO及运行时解码。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
 
 | 命令 | 输入重点 | 回执/失败边界 |
 |---|---|---|
@@ -67,7 +67,7 @@ main拥有管理与导出命令；pet拥有只读预览和打开记忆面板动�
 
 新建、启用、增加选择也递增epoch并使旧快照/旧在途结果失效，但不清聊天；移除选择、关闭、编辑、删除执行完整清理。既有chat_clear也走协调路径递增epoch、清聊天而保留记忆，UI更新说明。不是只在删除按钮处加一次状态重置。
 
-必须补应用单实例约束后才能声明这些竞争保证：第二进程退出并引导用户使用已运行实例，不让两个独立内存缓存同时写同一资料库。验收标识可与生产标识并存，各自互斥；未实现该前置时不得开放记忆写入。当前项目多实例一致性未完成，已列入首个开发子项。
+必须补应用单实例约束后才能声明这些竞争保证：第二进程退出并引导用户使用已运行实例，不让两个独立内存缓存同时写同一资料库。验收标识可与生产标识并存，各自互斥；未实现该前置时不得开放记忆写入。M1已实现Windows插件唤回与资料目录文件锁，并验证重复启动、异常退出后重开及独立资料目录互斥；跨操作系统和Windows多用户/RDP矩阵仍未实测。
 
 ## 5. 注入、可观察性与导出
 

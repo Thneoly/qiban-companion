@@ -1,5 +1,6 @@
 //! SQLite is owned by Rust. Frontend callers cannot choose paths or execute SQL.
 pub mod history;
+pub mod memory;
 use companion_core::{DomainError, Task};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex, time::Duration};
@@ -12,6 +13,8 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Domain(#[from] DomainError),
+    #[error(transparent)]
+    Memory(#[from] companion_core::memory::MemoryError),
     #[error("本地存储暂时不可用")]
     Unavailable,
     #[error("未找到任务")]

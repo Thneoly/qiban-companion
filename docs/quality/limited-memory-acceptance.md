@@ -1,6 +1,6 @@
 # Q6：有限记忆本地验收设计
 
-2026-09-17，测试设计，**尚未编写自动化夹具或执行记忆测试**。依据[产品规则](../product/limited-memory.md)、[技术契约](../architecture/limited-memory.md)及[主测量协议](verification-protocol.md)。
+2026-09-17，完整Q6测试设计。2026-09-18已执行[M1领域、迁移与单实例测试](../status/memory-foundation.md)，**以下50例事实/更正和20例完整删除竞争集仍未完成，不以M1替代Q6准出**。依据[产品规则](../product/limited-memory.md)、[技术契约](../architecture/limited-memory.md)及[主测量协议](verification-protocol.md)。
 
 ## 准入与测量口径
 

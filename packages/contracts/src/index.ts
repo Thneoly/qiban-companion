@@ -1,5 +1,6 @@
 /** IPC v1. Mirror of companion-core; decode all native responses at the boundary. */
 export const PROTOCOL_VERSION = 1;
+export * from './memory';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
 export interface Task {
