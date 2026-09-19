@@ -33,7 +33,7 @@ Tauri命令提供运行信息、任务列表/创建/取消，以及角色窗口�
 
 当前协议为可配置基地址与模型编码的Chat Completions SSE，智谱仅为默认预设。前端Channel逐请求接收增量并按requestId过滤迟到消息；宿主仅允许一个生成，锁内登记取消信号，退出时释放。停止先屏蔽旧回调，再通知Rust丢弃网络future；请求使用配置快照且不自动重试。收起气泡会停止当前生成，已完成问答保留在Rust进程内；不声称远端已撤销计费。输入、输出、片段、总响应、连接和整体耗时均有限制。
 
-临时会话由宿主Conversation维护，最多6轮/合计12000个Unicode字符，只接纳完整成功问答；前端不能注入system角色或任意历史。chat_history/chat_clear仅授权pet。模型设置保存后同步选择会话身份，改变地址/模型清空；生成快照携带会话版本，完成时版本不匹配拒绝写回，防止切换出去再切回恢复旧内容。清空在生成中拒绝，要求先停止；进程退出后记录消失。此处没有SQLite会话表或长期记忆，见[验收记录](../status/session-chat.md)。
+Conversation领域逻辑位于companion-core，HistoryStore位于companion-storage，宿主组装独立chat-history.db。所有模型合计最多6轮/12000个Unicode字符，仅事务保存完整问答；按规范化地址和模型载入上下文，切换不跨范围发送，重启可恢复。chat_history/chat_clear仅授权pet；清空删除所有范围的记录，生成中须先停止。会话版本使切换和删除后的迟到结果无法写回；historySaved区分生成完成与保存成功。前端不能注入system角色或任意历史；没有长期记忆。版本迁移、失败及删除边界见[本机记录验收](../status/chat-history-persistence.md)。
 
 Live2DRenderer与待办/模型协议独立，按需加载本地Core、固定浏览器运行时与模型。默认SVG，异常回退；安静和文档隐藏停止绘制，角色隐藏卸载释放画布。30fps上限不代表资源门禁通过。CSP只允许本地脚本与所需WebAssembly编译；未开放远程页面、任意浏览器HTTP或工具执行。完整边界与资源授权见[配置说明](../development/model-settings-live2d.md)，实际检查见[本轮状态](../status/model-settings-live2d.md)。
 

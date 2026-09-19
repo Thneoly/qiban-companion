@@ -1,4 +1,5 @@
 //! Pure domain contracts. No Tauri, network, filesystem or model dependency.
+pub mod conversation;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 

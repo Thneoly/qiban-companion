@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }
-        if (cmd === 'chat_clear') { history.length = 0; return; }
+        if (cmd === 'chat_clear') { if (w.failDelete) throw '删除本机对话失败，原记录仍保留'; history.length = 0; return; }
         if (cmd === 'chat_cancel') { w.streamFixture.fail(); return; }
         if (cmd === 'chat_generate') {
           w.requestCount++;
@@ -25,7 +25,7 @@ test.beforeEach(async ({ page }) => {
             w.streamFixture = {
               part: (text: string) => { reply += text; args.onDelta.onmessage({ requestId: args.request.requestId, text }); },
               fail: () => reject('测试连接中断'),
-              finish: () => { history.push({ user: args.request.prompt, assistant: reply }); resolve({ requestId: args.request.requestId, elapsedMs: 400, usage: { total_tokens: 10 } }); }
+              finish: () => { if (!w.failSave) history.push({ user: args.request.prompt, assistant: reply }); resolve({ requestId: args.request.requestId, elapsedMs: 400, historySaved: !w.failSave, usage: { total_tokens: 10 } }); }
             };
           });
         }
@@ -37,6 +37,35 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: '和栖栖互动' }).click();
   await page.getByRole('button', { name: '聊一聊', exact: true }).click();
   await page.getByRole('button', { name: '展开阅读', exact: true }).click();
+});
+
+test('restored history stays visible after failed deletion and clears only on success', async ({ page }) => {
+  const reader = page.getByRole('region', { name: '对话阅读区' });
+  await expect(page.getByRole('status')).toContainText('已恢复本机记录');
+  await page.evaluate(() => { (window as any).failDelete = true; });
+  await page.getByRole('button', { name: '清空对话', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('删除本机对话失败');
+  await expect(reader).toContainText('之前的问题');
+  await page.evaluate(() => { (window as any).failDelete = false; });
+  await page.getByRole('button', { name: '清空对话', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('全部模型的对话记录已删除');
+  await expect(reader.locator('.chat-turn')).toHaveCount(0);
+  await page.getByRole('button', { name: '收起气泡' }).click();
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await expect(page.getByText('最近 0 轮', { exact: true })).toBeVisible();
+});
+
+test('a completed but unsaved reply is not presented as restored history', async ({ page }) => {
+  await page.getByLabel('和栖栖说句话').fill('保存失败的问题');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.evaluate(() => { const w = window as any; w.failSave = true; w.streamFixture.part('完整但未保存的回答'); w.streamFixture.finish(); });
+  await expect(page.locator('.chat-phase')).toHaveText('已完成');
+  await expect(page.getByRole('status')).toContainText('未保存记录');
+  await expect(page.getByRole('region', { name: '对话阅读区' })).toContainText('完整但未保存的回答');
+  await expect(page.getByText('最近 1 轮', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '收起气泡' }).click();
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await expect(page.getByLabel('栖栖的回复')).not.toContainText('完整但未保存的回答');
 });
 
 test('reading fits pet window and new text respects manual scrolling', async ({ page }) => {

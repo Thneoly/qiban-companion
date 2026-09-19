@@ -1,4 +1,5 @@
 //! SQLite is owned by Rust. Frontend callers cannot choose paths or execute SQL.
+pub mod history;
 use companion_core::{DomainError, Task};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex, time::Duration};

@@ -34,7 +34,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
           }
           args.onDelta.onmessage({requestId:id,text:'新的回答'});
           history.push({user:args.request.prompt,assistant:'新的回答'});
-          return {requestId:id,elapsedMs:8,usage:{total_tokens:12}};
+          return {requestId:id,elapsedMs:8,historySaved:true,usage:{total_tokens:12}};
         }
         return 1;
       }
@@ -57,7 +57,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.getByRole('button',{name:'和栖栖互动'}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('新的回答');
   await page.getByText('最近 1 轮',{exact:true}).click();
-  await expect(page.getByLabel('本次对话记录')).toContainText('测试取消');
+  await expect(page.getByLabel('本机对话记录')).toContainText('测试取消');
   await page.getByRole('button',{name:'清空对话',exact:true}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('想聊点什么？');
   await expect(page.getByText('最近 0 轮',{exact:true})).toBeVisible();

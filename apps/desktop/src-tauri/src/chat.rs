@@ -1,5 +1,6 @@
 //! OpenAI-compatible Chat Completions bounded-session transport. Credentials stay in this process; no tool execution.
-use crate::chat_session::{ChatTurn, Conversation};
+use companion_core::conversation::{ChatTurn, Conversation};
+use companion_storage::history::HistoryStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -9,45 +10,86 @@ use std::{
 use tauri::{ipc::Channel, State};
 use tokio::sync::watch;
 
-#[derive(Default)]
 struct ChatInner {
     active: Option<(String, watch::Sender<bool>)>,
     conversation: Conversation,
+    store: Option<HistoryStore>,
 }
-#[derive(Default)]
 pub struct ChatState(Mutex<ChatInner>);
+impl ChatState {
+    pub fn open(path: &std::path::Path) -> Self {
+        Self(Mutex::new(ChatInner {
+            active: None,
+            conversation: Conversation::default(),
+            store: HistoryStore::open(path).ok(),
+        }))
+    }
+}
+impl ChatInner {
+    fn select(&mut self, base: &str, model: &str) -> Result<(), String> {
+        if !self.conversation.matches(base, model) {
+            self.conversation.clear(); // Invalidate in-flight work even when the new scope cannot load.
+            let turns = self
+                .store
+                .as_ref()
+                .ok_or("本机对话存储不可用，请检查数据目录或更新客户端后重启；原记录未改动")?
+                .load(base, model)
+                .map_err(|_| "读取本机对话失败，原记录未改动")?;
+            self.conversation.restore(base, model, turns);
+        }
+        Ok(())
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        if self.active.is_some() {
+            return Err("请先停止当前回复，再清空对话".into());
+        }
+        self.store
+            .as_mut()
+            .ok_or("本机对话存储不可用，未能删除")?
+            .clear()
+            .map_err(|_| "删除本机对话失败，原记录仍保留")?;
+        self.conversation.clear();
+        Ok(())
+    }
+    fn complete(&mut self, base: &str, model: &str, version: u64, turn: ChatTurn) -> bool {
+        if self.conversation.version() != version || !self.conversation.matches(base, model) {
+            return false;
+        }
+        let Some(store) = self.store.as_mut() else {
+            return false;
+        };
+        match store.append(base, model, &turn) {
+            Ok(turns) => {
+                self.conversation.restore(base, model, turns);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
 
 pub fn select_config(state: &ChatState, base: &str, model: &str) -> Result<(), String> {
     state
         .0
         .lock()
         .map_err(|_| "对话状态不可用")?
-        .conversation
-        .select(base, model);
-    Ok(())
+        .select(base, model)
 }
 #[tauri::command]
 pub fn chat_history(
     state: State<'_, ChatState>,
     settings: State<'_, crate::model_settings::ModelState>,
 ) -> Result<Vec<ChatTurn>, String> {
-    let config = settings
-        .lock()
-        .map_err(|_| "模型设置不可用")?
-        .config
-        .clone();
+    let settings = settings.lock().map_err(|_| "模型设置不可用")?;
+    let config = &settings.config;
     let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-    inner.conversation.select(&config.base_url, &config.model);
+    inner.select(&config.base_url, &config.model)?;
     Ok(inner.conversation.history())
 }
 #[tauri::command]
 pub fn chat_clear(state: State<'_, ChatState>) -> Result<(), String> {
     let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-    if inner.active.is_some() {
-        return Err("请先停止当前回复，再清空对话".into());
-    }
-    inner.conversation.clear();
-    Ok(())
+    inner.clear()
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +126,7 @@ pub struct ChatResult {
     request_id: String,
     elapsed_ms: u128,
     usage: Option<Value>,
+    history_saved: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,11 +185,15 @@ pub async fn chat_generate(
     let endpoint = config.endpoint();
     let (signal, mut cancelled) = watch::channel(false);
     let (history, version) = {
+        let current = settings.lock().map_err(|_| "模型设置不可用")?;
+        if current.config.base_url != config.base_url || current.config.model != config.model {
+            return Err("模型设置已改变，请重新打开对话".into());
+        }
         let mut active = state.0.lock().map_err(|_| "对话状态不可用")?;
         if active.active.is_some() {
             return Err("上一条回复仍在结束，请稍后再试".into());
         }
-        active.conversation.select(&config.base_url, &config.model);
+        active.select(&config.base_url, &config.model)?;
         active.active = Some((request.request_id.clone(), signal));
         (active.conversation.history(), active.conversation.version())
     };
@@ -173,8 +220,8 @@ pub async fn chat_generate(
         _ = cancelled.changed() => Err("已停止生成；已产生的服务用量仍可能计费".into()),
         result = tokio::time::timeout(Duration::from_secs(90),run) => {
             let (usage, reply)=result.map_err(|_| "回复超时，请稍后重试")??;
-            state.0.lock().map_err(|_| "对话状态不可用")?.conversation.complete(&config.base_url, &config.model, version, request.prompt.clone(), reply);
-            Ok(ChatResult { request_id:request.request_id, elapsed_ms:started.elapsed().as_millis(), usage })
+            let history_saved = state.0.lock().map_err(|_| "对话状态不可用")?.complete(&config.base_url, &config.model, version, ChatTurn { user:request.prompt.clone(), assistant:reply });
+            Ok(ChatResult { request_id:request.request_id, elapsed_ms:started.elapsed().as_millis(), usage, history_saved })
         }
     }
 }
@@ -241,7 +288,7 @@ pub(crate) async fn stream(
         request.bearer_auth(key)
     };
     let mut messages = vec![
-        json!({"role":"system","content":"你是栖栖，一个温和、诚实的桌面AI伙伴。用简洁中文交流。这是有限上下文的临时会话，你不能访问电脑、文件或执行任务，也没有长期记忆。不要声称已经做过未执行的事情。"}),
+        json!({"role":"system","content":"你是栖栖，一个温和、诚实的桌面AI伙伴。用简洁中文交流。你仅能看到本次请求附带的有限对话前文，不能访问电脑、文件或执行任务，也没有长期记忆。不要声称已经做过未执行的事情。"}),
     ];
     for turn in history {
         messages.push(json!({"role":"user","content":turn.user}));
@@ -333,6 +380,47 @@ pub(crate) async fn stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persisted_context_restores_but_deleted_or_switched_generations_cannot_return() {
+        let path = std::env::temp_dir().join(format!("chat-state-{}.db", uuid::Uuid::new_v4()));
+        let turn = || ChatTurn {
+            user: "测试问题".into(),
+            assistant: "测试回答".into(),
+        };
+        {
+            let state = ChatState::open(&path);
+            let mut inner = state.0.lock().unwrap();
+            inner.select("a", "model").unwrap();
+            let version = inner.conversation.version();
+            assert!(inner.complete("a", "model", version, turn()));
+        }
+        {
+            let state = ChatState::open(&path);
+            let mut inner = state.0.lock().unwrap();
+            inner.select("a", "model").unwrap();
+            assert_eq!(inner.conversation.history(), vec![turn()]);
+            let version = inner.conversation.version();
+            inner.select("b", "model").unwrap();
+            assert!(inner.conversation.history().is_empty());
+            inner.select("a", "model").unwrap();
+            assert_eq!(inner.conversation.history(), vec![turn()]);
+            assert!(!inner.complete("a", "model", version, turn()));
+            let version = inner.conversation.version();
+            let (signal, _) = watch::channel(false);
+            inner.active = Some(("pending".into(), signal));
+            assert!(inner.clear().is_err());
+            inner.active = None;
+            inner.clear().unwrap();
+            assert!(!inner.complete("a", "model", version, turn()));
+        }
+        {
+            let state = ChatState::open(&path);
+            let mut inner = state.0.lock().unwrap();
+            inner.select("a", "model").unwrap();
+            assert!(inner.conversation.history().is_empty());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn sse_handles_split_utf8_crlf_and_multiple_events() {
         let input=": ping\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\r\n\r\ndata: [DONE]\n\n".as_bytes();
