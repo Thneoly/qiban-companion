@@ -45,6 +45,10 @@ ModelConfig新增带默认值的max_output_tokens，旧JSON缺字段仍按1024�
 
 T07指南嵌入pet气泡，首次点击才展示，不自动打开面板或调用模型。desktop-settings.db从1事务迁移到2，新增onboarding完成标志，保留pet_position；guide_status/guide_complete只授权pet。完成成功才隐藏指南，失败可重试或本次跳过；手动入口始终保留。独立验收配置仅覆盖应用标识，不新增路径注入IPC，详见[首次指南](../status/first-use-guide.md)。
 
+## 有限记忆设计（未实现）
+
+T13/T14拟以用户明确保存的本机卡片起步，使用范围按API地址和模型确认。技术设计选择chat-history.db同库迁移，使更正/删除与聊天清理原子完成，另补单实例、版本冲突和请求失效协调；不引入向量库或自动摘要。详见[有限记忆技术设计](limited-memory.md)，这里不表示当前代码已支持。
+
 ## 协议和变化
 
 T04语音实验新增main独占的voice_probe/voice_cancel/voice_key_set，宿主voice模块持有独立单请求取消状态。前端显式录音或选择文件，点击运行后上传PCM16 WAV；Rust在固定配置快照上调用独立语音地址的ASR/TTS及既有文字地址的文本流解析，返回有界WAV与阶段用量。语音不读写聊天历史，也不执行工具；停止/失焦释放本地媒体并过滤旧结果。文字与语音凭据按各自地址隔离读取，语音密钥只经原生窗口输入；不增加前端外网权限；CSP允许本地blob媒体播放。参数、限制及真实429结果见[语音验证](../status/voice-chain-spike.md)。本机语音并发与文本并发独立，尚不是T45全局用量控制。
