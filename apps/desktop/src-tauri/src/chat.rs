@@ -7,15 +7,15 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use tokio::sync::watch;
 
-struct ChatInner {
-    active: Option<(String, watch::Sender<bool>)>,
-    conversation: Conversation,
-    store: Option<HistoryStore>,
+pub(crate) struct ChatInner {
+    pub(crate) active: Option<(String, watch::Sender<bool>)>,
+    pub(crate) conversation: Conversation,
+    pub(crate) store: Option<HistoryStore>,
 }
-pub struct ChatState(Mutex<ChatInner>);
+pub struct ChatState(pub(crate) Mutex<ChatInner>);
 impl ChatState {
     pub fn open(path: &std::path::Path) -> Self {
         Self(Mutex::new(ChatInner {
@@ -26,6 +26,29 @@ impl ChatState {
     }
 }
 impl ChatInner {
+    pub(crate) fn invalidate_memory(&mut self, clear: bool) {
+        if let Some((_, signal)) = self.active.take() {
+            let _ = signal.send(true);
+        }
+        if clear {
+            self.conversation.clear();
+        }
+    }
+    fn ensure_current(&self, id: &str, epoch: i64, version: u64) -> Result<(), String> {
+        if self.active.as_ref().is_none_or(|(active, _)| active != id)
+            || self.conversation.version() != version
+            || self
+                .store
+                .as_ref()
+                .ok_or("本机存储不可用")?
+                .context_epoch()
+                .map_err(|_| "本机存储不可用")?
+                != epoch
+        {
+            return Err("记忆或会话已变化，旧回复已作废，请重新发送".into());
+        }
+        Ok(())
+    }
     fn select(&mut self, base: &str, model: &str) -> Result<(), String> {
         if !self.conversation.matches(base, model) {
             self.conversation.clear(); // Invalidate in-flight work even when the new scope cannot load.
@@ -87,9 +110,22 @@ pub fn chat_history(
     Ok(inner.conversation.history())
 }
 #[tauri::command]
-pub fn chat_clear(state: State<'_, ChatState>) -> Result<(), String> {
+pub fn chat_clear(app: AppHandle, state: State<'_, ChatState>) -> Result<(), String> {
     let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-    inner.clear()
+    inner.clear()?;
+    if let Some(store) = &inner.store {
+        let epoch = store
+            .context_epoch()
+            .map_err(|_| "聊天已清空，但无法刷新版本，请重开")?;
+        let _ = app.emit(
+            "memory-changed",
+            crate::memory::MemoryChanged {
+                context_epoch: epoch,
+                chat_cleared: true,
+            },
+        );
+    }
+    Ok(())
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,11 +171,13 @@ pub struct ChatRequest {
     prompt: String,
 }
 
-struct ActiveGuard<'a>(&'a ChatState);
+struct ActiveGuard<'a>(&'a ChatState, String);
 impl Drop for ActiveGuard<'_> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.0 .0.lock() {
-            state.active = None;
+            if state.active.as_ref().is_some_and(|(id, _)| id == &self.1) {
+                state.active = None;
+            }
         }
     }
 }
@@ -184,7 +222,7 @@ pub async fn chat_generate(
     let selected = config.model.clone();
     let endpoint = config.endpoint();
     let (signal, mut cancelled) = watch::channel(false);
-    let (history, version) = {
+    let (history, version, epoch) = {
         let current = settings.lock().map_err(|_| "模型设置不可用")?;
         if current.config.base_url != config.base_url || current.config.model != config.model {
             return Err("模型设置已改变，请重新打开对话".into());
@@ -194,10 +232,20 @@ pub async fn chat_generate(
             return Err("上一条回复仍在结束，请稍后再试".into());
         }
         active.select(&config.base_url, &config.model)?;
+        let epoch = active
+            .store
+            .as_ref()
+            .ok_or("本机存储不可用")?
+            .context_epoch()
+            .map_err(|_| "本机存储不可用")?;
         active.active = Some((request.request_id.clone(), signal));
-        (active.conversation.history(), active.conversation.version())
+        (
+            active.conversation.history(),
+            active.conversation.version(),
+            epoch,
+        )
     };
-    let _guard = ActiveGuard(&state);
+    let _guard = ActiveGuard(&state, request.request_id.clone());
     let started = Instant::now();
     let run = stream(
         &endpoint,
@@ -207,6 +255,8 @@ pub async fn chat_generate(
         &history,
         &request.prompt,
         |text| {
+            let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+            inner.ensure_current(&request.request_id, epoch, version)?;
             on_delta
                 .send(ChatDelta {
                     request_id: request.request_id.clone(),
@@ -220,7 +270,9 @@ pub async fn chat_generate(
         _ = cancelled.changed() => Err("已停止生成；已产生的服务用量仍可能计费".into()),
         result = tokio::time::timeout(Duration::from_secs(90),run) => {
             let (usage, reply)=result.map_err(|_| "回复超时，请稍后重试")??;
-            let history_saved = state.0.lock().map_err(|_| "对话状态不可用")?.complete(&config.base_url, &config.model, version, ChatTurn { user:request.prompt.clone(), assistant:reply });
+            let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+            inner.ensure_current(&request.request_id, epoch, version)?;
+            let history_saved = inner.complete(&config.base_url, &config.model, version, ChatTurn { user:request.prompt.clone(), assistant:reply });
             Ok(ChatResult { request_id:request.request_id, elapsed_ms:started.elapsed().as_millis(), usage, history_saved })
         }
     }
@@ -380,6 +432,29 @@ pub(crate) async fn stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn context_invalidation_rejects_old_deltas_and_old_guard_cannot_clear_new_request() {
+        let path = std::env::temp_dir().join(format!("chat-epoch-{}.db", uuid::Uuid::new_v4()));
+        let state = ChatState::open(&path);
+        let old_guard = ActiveGuard(&state, "old".into());
+        {
+            let mut inner = state.0.lock().unwrap();
+            inner.select("a", "m").unwrap();
+            let (signal, _) = watch::channel(false);
+            inner.active = Some(("old".into(), signal));
+            let version = inner.conversation.version();
+            assert!(inner.ensure_current("old", 0, version).is_ok());
+            inner.store.as_mut().unwrap().clear().unwrap();
+            inner.invalidate_memory(true);
+            assert!(inner.ensure_current("old", 0, version).is_err());
+            let (signal, _) = watch::channel(false);
+            inner.active = Some(("new".into(), signal));
+        }
+        drop(old_guard);
+        assert_eq!(state.0.lock().unwrap().active.as_ref().unwrap().0, "new");
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn persisted_context_restores_but_deleted_or_switched_generations_cannot_return() {
         let path = std::env::temp_dir().join(format!("chat-state-{}.db", uuid::Uuid::new_v4()));

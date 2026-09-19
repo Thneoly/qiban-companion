@@ -3,6 +3,7 @@ import { nativeDesktop, petAction } from './lib/surface';
 import { useCallback, useEffect, useState } from 'react';
 import type { RuntimeInfo, Task } from '@companion/contracts';
 import { client, errorMessage } from './lib/client';
+import { MemoryPanel } from './features/memory/MemoryPanel';
 import { ModelSettings } from './features/settings/ModelSettings';
 import { VoiceLab } from './features/voice/VoiceLab';
 import { Avatar } from './features/companion/Avatar';
@@ -54,7 +55,7 @@ export default function App() {
     <aside className="sidebar">
       <a className="brand" href="#home"><span className="brand-mark">✳</span><span>栖伴<small>COMPANION</small></span></a>
       <div className="nav-label">我们的空间</div>
-      <nav aria-label="主导航"><a href="#home" className="nav-link active"><span>⌂</span>相处空间<span className="nav-dot" /></a><a href="#tasks-title" className="nav-link"><span>☷</span>待办手记</a></nav>
+      <nav aria-label="主导航"><a href="#home" className="nav-link active"><span>⌂</span>相处空间<span className="nav-dot" /></a><a href="#tasks-title" className="nav-link"><span>☷</span>待办手记</a><a href="#memories-title" className="nav-link"><span>✧</span>我们的记忆</a></nav>
       <div className="sidebar-note"><span className="mini-star">✧</span><p>一段陪伴，<br/>从小小的日常开始。</p></div>
       <div className="build-tag"><span className="live-dot"/> 开发预览 <span>v0.1</span></div>
     </aside>
@@ -71,6 +72,7 @@ export default function App() {
           </section>
           <aside className="today-card"><span className="eyebrow">HERE & NOW</span><h2>从一个小念头开始</h2><p className="today-intro">我们先建立一个可靠的起点：把想做的事记下来，随时回来看看。</p><div className="detail-item"><span className="detail-icon">✎</span><div><strong>待办有迹可循</strong><p>创建、查看与取消</p></div></div><div className="detail-item"><span className="detail-icon">◇</span><div><strong>{info?.persistence === 'sqlite' ? '记录留在这台电脑' : '当前为临时预览'}</strong><p>{info?.persistence === 'sqlite' ? 'SQLite 本地保存，重启可恢复' : '浏览器刷新后，待办会清空'}</p></div></div><div className="connection-note"><span className="outline-dot"/><div><strong>手机接续 · 尚未连接</strong><p>将在后续版本接入账号与设备配对。</p></div></div><p className="preview-note">可在角色气泡中交流，完整问答在本机保存并可清空；桌宠语音和远程执行尚未接入。</p></aside>
         </div>
+        <MemoryPanel/>
         <ModelSettings/>
         <VoiceLab/>
         <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>

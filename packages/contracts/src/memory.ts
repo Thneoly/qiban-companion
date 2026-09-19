@@ -1,4 +1,4 @@
-/** Additive M1 data contract. No memory IPC commands are registered yet. */
+/** Manual memory DTOs and M2 IPC receipts. Model use remains disabled. */
 export type MemoryKind = 'preference' | 'experience' | 'task_fact';
 export interface MemoryDraft {
   kind: Exclude<MemoryKind, 'task_fact'>;
@@ -44,4 +44,44 @@ export function decodeMemories(value: unknown): MemoryRecord[] {
   const memories = value.map(decodeMemory);
   if (new Set(memories.map(m => m.id)).size !== memories.length) return incompatible();
   return memories;
+}
+
+export interface MemorySnapshot { items: MemoryRecord[]; contextEpoch: number; modelUseEnabled: false }
+export interface MemoryReceipt { contextEpoch: number; chatCleared: boolean; notificationsDelivered: boolean }
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return incompatible();
+  return value as Record<string, unknown>;
+}
+export function decodeContextEpoch(value: unknown): number { return integer(value) ? value : incompatible(); }
+export function decodeMemorySnapshot(value: unknown): MemorySnapshot {
+  const v = object(value);
+  if (!integer(v.contextEpoch) || v.modelUseEnabled !== false) return incompatible();
+  return { items: decodeMemories(v.items), contextEpoch: v.contextEpoch, modelUseEnabled: false };
+}
+export function decodeMemoryReceipt(value: unknown): MemoryReceipt {
+  const v = object(value);
+  if (!integer(v.contextEpoch) || typeof v.chatCleared !== 'boolean' || typeof v.notificationsDelivered !== 'boolean') return incompatible();
+  return { contextEpoch: v.contextEpoch, chatCleared: v.chatCleared, notificationsDelivered: v.notificationsDelivered };
+}
+export function decodeMemoryExport(value: unknown): { status: 'cancelled' } | { status: 'saved'; count: number } {
+  const v = object(value);
+  if (v.status === 'cancelled') return { status: 'cancelled' };
+  if (v.status !== 'saved' || !integer(v.count) || v.count > 30) return incompatible();
+  return { status: 'saved', count: v.count };
+}
+const memoryErrors: Record<string, string> = {
+  invalid_input: '仅可保存偏好或经历，正文需1～200字且日期有效。',
+  capacity_exceeded: '最多保留30条记忆，请先整理已有内容。',
+  selection_too_large: '修改后超出已选记忆预算，请先调整选择。',
+  conflict: '条目已更改或删除，请刷新后重新选择；你的编辑内容仍保留。',
+  context_changed: '记忆或会话已变化，请刷新后重新操作。',
+  storage_unavailable: '本机记忆不可用，请刷新或检查数据目录。',
+  confirmation_required: '请先确认停止回复并清空本机全部模型的聊天记录。',
+  export_failed: '导出未完成，请选择可写的JSON文件位置重试。',
+};
+export function memoryErrorMessage(value: unknown): string {
+  if (value && typeof value === 'object' && 'code' in value && typeof value.code === 'string') {
+    return memoryErrors[value.code] ?? '记忆错误协议不兼容，请更新客户端。';
+  }
+  return '记忆操作未完成，请刷新重试；若持续失败，请更新客户端。';
 }

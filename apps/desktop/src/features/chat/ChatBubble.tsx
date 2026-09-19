@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { nativeDesktop } from '../../lib/surface';
-import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, type ChatTurn } from '@companion/contracts';
+import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeContextEpoch, type ChatTurn } from '@companion/contracts';
 import { ConversationReader } from './ConversationReader';
 import type { ConversationPhase as Phase } from '../companion/presentation';
 
@@ -22,6 +23,46 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
   const [recorded, setRecorded] = useState(false);
   const current = useRef<string | null>(null);
   const alive = useRef(true);
+  const contextEpoch = useRef<number | null>(null);
+  const historySerial = useRef(0);
+  function invalidateMemory(epoch: number) {
+    if (contextEpoch.current !== null && epoch <= contextEpoch.current) return false;
+    contextEpoch.current = epoch; historySerial.current++;
+    const id = current.current; current.current = null;
+    if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
+    setConfigured(false); setBusy(false); setHistory([]); setReply(''); setDraft(''); setLastPrompt(''); setRecorded(false); setPhase('idle');
+    setStatus('记忆或会话已变化，旧回复已停止；正在重新读取本机记录。');
+    return true;
+  }
+  async function checkEpoch() {
+    const epoch = decodeContextEpoch(await invoke('chat_context_epoch'));
+    if (!alive.current) return false;
+    if (contextEpoch.current === null) { contextEpoch.current = epoch; return true; }
+    return reconcileMemory(epoch);
+  }
+  async function loadHistory() {
+    const serial = ++historySerial.current;
+    const epoch = decodeContextEpoch(await invoke('chat_context_epoch'));
+    const turns = decodeChatHistory(await invoke('chat_history'));
+    const after = decodeContextEpoch(await invoke('chat_context_epoch'));
+    if (epoch !== after) throw Error('会话已变化，请收起后重开');
+    if (!alive.current || serial !== historySerial.current) return null;
+    contextEpoch.current = after;
+    return turns;
+  }
+  async function reconcileMemory(epoch: number) {
+    if (!invalidateMemory(epoch)) return true;
+    try {
+      const [value, turns] = await Promise.all([invoke('chat_config'), loadHistory()]);
+      if (alive.current && turns) {
+        const config = decodeChatConfig(value);
+        setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens);
+        setHistory(turns); setReply(turns.at(-1)?.assistant ?? '');
+        setStatus('记忆或会话已变化，已刷新本机记录；请重新输入后发送。');
+      }
+    } catch { if (alive.current) { setConfigured(false); setStatus('无法核对当前会话，请收起后重开；暂不能发送。'); } }
+    return false;
+  }
   const generating = phase === 'waiting' || phase === 'streaming';
   useEffect(() => {
     if (!generating) return;
@@ -34,16 +75,22 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
   useEffect(() => {
     alive.current = true;
     let disposed = false;
-    if (nativeDesktop) void Promise.all([invoke('chat_config'), invoke('chat_history')]).then(([configValue, historyValue]) => {
-      if (disposed) return;
+    if (nativeDesktop) void Promise.all([invoke('chat_config'), loadHistory()]).then(([configValue, turns]) => {
+      if (disposed || !turns) return;
       const config = decodeChatConfig(configValue);
-      const turns = decodeChatHistory(historyValue);
       setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setHistory(turns);
       setReply(turns.at(-1)?.assistant ?? '');
       setStatus(config.configured ? (turns.length ? '已恢复本机记录 · 发送时携带当前模型前文' : '完整问答自动保存在本机 · 尚无当前模型记录') : '尚未配置密钥，请打开模型设置');
     }).catch(error => { if (!disposed) setStatus(typeof error === 'string' ? error : '读取模型或本机记录失败，请检查数据目录后重启'); });
+    let unlisten: (() => void) | undefined;
+    if (nativeDesktop) void listen<{ contextEpoch: number }>('memory-changed', event => {
+      try { void reconcileMemory(decodeContextEpoch(event.payload.contextEpoch)); }
+      catch { setConfigured(false); setStatus('记忆通知不兼容，请重开客户端。'); }
+    }).then(remove => { if (disposed) remove(); else unlisten = remove; }).catch(() => { if (!disposed) setStatus('窗口通知连接失败，将在发送前重新核对记录。'); });
+    const focus = () => { if (nativeDesktop) void checkEpoch().catch(() => { if (!disposed) { setConfigured(false); setStatus('无法核对当前会话，请收起后重开。'); } }); };
+    window.addEventListener('focus', focus);
     return () => {
-      disposed = true; alive.current = false;
+      disposed = true; alive.current = false; historySerial.current++; unlisten?.(); window.removeEventListener('focus', focus);
       const id = current.current; current.current = null;
       if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
       onPhase('idle');
@@ -69,13 +116,15 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
           setReply(received); setPhase('streaming');
         }
       } catch {
-        current.current = null; setPhase('error');
+        current.current = null; setBusy(false); setPhase('error');
         setStatus('回复协议不兼容；本段未加入前文，可编辑后重发');
         void invoke('chat_cancel', { requestId: id }).catch(() => {});
       }
     };
     try {
+      if (!(await checkEpoch()) || current.current !== id) return;
       const result = decodeChatResult(await invoke('chat_generate', { request: { requestId: id, prompt }, onDelta: channel }));
+      if (!(await checkEpoch())) return;
       if (alive.current && current.current === id && result.requestId === id) {
         setPhase('complete');
         setStatus('回复结束 · ' + (result.usage?.total_tokens == null ? '用量未返回' : result.usage.total_tokens + ' tokens'));
@@ -85,8 +134,8 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
           return;
         }
         try {
-          const turns = decodeChatHistory(await invoke('chat_history'));
-          if (alive.current && current.current === id) {
+          const turns = await loadHistory();
+          if (turns && alive.current && current.current === id) {
             setHistory(turns); setDraft('');
             setRecorded(turns.at(-1)?.user === prompt && turns.at(-1)?.assistant === received);
           }
@@ -100,18 +149,17 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
         setStatus((typeof error === 'string' ? error : '请求失败') + ' · 未加入前文，可编辑后重发');
       }
     } finally {
-      if (alive.current) setBusy(false);
-      if (current.current === id) current.current = null;
+      if (current.current === id) { if (alive.current) setBusy(false); current.current = null; }
     }
   }
   async function stop() {
     const id = current.current;
     if (!id) return;
-    current.current = null; setPhase('stopped'); setStatus('正在停止…');
+    current.current = null; setBusy(false); setPhase('stopped'); setStatus('正在停止…');
     try {
       await invoke('chat_cancel', { requestId: id });
-      if (alive.current) setStatus('已停止接收回复 · 已产生的用量可能计费');
-    } catch { if (alive.current) setStatus('停止请求失败，已屏蔽旧回复'); }
+      if (alive.current && !current.current) setStatus('已停止接收回复 · 已产生的用量可能计费');
+    } catch { if (alive.current && !current.current) setStatus('停止请求失败，已屏蔽旧回复'); }
   }
   async function clear() {
     if (busy) return;

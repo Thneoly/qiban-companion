@@ -5,14 +5,17 @@ test.beforeEach(async ({ page }) => {
     const w = window as any;
     Object.defineProperty(window, 'isTauri', { value: true });
     const history = [{ user: '之前的问题', assistant: ('之前的回答，需要逐段阅读。\n').repeat(70) + 'x'.repeat(240) }];
-    let serial = 0;
+    let serial = 0; const callbacks = new Map(); const listeners = new Map(); w.memoryEpoch=1;
+    w.changeMemory = (notify = true) => { history.length=0; w.memoryEpoch++; if(notify) listeners.get("memory-changed")?.({payload:{contextEpoch:w.memoryEpoch,chatCleared:true}}); };
     w.requestCount = 0;
     w.failHistoryOnce = false;
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
-      transformCallback: () => ++serial,
+      transformCallback: (cb: any) => { callbacks.set(++serial,cb); return serial; },
       unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
+        if (cmd === 'plugin:event|listen') { listeners.set(args.event,callbacks.get(args.handler)); return ++serial; }
+        if (cmd === 'chat_context_epoch') return w.memoryEpoch;
         if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 1, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
@@ -165,4 +168,26 @@ test('reduced motion preserves companion feedback without animation', async ({ p
   expect(await page.locator('.pet-portrait .creature').evaluate(e => getComputedStyle(e).animationName)).toBe('none');
   expect(await page.locator('.pet-portrait .thought-dots').evaluate(e => getComputedStyle(e).animationName)).toBe('none');
   await expect(page.locator('.pet-presence')).toContainText('正在等回复');
+});
+
+
+test('memory deletion removes displayed text and ignores late stream callbacks', async ({ page }) => {
+  await page.getByLabel('和栖栖说句话').fill('正在生成的问题');
+  await page.getByRole('button', {name:'发送',exact:true}).click();
+  await page.evaluate(() => { const w=window as any; w.streamFixture.part('即将删除的片段'); });
+  await expect(page.getByRole('region',{name:'对话阅读区'})).toContainText('即将删除的片段');
+  await page.evaluate(() => { const w=window as any; w.changeMemory(); w.streamFixture.part('删除后迟到的片段'); });
+  await expect(page.getByRole('region',{name:'对话阅读区'})).not.toContainText('即将删除的片段');
+  await expect(page.getByRole('region',{name:'对话阅读区'})).not.toContainText('删除后迟到的片段');
+  await expect(page.getByRole('status')).toContainText('已刷新本机记录');
+  await expect(page.getByText('最近 0 轮',{exact:true})).toBeVisible();
+});
+
+test('missed memory notification is reconciled before another request can be sent', async ({ page }) => {
+  await page.evaluate(() => { (window as any).changeMemory(false); });
+  await page.getByLabel('和栖栖说句话').fill('不应直接发送');
+  await page.getByRole('button', {name:'发送',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('已刷新本机记录');
+  expect(await page.evaluate(()=>(window as any).requestCount)).toBe(0);
+  await expect(page.getByRole('region',{name:'对话阅读区'})).not.toContainText('之前的问题');
 });

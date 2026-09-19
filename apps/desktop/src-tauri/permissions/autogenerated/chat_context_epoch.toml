@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chat-context-epoch"
+description = "Enables the chat_context_epoch command without any pre-configured scope."
+commands.allow = ["chat_context_epoch"]
+
+[[permission]]
+identifier = "deny-chat-context-epoch"
+description = "Denies the chat_context_epoch command without any pre-configured scope."
+commands.deny = ["chat_context_epoch"]

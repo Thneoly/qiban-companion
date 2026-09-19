@@ -19,6 +19,9 @@
     "allow-model-settings-get",
     "allow-model-settings-save",
     "allow-model-key-set",
-    "allow-model-key-delete"
+    "allow-model-key-delete",
+    "allow-memory-list",
+    "allow-memory-mutate",
+    "allow-memory-export"
   ]
 }

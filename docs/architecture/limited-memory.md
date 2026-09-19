@@ -1,10 +1,10 @@
 # 有限记忆技术设计：T13/T14本地增量
 
-设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，M2～M4仍待实现。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
+设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，2026-09-19已完成[M2面板与导出](../status/memory-panel.md)，M3～M4仍待实现。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
 
 ## 1. 决策与现有代码差距
 
-M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁移，并增加Windows单实例保护和Rust/TypeScript数据契约。`ChatState`仍维护旧有进程内会话版本，`ChatRequest`仍只有requestId和prompt；记忆管理IPC、策略写入、导出及注入协调均未开放。下文继续作为完整设计，实际实现边界以M1状态记录为准。
+M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁移，并增加Windows单实例保护和Rust/TypeScript数据契约。M2已接入记忆管理IPC、原生导出、提交后的缓存失效与在途取消，流式和完成提交比较请求ID/会话版本/epoch。`ChatRequest`仍只有requestId和prompt；策略写入、许可预览及注入尚未开放。下文继续作为完整设计，实际实现边界以M1/M2状态记录为准。
 
 首版不用向量库、图数据库、摘要模型或背景抽取。30条容量下按用户明确选择注入，选择超过5条或800字直接拒绝设置，不暗中截断，也不假装按语义相关性排序。记忆附加处理不产生独立推理请求；正文和元数据仍增加模型输入，实际tokens与供应商费用须测试，字符数不是tokens或人民币。
 
@@ -37,7 +37,7 @@ M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁
 
 ## 3. IPC草案
 
-以下命令均为设计契约，M1未注册这些命令；当前仅落地条目DTO及运行时解码。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
+下表保留目标设计契约。M2实际注册`memory_list`（items/contextEpoch/modelUseEnabled=false）、`memory_mutate`（action=create/update/delete/delete_all，对应下表四个写操作，统一返回contextEpoch/chatCleared/notificationsDelivered）、`memory_export`（status=cancelled或saved/count），并新增pet只读`chat_context_epoch`。M3的policy/preview与chat_generate扩展尚未注册。Rust生成ID、时间、来源及版本，前端只能提交用户可编辑内容和期望版本；前端不可提交任意system消息或外部来源证明。
 
 | 命令 | 输入重点 | 回执/失败边界 |
 |---|---|---|
@@ -51,7 +51,7 @@ M1已在`HistoryStore`增加同库记忆存储原语、删除标记及版本2迁
 | chat_context_preview | 当前模型来自宿主 | scope、epoch、选中id/revision及正文预览；disabled时列表为空 |
 | chat_generate扩展 | 原有字段＋expectedScope＋expectedContextEpoch | 发送前校验快照；不接收前端传来的记忆正文，实际用哪些由Rust决定 |
 
-统一错误包括invalid_input、capacity_exceeded、selection_too_large、conflict、context_changed、storage_unavailable、confirmation_required；前端对未知值报协议不兼容，不把错误当空库。新增上下文必需字段属于不兼容变更，实施前把RuntimeInfo/共享PROTOCOL_VERSION升为2并更新现有模拟夹具，不能沿用v1又静默发送旧快照。
+统一错误包括invalid_input、capacity_exceeded、selection_too_large、conflict、context_changed、storage_unavailable、confirmation_required、export_failed；前端对未知值报协议不兼容，不把错误当空库。新增上下文必需字段属于不兼容变更，实施前把RuntimeInfo/共享PROTOCOL_VERSION升为2并更新现有模拟夹具，不能沿用v1又静默发送旧快照。
 
 main拥有管理与导出命令；pet拥有只读预览和打开记忆面板动作，沿用聊天命令。新权限逐条授予，不让pet直接写记忆或让main发任意模型请求。
 
