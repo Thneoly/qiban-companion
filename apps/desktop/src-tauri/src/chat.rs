@@ -491,6 +491,56 @@ async fn stream_context(
 mod tests {
     use super::*;
     #[test]
+    fn q6_del12_completed_text_cannot_commit_after_deletion() {
+        let path = std::env::temp_dir().join(format!("q6-complete-{}.db", uuid::Uuid::new_v4()));
+        let state = ChatState::open(&path);
+        let mut inner = state.0.lock().unwrap();
+        inner.select("https://q6.invalid", "fixture").unwrap();
+        let memory = inner
+            .store
+            .as_mut()
+            .unwrap()
+            .memory_create(
+                &companion_core::memory::MemoryDraft {
+                    kind: companion_core::memory::MemoryKind::Preference,
+                    body: "old".into(),
+                    event_date: None,
+                },
+                0,
+            )
+            .unwrap()
+            .value;
+        let version = inner.conversation.version();
+        let (tx, _) = watch::channel(false);
+        inner.active = Some(("finished-network".into(), tx));
+        // The reply has been assembled; deletion wins the coordination lock before completion persistence.
+        let completed = ChatTurn {
+            user: "question".into(),
+            assistant: "old reply".into(),
+        };
+        inner
+            .store
+            .as_mut()
+            .unwrap()
+            .memory_delete(&memory.id, 1, 1)
+            .unwrap();
+        inner.invalidate_memory(true);
+        assert!(inner
+            .ensure_current("finished-network", 1, version)
+            .is_err());
+        assert!(!inner.complete("https://q6.invalid", "fixture", version, completed));
+        assert!(inner
+            .store
+            .as_ref()
+            .unwrap()
+            .load("https://q6.invalid", "fixture")
+            .unwrap()
+            .is_empty());
+        drop(inner);
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn v2_requires_snapshot_and_reference_text_never_becomes_a_system_message() {
         assert!(
             serde_json::from_value::<ChatRequest>(json!({"requestId":"old","prompt":"hi"}))

@@ -266,6 +266,83 @@ mod tests {
         }
     }
     #[test]
+    fn crash_after_commit_child() {
+        let Ok(path) = std::env::var("QIBAN_Q6_COMMITTED_DB") else {
+            return;
+        };
+        let state = ChatState::open(std::path::Path::new(&path));
+        let snapshot = state.memory_snapshot().unwrap();
+        let m = &snapshot.items[0];
+        state
+            .change_memory(
+                MemoryMutation::Delete {
+                    id: m.id.clone(),
+                    expected_revision: m.revision,
+                    expected_epoch: snapshot.context_epoch,
+                    restart_conversation: true,
+                },
+                |_| std::process::exit(24),
+            )
+            .unwrap();
+        panic!("notification barrier not reached");
+    }
+    #[test]
+    fn q6_del14_crash_after_commit_before_notification_stays_deleted() {
+        let path = std::env::temp_dir().join(format!("q6-committed-{}.db", uuid::Uuid::new_v4()));
+        let state = ChatState::open(&path);
+        state
+            .change_memory(
+                MemoryMutation::Create {
+                    draft: draft(),
+                    expected_epoch: 0,
+                },
+                |_| true,
+            )
+            .unwrap();
+        {
+            let mut inner = state.0.lock().unwrap();
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .append(
+                    "https://q6.invalid",
+                    "fixture",
+                    &ChatTurn {
+                        user: "old".into(),
+                        assistant: "old".into(),
+                    },
+                )
+                .unwrap();
+        }
+        drop(state);
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "memory::tests::crash_after_commit_child",
+                "--nocapture",
+            ])
+            .env("QIBAN_Q6_COMMITTED_DB", &path)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(24));
+        let state = ChatState::open(&path);
+        assert!(state.memory_snapshot().unwrap().items.is_empty());
+        assert_eq!(state.memory_snapshot().unwrap().context_epoch, 2);
+        assert!(state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_ref()
+            .unwrap()
+            .load("https://q6.invalid", "fixture")
+            .unwrap()
+            .is_empty());
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn confirmation_commit_invalidation_and_notification_failure_are_distinct() {
         let path = std::env::temp_dir().join(format!("memory-host-{}.db", uuid::Uuid::new_v4()));
         let state = ChatState::open(&path);

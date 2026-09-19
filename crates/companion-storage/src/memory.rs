@@ -4,6 +4,9 @@ use companion_core::{memory::*, now_ms};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 #[cfg(test)]
+#[path = "memory_q6_tests.rs"]
+mod q6_tests;
+#[cfg(test)]
 #[path = "memory_tests.rs"]
 mod tests;
 
@@ -369,6 +372,8 @@ impl HistoryStore {
         remove_selections(&tx, Some(id))?;
         tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=?2,deleted_at=?3 WHERE id=?1", params![id,revision,timestamp()?])?;
         tx.execute("DELETE FROM chat_turns", [])?;
+        #[cfg(test)]
+        q6_tests::crash_before_commit();
         tx.commit()?;
         Ok(MemoryCommit {
             value: (),

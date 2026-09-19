@@ -55,7 +55,7 @@ mod tests {
         );
     }
     #[test]
-    fn blocks_other_process_and_releases_with_profile_isolation() {
+    fn q6_del20_blocks_other_process_and_releases_with_profile_isolation() {
         let directory = std::env::temp_dir().join(format!("qiban-lease-{}", uuid::Uuid::new_v4()));
         let other = directory.join("acceptance");
         std::fs::create_dir_all(&other).unwrap();
