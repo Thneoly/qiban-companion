@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { RuntimeInfo, Task } from '@companion/contracts';
 import { client, errorMessage } from './lib/client';
 import { ModelSettings } from './features/settings/ModelSettings';
+import { VoiceLab } from './features/voice/VoiceLab';
 import { Avatar } from './features/companion/Avatar';
 import { TaskPanel } from './features/tasks/TaskPanel';
 
@@ -71,6 +72,7 @@ export default function App() {
           <aside className="today-card"><span className="eyebrow">HERE & NOW</span><h2>从一个小念头开始</h2><p className="today-intro">我们先建立一个可靠的起点：把想做的事记下来，随时回来看看。</p><div className="detail-item"><span className="detail-icon">✎</span><div><strong>待办有迹可循</strong><p>创建、查看与取消</p></div></div><div className="detail-item"><span className="detail-icon">◇</span><div><strong>{info?.persistence === 'sqlite' ? '记录留在这台电脑' : '当前为临时预览'}</strong><p>{info?.persistence === 'sqlite' ? 'SQLite 本地保存，重启可恢复' : '浏览器刷新后，待办会清空'}</p></div></div><div className="connection-note"><span className="outline-dot"/><div><strong>手机接续 · 尚未连接</strong><p>将在后续版本接入账号与设备配对。</p></div></div><p className="preview-note">可在角色气泡中发起临时多轮对话；语音和远程执行尚未接入。</p></aside>
         </div>
         <ModelSettings/>
+        <VoiceLab/>
         <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
         <footer className="page-footer"><span>栖伴 · 给想法一个停靠的地方</span><span>本地设置 / 模型服务由你选择</span></footer>
       </div>

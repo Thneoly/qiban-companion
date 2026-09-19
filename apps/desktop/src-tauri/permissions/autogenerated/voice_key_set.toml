@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-key-set"
+description = "Enables the voice_key_set command without any pre-configured scope."
+commands.allow = ["voice_key_set"]
+
+[[permission]]
+identifier = "deny-voice-key-set"
+description = "Denies the voice_key_set command without any pre-configured scope."
+commands.deny = ["voice_key_set"]

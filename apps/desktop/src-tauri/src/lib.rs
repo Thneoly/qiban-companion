@@ -6,6 +6,7 @@ mod model_settings;
 mod pet;
 mod placement;
 mod tray;
+mod voice;
 
 use companion_storage::TaskStore;
 use std::sync::{atomic::Ordering, Arc};
@@ -17,6 +18,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(chat::ChatState::default())
+        .manage(voice::VoiceState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -68,6 +70,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            voice::voice_probe,
+            voice::voice_cancel,
+            voice::voice_key_set,
             model_settings::model_settings_get,
             model_settings::model_settings_save,
             model_settings::model_key_set,
