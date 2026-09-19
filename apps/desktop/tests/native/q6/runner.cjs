@@ -1,0 +1,3 @@
+const {Harness}=require('./harness.cjs');const {facts}=require('./facts.cjs');
+const {deletion}=require('./deletion.cjs');
+(async()=>{const h=new Harness();try{await h.setup();const cases=[...await facts(h),...await deletion(h)];const summary={...h.meta,mode:'local-transport',total:cases.length,passed:cases.filter(c=>c.status==='passed').length,failed:cases.filter(c=>c.status!=='passed').map(c=>({id:c.id,error:c.error})),modelQuality:'not_run',localhostRequests:h.requests.length};h.write('summary.json',summary);console.log(JSON.stringify(summary));if(summary.failed.length)process.exitCode=1;}finally{await h.close();}})().catch(error=>{console.error(error);process.exitCode=1;});

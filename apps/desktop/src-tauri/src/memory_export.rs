@@ -170,6 +170,69 @@ pub async fn memory_export(
 mod tests {
     use super::*;
     use companion_core::memory::{MemoryDraft, MemoryKind};
+    fn deletion_export(after_export: bool) {
+        let root = std::env::temp_dir().join(format!("q6-export-{}.tmp", uuid::Uuid::new_v4()));
+        let private = root.join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        let state = ChatState::open(&private.join("chat-history.db"));
+        let path = root.join("memory.json");
+        let m = state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_mut()
+            .unwrap()
+            .memory_create(
+                &MemoryDraft {
+                    kind: MemoryKind::Preference,
+                    body: "exported synthetic secret".into(),
+                    event_date: None,
+                },
+                0,
+            )
+            .unwrap()
+            .value;
+        if after_export {
+            write_snapshot(&state, 1, &path, &private).unwrap();
+        } else {
+            std::fs::write(&path, "original destination").unwrap();
+        }
+        state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_mut()
+            .unwrap()
+            .memory_delete(&m.id, 1, 1)
+            .unwrap();
+        if after_export {
+            assert!(std::fs::read_to_string(&path).unwrap().contains(&m.body));
+            assert!(state.memory_snapshot().unwrap().items.is_empty());
+        } else {
+            assert!(write_snapshot(&state, 1, &path, &private).is_err());
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "original destination"
+            );
+        }
+        write_snapshot(&state, 2, &path, &private).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains(&m.body));
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(private.join("chat-history.db")).unwrap();
+        std::fs::remove_dir(private).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn q6_del17_delete_while_picker_open_rejects_old_export() {
+        deletion_export(false);
+    }
+    #[test]
+    fn q6_del18_existing_export_is_not_recalled() {
+        deletion_export(true);
+    }
     #[test]
     fn export_is_active_only_atomic_and_rechecks_after_picker() {
         let root = std::env::temp_dir().join(format!("qiban-export-{}", uuid::Uuid::new_v4()));
