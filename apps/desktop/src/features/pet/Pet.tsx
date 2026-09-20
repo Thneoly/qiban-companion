@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { ChatBubble } from '../chat/ChatBubble';
@@ -8,6 +8,7 @@ import { AvatarArtwork } from '../companion/AvatarArtwork';
 import { companionLabels, companionState, type ConversationPhase } from '../companion/presentation';
 import { client, errorMessage } from '../../lib/client';
 import { nativeDesktop, petAction } from '../../lib/surface';
+import { useSceneDrag } from './useSceneDrag';
 
 export function Pet() {
   const [guide, setGuide] = useState(false);
@@ -29,7 +30,11 @@ export function Pet() {
   const [error, setError] = useState('');
   const [offset, setOffset] = useState({ x:0, y:0 });
   const shell = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x:number; y:number; startX:number; startY:number } | null>(null);
+  const { dragging, ...dragEvents } = useSceneDrag({
+    enabled: ready && !quiet && !hidden, offset, move: setOffset,
+    nativeDrag: nativeDesktop ? () => petAction('drag') : undefined,
+    onError: e => setError(errorMessage(e)),
+  });
   const restore = useCallback(() => { setHidden(false); setQuiet(false); setOpen(false); setError(''); }, []);
 
   useEffect(() => {
@@ -106,22 +111,17 @@ export function Pet() {
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
-  function beginDrag(event: PointerEvent<HTMLButtonElement>) {
-    if (event.button !== 0) return;
-    if (nativeDesktop) { void petAction('drag').catch(e => setError(errorMessage(e))); return; }
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { x:event.clientX, y:event.clientY, startX:offset.x, startY:offset.y };
-  }
-  function moveDrag(event: PointerEvent<HTMLButtonElement>) {
-    if (!drag.current) return;
-    setOffset({
-      x: Math.max(-Math.max(0, innerWidth - 344), Math.min(8, drag.current.startX + event.clientX - drag.current.x)),
-      y: Math.max(-Math.max(0, innerHeight - 464), Math.min(8, drag.current.startY + event.clientY - drag.current.y)),
-    });
-  }
   return <>
     {!nativeDesktop && <aside className="preview-desktop-note"><strong>栖伴 · 桌面角色预览</strong><p>这里模拟角色形态；真实透明悬浮、托盘和鼠标穿透请运行桌面版。</p><button onClick={restore}>恢复角色预览</button></aside>}
-    <div ref={shell} data-companion-state={presence} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
+    <div ref={shell} {...dragEvents} data-dragging={dragging} data-companion-state={presence} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
+      <div data-pet-hit data-pet-drag className="pet-scene" role="group" aria-label="栖栖的小天地，可拖动背景移动" title="拖动背景或栖栖来移动，轻点栖栖聊天">
+        <span className="pet-scene-name">栖栖的小天地</span>
+        <div className="pet-scene-window" aria-hidden="true"><i/><i/><i/></div>
+        <span className="pet-scene-star" aria-hidden="true">✧</span>
+        <div className="pet-stage" aria-hidden="true"/>
+        <div className="pet-scene-plant" aria-hidden="true"><i/><i/><i/><b/></div>
+        <span className="pet-scene-status">{quiet ? '安静陪伴中 · 托盘可唤回' : companionLabels[presence]}</span>
+      </div>
       {open && <section data-pet-hit className={reading || guide ? "pet-dialog pet-dialog-reading" : "pet-dialog"} aria-label="栖栖的交互气泡">
         <header><div className="pet-presence">{reading && <span className="pet-portrait" aria-hidden="true"><AvatarArtwork state={presence}/></span>}<strong>栖栖 <span>{companionLabels[presence]}</span></strong></div><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
         {guide ? <FirstUseGuide initialError={guideError} onSettings={() => void act('open_settings')} onLater={() => { setNeedsGuide(false); setGuide(false); }} onComplete={async () => { if (nativeDesktop) await invoke('guide_complete'); setGuideError(''); setNeedsGuide(false); setGuide(false); }}/>
@@ -142,10 +142,9 @@ export function Pet() {
           <button onClick={() => void act('hide')}>隐藏</button>
         </div></>}
       </section>}
-      <button data-pet-hit className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
+      <button data-pet-hit data-pet-drag className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
         {import.meta.env.MODE !== 'installer' && live2d && !hidden ? <Live2DRenderer active={!quiet} onError={live2dError}/> : <AvatarArtwork state={presence}/>}
       </button>
-      <button data-pet-hit className="pet-drag" disabled={quiet} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} aria-label="拖动栖栖">⠿ <span>{quiet ? '安静陪伴中 · 托盘可唤回' : presence === 'idle' || presence === 'attentive' ? '栖栖 · 拖动这里' : companionLabels[presence]}</span></button>
       {!open && error && <button data-pet-hit className="pet-error-reopen" onClick={() => setOpen(true)}>操作未完成，点击查看</button>}
     </div>
   </>;
