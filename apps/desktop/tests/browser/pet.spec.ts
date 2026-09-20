@@ -117,7 +117,7 @@ test('native handoff starts once after threshold and includes the whole scene in
   await page.goto('/');
   const character = page.getByRole('button', { name: '和栖栖互动' });
   await expect(character).toBeEnabled();
-  await expect.poll(() => page.evaluate(() => (window as any).hitRegions.some((r: any) => r.width === 308 && r.height === 428))).toBe(true);
+  await expect.poll(() => page.evaluate(() => (window as any).hitRegions.some((r: any) => r.width === 242 && r.height === 64))).toBe(true);
   const body = (await character.boundingBox())!;
   await page.mouse.move(body.x + 90, body.y + 100); await page.mouse.down();
   await page.mouse.move(body.x + 92, body.y + 102);

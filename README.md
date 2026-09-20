@@ -2,11 +2,11 @@
 
 React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“栖伴／栖栖”作为开发名称。产品、设计、计划与验证资料统一进入[文档中心](docs/README.md)。
 
-当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**任务只进入待办，不会执行。** 已加入可配置的 Chat Completions 本机多轮对话与 Live2D 实验入口；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
+当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**任务只进入待办，不会执行。** 已加入可配置的 Chat Completions 本机多轮对话与本地 Live2D 模型导入；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
 
 有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，[M3分模型许可、预览与受控注入](docs/status/memory-model-context.md)也已实现。M4的[本地Q6验收包](docs/status/memory-q6-local.md)已通过50例发送边界和20例删除竞争测试，真实模型质量及独立体验待补，M4尚未整体准出。最新记忆增量见[模型使用记录](docs/status/memory-model-context.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
 
-已新增[小天地背景与角色拖动](docs/status/pet-scene-drag.md)，底部把手改为舞台，整片场景可拖动。已新增[Windows安装包与数据保留说明](docs/development/windows-installer.md)，本机隔离安装、重装、默认卸载和记录恢复已验证，见[交付记录](docs/status/windows-installer.md)。干净设备和独立体验仍待验收。
+已新增[2D数字人、模型导入与轻量透明舞台](docs/status/avatar-appearance.md)，从气泡“角色与场景”设置，外观与模型可重开恢复。此前[小天地背景与角色拖动](docs/status/pet-scene-drag.md)，底部把手改为舞台，可见背景和角色均可拖动。已新增[Windows安装包与数据保留说明](docs/development/windows-installer.md)，本机隔离安装、重装、默认卸载和记录恢复已验证，见[交付记录](docs/status/windows-installer.md)。干净设备和独立体验仍待验收。
 
 ## 启动
 
@@ -43,13 +43,13 @@ npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 - 点击“展开阅读”集中查看问答；向上翻阅时暂停自动跟随，“回到最新”恢复。生成状态区区分等待、回复中、完成、停止和失败。
 - 栖栖的表情与动作跟随真实回复状态；展开阅读保留角色缩略形象。安静模式停止动画，支持系统减少动画设置；当前没有语音或口型。
 - 任务面板中的“语音实验”可录音或选择测试WAV，显式运行识别、生成和播放；语音地址、模型和系统密钥独立填写，不改文字配置。此前复用Coding文字地址返回429，正确语音地址的真实链仍待验证，详情见上述记录。
-- “Live2D 实验”需要先准备本机示例资源；默认仍用 SVG，缺少资源会回退。详见[配置与资源准备](docs/development/model-settings-live2d.md)。
+- “角色与场景”可切换栖栖 / 2D 数字人，导入完整 model3 文件夹、移除模型、选择小舞台/无背景/完整家园并调节背景不透明度；默认 SVG，数字人失败会回退。详见[配置与资源准备](docs/development/model-settings-live2d.md)。
 - “安静陪伴”保留角色并让鼠标完全穿透；“隐藏”收起角色。点击系统托盘图标恢复互动，图标可能位于任务栏的隐藏图标区。
 - 右键托盘可找回角色到主屏、打开面板或退出应用。
 
 `npm run dev` 只在浏览器模拟角色交互，不能提供原生透明窗口、系统托盘或跨应用鼠标穿透。浏览器辅助面板路径为 `/?view=panel`。
 
-浏览器预览只使用内存，刷新清空；桌面模式通过Rust保存到系统本地应用数据目录 `dev.qiban.companion/companion.db`。任务库含任务标题；对话和手动记忆存于同目录的 `chat-history.db`，聊天按容量保留完整问答，均未加密。前端不能提供数据库路径或执行任意SQL。原生IPC失败会显示错误，不会悄悄切换到假数据。
+浏览器预览的待办只使用内存，刷新清空；外观设置与导入模型例外，保存在当前来源的 IndexedDB。桌面模式通过Rust保存到系统本地应用数据目录 `dev.qiban.companion/companion.db`。任务库含任务标题；对话和手动记忆存于同目录的 `chat-history.db`，聊天按容量保留完整问答，均未加密。前端不能提供数据库路径或执行任意SQL。原生IPC失败会显示错误，不会悄悄切换到假数据。
 
 ## 工程结构
 

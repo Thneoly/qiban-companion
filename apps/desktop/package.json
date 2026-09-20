@@ -12,7 +12,10 @@
     "icons": "tauri icon assets/brand/app-icon.svg",
     "prepare:live2d": "node scripts/prepare-live2d-sample.mjs",
     "build:installer": "tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json",
-    "build:installer-ui": "tsc --noEmit && vite build --mode installer && node scripts/verify-installer-assets.cjs"
+    "build:installer-ui": "tsc --noEmit && vite build --mode installer && node scripts/verify-installer-assets.cjs",
+    "predev": "node scripts/prepare-live2d-runtime.mjs",
+    "prebuild": "node scripts/prepare-live2d-runtime.mjs",
+    "prebuild:installer-ui": "node scripts/prepare-live2d-runtime.mjs"
   },
   "dependencies": {
     "@companion/contracts": "*",

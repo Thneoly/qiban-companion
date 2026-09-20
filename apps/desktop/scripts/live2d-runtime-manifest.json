@@ -1,0 +1,22 @@
+[
+  {
+    "gitBlob": "4139d4f3b286105705790e02aba8539fc6150020",
+    "url": "https://raw.githubusercontent.com/wan-h/awesome-digital-human-live2d/69f9c022cea8a5804759ad4a81882eb537445e2d/web/lib/live2d/Core/LICENSE.md",
+    "file": "licenses/cubism-core-LICENSE.md"
+  },
+  {
+    "gitBlob": "4017da4ced803681ec93378200cbb574bcd3e7f4",
+    "url": "https://raw.githubusercontent.com/wan-h/awesome-digital-human-live2d/69f9c022cea8a5804759ad4a81882eb537445e2d/web/lib/live2d/Core/live2dcubismcore.min.js",
+    "file": "live2dcubismcore.min.js"
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js",
+    "file": "cubism4.min.js",
+    "sha256": "af1267e6d52759b245766c578d905bfa025b532d5c3cc727c370957c4409e21b"
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/LICENSE",
+    "file": "licenses/pixi-live2d-display-LICENSE",
+    "sha256": "8ccace668a041e78ed525d091b0b5daf8b623ff447f912616de535415e4f302f"
+  }
+]
