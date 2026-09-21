@@ -1,5 +1,7 @@
 # T41/T42账号隔离基础：实际交付与边界
 
+后续已增加[协调服务与自有邮箱验证码/会话](coordinator-auth-api.md)，下文保留基础增量交付时的边界。
+
 2026-09-21。本轮接续[T16本地执行](local-document-execution.md)，为[手机接续设计](../architecture/device-continuity.md)增加可测试的身份与归属基础。T41/T42全工作包仍未准出；当前没有真实登录服务、网络API或新增桌面界面。
 
 ## 实现

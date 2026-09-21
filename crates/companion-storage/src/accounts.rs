@@ -1,5 +1,5 @@
-//! Account-scoped coordination foundation, deliberately separate from desktop
-//! databases. Not wired to IPC or HTTP until a real identity adapter is available.
+//! Account-scoped coordination storage, deliberately separate from desktop
+//! databases. The coordinator authenticates HTTP requests before entering here.
 use crate::StorageError;
 use companion_core::{
     identity::{AccountProfile, CreateAccountTask, IdentityError, VerifiedIdentity},
@@ -7,6 +7,8 @@ use companion_core::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{path::Path, sync::Mutex, time::Duration};
+mod native_auth;
+pub use native_auth::{NativeLogin, NATIVE_ISSUER};
 
 pub struct AccountStore {
     connection: Mutex<Connection>,
@@ -24,7 +26,7 @@ impl AccountStore {
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", true)?;
         let version: u32 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(StorageError::NewerSchema);
         }
         // Fail closed on another store's schema rather than adopting local data.
@@ -61,6 +63,9 @@ impl AccountStore {
             tx.commit()?;
         } else if app_id != APPLICATION_ID {
             return Err(StorageError::Unavailable);
+        }
+        if version < 2 {
+            native_auth::migrate(&mut c)?;
         }
         Ok(Self {
             connection: Mutex::new(c),
@@ -219,6 +224,9 @@ impl AccountStore {
                     "UPDATE account_sessions SET revoked=1 WHERE account_id=?1",
                     [&profile.account_id],
                 )?;
+                tx.execute("UPDATE native_codes SET state='invalid',mac=NULL WHERE state IN ('pending','ready')
+                    AND email IN (SELECT u.email FROM native_users u JOIN accounts a ON a.subject=u.subject
+                    WHERE a.id=?1 AND a.issuer=?2)", params![profile.account_id,NATIVE_ISSUER])?;
             } else {
                 tx.execute(
                     "UPDATE account_sessions SET revoked=1 WHERE account_id=?1 AND session_id=?2",
@@ -439,7 +447,7 @@ mod tests {
     #[test]
     fn refuses_newer_or_unrelated_database_without_migrating_local_data() {
         let c = Connection::open_in_memory().unwrap();
-        c.pragma_update(None, "user_version", 2).unwrap();
+        c.pragma_update(None, "user_version", 3).unwrap();
         assert!(matches!(
             AccountStore::from_connection(c),
             Err(StorageError::NewerSchema)

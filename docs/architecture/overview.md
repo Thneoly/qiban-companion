@@ -15,7 +15,7 @@ Tauri命令提供运行信息、任务列表/创建/取消，以及角色窗口�
 
 普通待办仍为**本地待办仓库**。另有[受限文档执行台账](../status/local-document-execution.md)，在独立executions.db持久保存task/attempt/action及状态事件，显式确认后创建本机草稿并核验恢复。它没有多人资源隔离或云端授权，不能直接用于远程动作。
 
-另外增加[账号隔离基础](../status/account-isolation-foundation.md)：core定义可信身份断言边界，storage在独立SQLite库内按认证来源和subject映射账号/伙伴，账号内待办与会话撤销共用事务。它尚未接入桌面或HTTP，不改变现有本地数据库，不等同生产多租户服务。
+另外增加[账号隔离基础](../status/account-isolation-foundation.md)：core定义可信身份断言边界，storage在独立SQLite库内按认证来源和subject映射账号/伙伴，账号内待办与会话撤销共用事务。新增[协调服务](../status/coordinator-auth-api.md)通过自有服务端会话核验后调用此库；当前仅本机HTTP联调，不改变现有桌面数据库，也不等同生产多租户服务。
 
 ## 桌面呈现与窗口生命周期
 
