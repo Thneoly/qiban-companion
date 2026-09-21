@@ -1,6 +1,7 @@
 //! Pure domain contracts. No Tauri, network, filesystem or model dependency.
 pub mod conversation;
 pub mod execution;
+pub mod identity;
 pub mod memory;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};

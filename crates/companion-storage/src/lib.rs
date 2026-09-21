@@ -1,4 +1,5 @@
 //! SQLite is owned by Rust. Frontend callers cannot choose paths or execute SQL.
+pub mod accounts;
 pub mod execution;
 pub mod history;
 pub mod memory;
@@ -18,6 +19,8 @@ pub enum StorageError {
     Memory(#[from] companion_core::memory::MemoryError),
     #[error(transparent)]
     Execution(#[from] companion_core::execution::ExecutionError),
+    #[error(transparent)]
+    Identity(#[from] companion_core::identity::IdentityError),
     #[error("本地存储暂时不可用")]
     Unavailable,
     #[error("未找到任务")]

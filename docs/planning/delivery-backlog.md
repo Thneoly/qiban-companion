@@ -1,8 +1,8 @@
 # 桌面 AI 伙伴：首版待办与验收矩阵
 
-> v1.1｜2026 年 9 月 13 日｜执行对照更新于2026年9月19日。配套[敏捷阶段门执行计划](agile-stage-gate-plan.md)。保留原工作包及资源估算基线；最新设计见[有限记忆](../status/limited-memory-design.md)，本地验收见[M4 Q6记录](../status/memory-q6-local.md)，实现见[M3模型使用](../status/memory-model-context.md)、[M2记忆面板](../status/memory-panel.md)、[M1记忆基础](../status/memory-foundation.md)、[首次使用指南](../status/first-use-guide.md)、[本机对话记录](../status/chat-history-persistence.md)及[T04语音验证](../status/voice-chain-spike.md)，已有局部实现不等于整个工作包通过。
+> v1.1｜2026 年 9 月 13 日｜执行对照更新于2026年9月21日。配套[敏捷阶段门执行计划](agile-stage-gate-plan.md)。保留原工作包及资源估算基线；最新设计见[有限记忆](../status/limited-memory-design.md)，本地验收见[M4 Q6记录](../status/memory-q6-local.md)，实现见[M3模型使用](../status/memory-model-context.md)、[M2记忆面板](../status/memory-panel.md)、[M1记忆基础](../status/memory-foundation.md)、[首次使用指南](../status/first-use-guide.md)、[本机对话记录](../status/chat-history-persistence.md)及[T04语音验证](../status/voice-chain-spike.md)，已有局部实现不等于整个工作包通过。
 
-## 当前执行对照（2026-09-19）
+## 当前执行对照（2026-09-21）
 
 用户要求按既有产品与计划推进。此前输出预算属于T09本机文字链的修复子项，不能独立成为产品主线。当前优先目标是O1：角色与交流形成可以实际相处的体验，随后补语音风险和记忆，不继续无依据地扩充聊天参数。
 
@@ -18,6 +18,7 @@
 | T09/T10 文字链 | 本机凭据、真实模型、多轮、停止、异常、阅读、原生重启恢复与删除 | 原计划云端账号/隔离、费用账本、真实新装验收；全包未准出 |
 | T11/T12 语音 | 未实现 | T04真实语音选择与成本门 |
 | T13/T14 有限记忆 | M1基础、M2管理/导出、M3分模型许可/预览/注入与失效协调已本地验证 | M4本地50/50发送边界、20/20删除集通过；真实模型质量与独立体验待补；任务事实待T16，跨端待T23 |
+| T41/T42 账号与隔离 | [账号隔离基础](../status/account-isolation-foundation.md)：稳定伙伴映射、账号内待办、会话过期/撤销及负测；未接应用 | 托管认证适配、邮箱验证码、真实两账号HTTP负测、凭据保存、附件/记忆/账本全覆盖；未准出 |
 | T17～T47 其余工具/跨端/商业工作 | 除上述局部基础外未交付 | 依原依赖图推进，不用待办记录冒充执行能力 |
 
 ### 已交付子项：T08-TEXT（对应O1）
