@@ -1,6 +1,7 @@
 mod chat;
 mod commands;
 mod credentials;
+mod execution;
 mod instance;
 mod memory;
 mod memory_context;
@@ -37,6 +38,7 @@ pub fn run() {
             app.manage(lease);
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
+            app.manage(execution::ExecutionState::open(&data_dir)?);
             app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(
                 &data_dir.join("model-settings.db"),
             )?));
@@ -104,6 +106,13 @@ pub fn run() {
             chat::chat_clear,
             chat::chat_generate,
             chat::chat_cancel,
+            execution::execution_list,
+            execution::execution_prepare,
+            execution::execution_detail,
+            execution::execution_cancel,
+            execution::execution_confirm,
+            execution::execution_reconcile,
+            execution::execution_result,
             commands::get_runtime_info,
             commands::list_tasks,
             commands::create_task,

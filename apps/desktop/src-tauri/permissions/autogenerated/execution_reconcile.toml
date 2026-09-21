@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execution-reconcile"
+description = "Enables the execution_reconcile command without any pre-configured scope."
+commands.allow = ["execution_reconcile"]
+
+[[permission]]
+identifier = "deny-execution-reconcile"
+description = "Denies the execution_reconcile command without any pre-configured scope."
+commands.deny = ["execution_reconcile"]

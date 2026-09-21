@@ -24,6 +24,13 @@
     "allow-memory-mutate",
     "allow-memory-export",
     "allow-chat-context-preview",
-    "allow-memory-policy-set"
+    "allow-memory-policy-set",
+    "allow-execution-list",
+    "allow-execution-prepare",
+    "allow-execution-detail",
+    "allow-execution-cancel",
+    "allow-execution-confirm",
+    "allow-execution-reconcile",
+    "allow-execution-result"
   ]
 }

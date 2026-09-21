@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execution-detail"
+description = "Enables the execution_detail command without any pre-configured scope."
+commands.allow = ["execution_detail"]
+
+[[permission]]
+identifier = "deny-execution-detail"
+description = "Denies the execution_detail command without any pre-configured scope."
+commands.deny = ["execution_detail"]

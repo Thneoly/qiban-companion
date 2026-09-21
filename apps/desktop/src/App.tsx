@@ -7,6 +7,7 @@ import { MemoryPanel } from './features/memory/MemoryPanel';
 import { ModelSettings } from './features/settings/ModelSettings';
 import { VoiceLab } from './features/voice/VoiceLab';
 import { Avatar } from './features/companion/Avatar';
+import { ExecutionPanel } from './features/tasks/ExecutionPanel';
 import { TaskPanel } from './features/tasks/TaskPanel';
 
 export default function App() {
@@ -55,7 +56,7 @@ export default function App() {
     <aside className="sidebar">
       <a className="brand" href="#home"><span className="brand-mark">✳</span><span>栖伴<small>COMPANION</small></span></a>
       <div className="nav-label">我们的空间</div>
-      <nav aria-label="主导航"><a href="#home" className="nav-link active"><span>⌂</span>相处空间<span className="nav-dot" /></a><a href="#tasks-title" className="nav-link"><span>☷</span>待办手记</a><a href="#memories-title" className="nav-link"><span>✧</span>我们的记忆</a></nav>
+      <nav aria-label="主导航"><a href="#home" className="nav-link active"><span>⌂</span>相处空间<span className="nav-dot" /></a><a href="#tasks-title" className="nav-link"><span>☷</span>待办手记</a><a href="#execution-title" className="nav-link"><span>↗</span>文档任务</a><a href="#memories-title" className="nav-link"><span>✧</span>我们的记忆</a></nav>
       <div className="sidebar-note"><span className="mini-star">✧</span><p>一段陪伴，<br/>从小小的日常开始。</p></div>
       <div className="build-tag"><span className="live-dot"/> 开发预览 <span>v0.1</span></div>
     </aside>
@@ -75,6 +76,7 @@ export default function App() {
         <MemoryPanel/>
         <ModelSettings/>
         <VoiceLab/>
+        <ExecutionPanel/>
         <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
         <footer className="page-footer"><span>栖伴 · 给想法一个停靠的地方</span><span>本地设置 / 模型服务由你选择</span></footer>
       </div>

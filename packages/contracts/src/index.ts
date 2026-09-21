@@ -3,6 +3,7 @@ export * from './memory-context';
 /** IPC v2. Mirror of companion-core; decode all native responses at the boundary. */
 export const PROTOCOL_VERSION = 2;
 export * from './memory';
+export * from './execution';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
 export interface Task {
@@ -18,6 +19,7 @@ export interface RuntimeInfo {
   appVersion: string;
   runtime: 'desktop' | 'preview';
   persistence: 'sqlite' | 'memory';
+  /** At least one explicit executor exists; this never authorizes automatic inbox execution. */
   executorAvailable: boolean;
 }
 export interface CompanionClient {

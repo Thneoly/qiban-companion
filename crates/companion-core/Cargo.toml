@@ -8,6 +8,7 @@ rust-version.workspace = true
 serde.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 serde_json.workspace = true
