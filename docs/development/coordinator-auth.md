@@ -23,7 +23,7 @@ npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
 
 `check`不编译，也不验证SMTP连接/送达。端口占用会提示处理，不终止已有进程；正常启动会再次检查端口。配置损坏时明确报错，不自动清空数据。
 
-配置保存在被Git忽略的 `.cache/coordinator/`，目录仅授权当前Windows用户和SYSTEM访问。SMTP密码通过Windows DPAPI加密写入 `settings.clixml`，只能由同一Windows用户/设备解密；启动时仅向服务进程传入明文密码。`auth-secret`是受目录权限保护的认证密钥文件，`accounts.db`是账号库，两者不是加密数据库。重新配置邮件不会更换密钥或删除账号库。不要清理此目录；换设备后需重新配置SMTP并单独迁移账号库和认证密钥。
+配置保存在被Git忽略的 `.cache/coordinator/`，目录仅授权当前Windows用户和SYSTEM访问。SMTP密码通过Windows DPAPI加密写入 `settings.clixml`，只能由同一Windows用户/设备解密；启动时以进程环境变量把明文密码传给启动器及其子进程（构建在注入前完成，命令行参数不出现密码，但运行中的启动器进程环境可被同账户管理员读取）。`auth-secret`是受目录权限保护的认证密钥文件，`accounts.db`是账号库，两者不是加密数据库。重新配置邮件不会更换密钥或删除账号库。不要清理此目录；换设备后需重新配置SMTP并单独迁移账号库和认证密钥。
 
 此前手动配置使用的 `.cache/coordinator-accounts.db` 和 `.cache/qiban-auth-secret` 不会自动导入。若已有真实数据，继续使用下方手动入口，或在停止服务并备份后迁移；不要把桌面数据库移入账号库。
 
@@ -33,7 +33,7 @@ npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
 
 Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固定为 `api_token`，密码使用具备 `Email Sending: Edit` 权限的API Token；发件域名须已加入Email Sending。它只支持隐式TLS/465，启动向导中必须选择 `tls`，不支持 `starttls`/587。[官方SMTP说明](https://developers.cloudflare.com/email-service/api/send-emails/smtp/)
 
-向导会为该主机选择正确默认值，并在保存/读取配置时拒绝错误TLS模式或用户名。配置修改后必须停止旧服务，再执行 `npm run coordinator`；正在运行的进程不会自动重载文件。
+向导会为该主机选择正确默认值，并在保存/读取配置时拒绝错误TLS模式或用户名；手动环境变量路径由服务在启动时执行同样的校验。配置修改后必须停止旧服务，再执行 `npm run coordinator`；正在运行的进程不会自动重载文件。
 
 没有发送记录时先区分三个阶段：
 
@@ -41,7 +41,7 @@ Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固
 - 连接失败：DNS、网络代理、465连通性或TLS握手问题可能发生在SMTP认证之前。进程healthz正常、Token active都不代表邮件连接成功。
 - SMTP已接收：再核对Cloudflare投递/抑制日志以及收件箱、垃圾箱。
 
-如果本机域名被网络代理解析为虚拟IP，且TLS握手提前断开，需核查代理的SMTP/465出站规则或换一条可用网络路径；不能仅凭虚拟IP断言代理就是根因。不要关闭证书验证来绕过错误。
+如果本机域名被网络代理解析为虚拟IP，且TLS握手提前断开，需核查代理的SMTP/465出站规则或换一条可用网络路径；不能仅凭虚拟IP断言代理就是根因。不要关闭证书验证来绕过错误。SMTP的TLS校验使用Windows系统证书存储（SChannel）：若本机网络做TLS拦截，需把拦截方根证书装入本机"受信任的根证书颁发机构"，系统不认的根会在握手阶段被拒绝。
 
 ## 运行边界
 
@@ -53,7 +53,7 @@ Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固
 
 SMTP成功仅代表中继服务器确认接收，不保证进入收件箱。发送失败/超时不激活验证码；邮件已发出但激活提交失败时不能据此登录。用户稍后重新获取，不自动重发。验证码HMAC绑定challengeId、邮箱和验证码；数据库只保存HMAC摘要，密钥独立保管。
 
-会话使用操作系统随机数生成的256位不透明令牌，仅首次登录返回明文，数据库只保存SHA-256摘要。最长24小时、闲置30分钟失效；当前不提供刷新令牌，失效后重新验证邮箱。读取会话会更新活动时间，绝对到期不延长。单会话退出与全部退出立即写入服务端状态；全部退出同时作废该账号未用验证码。账号、会话和待办在同一SQLite事务域核验，失效身份不能继续读写。
+会话使用256位不透明令牌，由服务端HMAC密钥与客户端登录nonce派生，仅验证响应返回明文，数据库只保存SHA-256摘要；验证响应在网络上丢失时，客户端用同一challengeId、验证码与nonce重试可恢复同一会话，换nonce不能复用已消耗的验证码，会话撤销后恢复同样被拒。最长24小时、闲置30分钟失效；当前不提供刷新令牌，失效后重新验证邮箱。读取会话会更新活动时间，绝对到期不延长。单会话退出与全部退出立即写入服务端状态；全部退出同时作废该账号未用验证码。账号、会话和待办在同一SQLite事务域核验，失效身份不能继续读写。
 
 ## 手动本机配置（可选）
 
@@ -101,7 +101,7 @@ HTTP /v1与桌面IPC v2分别版本化，POST使用application/json。登录以�
 |---|---|---|
 | GET /healthz | 无 | 服务进程存活，不保证SMTP可用 |
 | POST /v1/auth/request-code | email | challengeId；若可发送则先由SMTP确认接收并激活 |
-| POST /v1/auth/verify-code | challengeId、code | accessToken、sessionId、expiresAt、idleTimeoutSeconds |
+| POST /v1/auth/verify-code | challengeId、code、nonce | accessToken、sessionId、expiresAt、idleTimeoutSeconds；nonce为客户端生成的32字节base64url（43字符），令牌由服务端密钥与nonce派生，响应丢失后用同一组参数重试可取回同一会话 |
 | GET /v1/me | Bearer token | accountId、companionId |
 | GET /v1/tasks | Bearer token | 当前账号待办 |
 | POST /v1/tasks | requestId（UUID）、title | 创建/去重；仅记录，不自动执行 |
@@ -109,7 +109,7 @@ HTTP /v1与桌面IPC v2分别版本化，POST使用application/json。登录以�
 | POST /v1/tasks/{id}/cancel | revision | queued取消，版本不符409 |
 | POST /v1/logout | allSessions（布尔） | revoked、allSessions；同步完成服务端撤销 |
 
-错误码区分401身份/验证码无效、429频率限制、503存储/发信不可用。限制16个并发请求、8 KiB JSON正文，邮件整体等待最多10秒。尚无按来源IP限制、可持久邮件队列或分布式速率限制，不把本地限制当成公网运营防护。
+错误码区分401身份/验证码无效、429频率限制、503存储/发信不可用；request-code期间的并发状态变化（如全部退出作废了待激活验证码）按503上报，不伪装成验证码错误。除healthz外的接口限制16个并发请求、8 KiB JSON正文，邮件整体等待最多10秒；healthz不在并发限制内，邮件堆积不会掩盖进程存活信号。尚无按来源IP限制、可持久邮件队列或分布式速率限制，不把本地限制当成公网运营防护。
 
 令牌不得进入URL、截图、代码提交或共享终端记录。手机Web下一增量需实现同源BFF/HttpOnly会话或明确的端侧凭据方案与CSRF防护；目前没有登录页面，也没有把长期令牌放localStorage的实现。
 

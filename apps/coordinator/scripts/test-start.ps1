@@ -83,6 +83,15 @@ try {
     Assert-True (!(Test-Path -LiteralPath (Join-Path $testDirectory 'missing'))) 'Check created missing configuration.'
     Write-Host 'PASS: noninteractive checks and missing configuration'
     if ($Smoke) {
+        # Warm the build first so the health-check budget below measures
+        # startup only, never a cold cargo build or dependency downloads.
+        Push-Location $workspace
+        try {
+            if (!$env:CARGO_HOME -and (Test-Path -LiteralPath (Join-Path $workspace '.cache/cargo'))) { $env:CARGO_HOME = Join-Path $workspace '.cache/cargo' }
+            $env:CARGO_TARGET_DIR = Join-Path $workspace 'target'
+            & cargo build -p companion-coordinator --locked | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Warm-up build failed; fix compilation before the smoke run.' }
+        } finally { Pop-Location }
         $process = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSScriptRoot/start.ps1`"", '-DataDirectory', "`"$testDirectory`"") -RedirectStandardOutput (Join-Path $testDirectory 'stdout.log') -RedirectStandardError (Join-Path $testDirectory 'stderr.log')
         try {
             $ready = $false

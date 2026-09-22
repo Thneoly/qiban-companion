@@ -4,12 +4,20 @@ use axum::{
     body::{to_bytes, Body},
     http::Request,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde_json::Value;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use tower::ServiceExt;
+
+fn nonce() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
+}
 
 #[derive(Default)]
 struct TestMail {
@@ -107,7 +115,7 @@ async fn login(f: &Fixture, app: &Router, email: &str) -> String {
         "POST",
         "/v1/auth/verify-code",
         None,
-        json!({"challengeId":receipt["challengeId"],"code":f.code(email)}),
+        json!({"challengeId":receipt["challengeId"],"code":f.code(email),"nonce":nonce()}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -185,7 +193,7 @@ async fn real_otp_flow_enforces_two_account_ownership_and_task_dedup() {
     );
 }
 #[tokio::test]
-async fn code_is_one_time_and_concurrent_redemption_has_one_winner() {
+async fn same_nonce_replays_recover_one_session_and_other_nonces_are_rejected() {
     let f = Fixture::new();
     let app = f.app();
     let (_, receipt) = call(
@@ -196,20 +204,70 @@ async fn code_is_one_time_and_concurrent_redemption_has_one_winner() {
         json!({"email":"alice@example.com"}),
     )
     .await;
-    let body = json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com")});
+    let shared = nonce();
+    let body = json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com"),"nonce":shared});
+    // A retried verify whose first response was lost re-derives the same
+    // session token; concurrent retries with one nonce also converge.
     let (a, b) = tokio::join!(
         call(&app, "POST", "/v1/auth/verify-code", None, body.clone()),
         call(&app, "POST", "/v1/auth/verify-code", None, body.clone())
     );
-    assert_eq!(
-        [a.0, b.0].iter().filter(|s| **s == StatusCode::OK).count(),
-        1
-    );
+    assert_eq!(a.0, StatusCode::OK);
+    assert_eq!(b.0, StatusCode::OK);
+    assert_eq!(a.1["accessToken"], b.1["accessToken"]);
+    assert_eq!(a.1["sessionId"], b.1["sessionId"]);
     assert_eq!(
         call(&app, "POST", "/v1/auth/verify-code", None, body)
             .await
             .0,
+        StatusCode::OK
+    );
+    // The consumed code cannot mint a session for a different nonce.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/auth/verify-code",
+            None,
+            json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com"),"nonce":nonce()})
+        )
+        .await
+        .0,
         StatusCode::UNAUTHORIZED
+    );
+}
+#[tokio::test]
+async fn concurrent_same_email_code_requests_allow_exactly_one() {
+    let f = Fixture::new();
+    let app = f.app();
+    let (a, b) = tokio::join!(
+        call(
+            &app,
+            "POST",
+            "/v1/auth/request-code",
+            None,
+            json!({"email":"alice@example.com"})
+        ),
+        call(
+            &app,
+            "POST",
+            "/v1/auth/request-code",
+            None,
+            json!({"email":"alice@example.com"})
+        )
+    );
+    let statuses = [a.0, b.0];
+    assert_eq!(
+        statuses.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "expected exactly one accepted request, got {statuses:?}"
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
+            .count(),
+        1
     );
 }
 #[tokio::test]
@@ -237,7 +295,7 @@ async fn wrong_codes_consume_attempts_and_resend_is_throttled() {
                 "POST",
                 "/v1/auth/verify-code",
                 None,
-                json!({"challengeId":receipt["challengeId"],"code":wrong})
+                json!({"challengeId":receipt["challengeId"],"code":wrong,"nonce":nonce()})
             )
             .await
             .0,
@@ -250,7 +308,7 @@ async fn wrong_codes_consume_attempts_and_resend_is_throttled() {
             "POST",
             "/v1/auth/verify-code",
             None,
-            json!({"challengeId":receipt["challengeId"],"code":correct})
+            json!({"challengeId":receipt["challengeId"],"code":correct,"nonce":nonce()})
         )
         .await
         .0,

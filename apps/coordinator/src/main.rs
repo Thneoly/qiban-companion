@@ -44,9 +44,20 @@ async fn run() -> Result<(), &'static str> {
     if !matches!(tls.as_str(), "starttls" | "tls") {
         return Err("QIBAN_SMTP_TLS must be starttls (587) or tls (465).");
     }
+    let host = setting("QIBAN_SMTP_HOST")?;
+    let username = setting("QIBAN_SMTP_USERNAME")?;
+    // Mirror the launcher rules on the manual environment path so a
+    // misconfigured Cloudflare relay fails at startup, not at first mail.
+    if host
+        .trim_end_matches('.')
+        .eq_ignore_ascii_case("smtp.mx.cloudflare.net")
+        && (tls != "tls" || username != "api_token")
+    {
+        return Err("Cloudflare SMTP requires QIBAN_SMTP_TLS=tls (465) and username api_token.");
+    }
     let mailer = SmtpMailer::new(
-        &setting("QIBAN_SMTP_HOST")?,
-        setting("QIBAN_SMTP_USERNAME")?,
+        &host,
+        username,
         setting("QIBAN_SMTP_PASSWORD")?,
         &setting("QIBAN_SMTP_FROM")?,
         tls == "starttls",
