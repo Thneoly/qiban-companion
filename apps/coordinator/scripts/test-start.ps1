@@ -65,6 +65,23 @@ try {
     Assert-True ((Import-Clixml -LiteralPath $configPath).Host -eq 'updated.example.invalid') 'Rejected Cloudflare settings overwrote saved configuration.'
     Write-Host 'PASS: Cloudflare implicit TLS and exact username requirements'
 
+    $newPassword = ConvertTo-SecureString 'new-mailbox-fixture' -AsPlainText -Force
+    foreach ($providerName in @('qq', '163')) {
+        $mailbox = "tester@$providerName.com"
+        $preset = New-MailboxConfiguration $providerName $mailbox $newPassword $loaded
+        Assert-True ($preset.Host -eq "smtp.$providerName.com" -and $preset.Tls -eq 'tls') 'Incorrect mailbox transport.'
+        Assert-True ($preset.From -eq $mailbox -and $preset.Username -eq $mailbox) 'Old sender or username leaked into new provider.'
+        Assert-True ($preset.Emails -eq $loaded.Emails -and $preset.Port -eq $loaded.Port) 'Existing recipient or port changed.'
+        Assert-True ([Net.NetworkCredential]::new('', $preset.Password).Password -eq 'new-mailbox-fixture') 'Old provider password was reused.'
+        Save-Configuration $preset $configPath
+        Assert-True ($original -ceq [IO.File]::ReadAllText($secretPath)) 'Provider switch changed auth secret.'
+    }
+    $fresh = New-MailboxConfiguration 'qq' 'tester@qq.com' $newPassword $null
+    Assert-True ($fresh.Emails -eq 'tester@qq.com' -and $fresh.Port -eq 4318) 'First-time mailbox defaults incorrect.'
+    Assert-Rejected { New-MailboxConfiguration 'qq' 'sender@example.com' $newPassword $loaded } 'Mismatched mailbox domain accepted.'
+    Save-Configuration $loaded $configPath
+    Write-Host 'PASS: QQ/163 provider replacement preserves recipients and secret without reusing old credentials'
+
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Server.ExclusiveAddressUse = $true
     $listener.Start()

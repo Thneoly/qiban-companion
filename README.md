@@ -34,7 +34,7 @@ npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 npm run coordinator
 ```
 
-也可双击 [apps/coordinator/start.cmd](apps/coordinator/start.cmd)。这是手机接续所需的后端API，当前没有手机页面。修改配置用 `npm run coordinator:configure`，详细步骤见[启动指南](docs/development/coordinator-auth.md)。
+也可双击 [apps/coordinator/start.cmd](apps/coordinator/start.cmd)。这是手机接续所需的后端API，当前没有手机页面。修改配置用 `npm run coordinator:configure`；QQ/163快捷切换用 `npm run coordinator:configure:qq` / `npm run coordinator:configure:163`，详细步骤见[启动指南](docs/development/coordinator-auth.md)。
 
 ### 体验桌面角色
 

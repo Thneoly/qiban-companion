@@ -27,7 +27,9 @@
     "coordinator": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/start.ps1",
     "coordinator:configure": "npm run coordinator -- -Configure",
     "coordinator:check": "npm run coordinator -- -Check",
-    "test:coordinator-launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/test-start.ps1"
+    "test:coordinator-launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/test-start.ps1",
+    "coordinator:configure:qq": "npm run coordinator -- -Configure -Provider qq",
+    "coordinator:configure:163": "npm run coordinator -- -Configure -Provider 163"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

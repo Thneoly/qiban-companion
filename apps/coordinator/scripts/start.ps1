@@ -2,6 +2,7 @@
 param(
     [switch]$Configure,
     [switch]$Check,
+    [ValidateSet('qq', '163')][string]$Provider,
     [string]$DataDirectory
 )
 
@@ -62,9 +63,43 @@ function Save-Configuration($Config, [string]$Path) {
     }
 }
 
-function Read-ConfigurationWizard {
+function New-MailboxConfiguration([string]$MailProvider, [string]$Mailbox, [Security.SecureString]$AuthorizationCode, $Existing) {
+    $address = $Mailbox.Trim().ToLowerInvariant()
+    $smtpHost = switch ($MailProvider) {
+        'qq' { 'smtp.qq.com' }
+        '163' { 'smtp.163.com' }
+        default { throw 'Unknown mailbox provider.' }
+    }
+    $domain = if ($MailProvider -eq 'qq') { 'qq.com' } else { '163.com' }
+    if ($address -notmatch ('^[a-z0-9._+%-]+@' + [regex]::Escape($domain) + '$')) {
+        throw "Use your @$domain mailbox for this preset. Other addresses can use npm run coordinator:configure."
+    }
+    $config = [pscustomobject]@{
+        Version = 1; Host = $smtpHost; Username = $address
+        Password = $AuthorizationCode; From = $address; Tls = 'tls'
+        Emails = $address; Port = 4318
+    }
+    if ($null -ne $Existing) {
+        $config.Emails = $Existing.Emails
+        $config.Port = $Existing.Port
+    }
+    Assert-Configuration $config
+    return $config
+}
+
+function Read-ConfigurationWizard($Existing) {
     Write-Host 'First-time setup / replace mail settings. Nothing is sent during setup.'
     Write-Host 'The SMTP password is hidden and saved encrypted for this Windows user.'
+    if ($Provider) {
+        Write-Host "Provider: $Provider. Enable SMTP in your mailbox settings and generate an authorization code first."
+        $mailbox = Read-Host 'Your full mailbox address'
+        $authorizationCode = Read-Host 'SMTP authorization code (NOT your login password)' -AsSecureString
+        $config = New-MailboxConfiguration $Provider $mailbox $authorizationCode $Existing
+        Write-Host 'Server, tls/465, username and sender are filled automatically. Previous SMTP credentials are replaced.'
+        if ($null -ne $Existing) { Write-Host 'Existing invited emails and local port are preserved. Account data and auth secret are unchanged.' }
+        else { Write-Host 'Your mailbox is the initial invited recipient. Local port is 4318.' }
+        return $config
+    }
     $smtpHost = (Read-Host 'SMTP hostname (e.g. smtp.example.com)').Trim()
     $defaultTls = Get-DefaultSmtpTls $smtpHost
     if ($defaultTls -eq 'tls') { Write-Host 'Cloudflare detected: use username api_token, API token as password, and tls (465).' }
@@ -117,6 +152,7 @@ function Assert-FreePort([int]$Port) {
 function Start-Coordinator {
     if ($env:OS -ne 'Windows_NT') { throw 'This launcher requires Windows. See the manual guide for other systems.' }
     if (!(Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'Rust/Cargo is missing. Install the Rust MSVC toolchain and C++ build tools first.' }
+    if ($Provider -and !$Configure) { throw '-Provider requires -Configure. Use npm run coordinator:configure:qq or coordinator:configure:163.' }
     if (!$DataDirectory) { $DataDirectory = Join-Path $workspace '.cache/coordinator' }
     $DataDirectory = [IO.Path]::GetFullPath($DataDirectory)
     $cacheRoot = [IO.Path]::GetFullPath((Join-Path $workspace '.cache'))
@@ -138,7 +174,12 @@ function Start-Coordinator {
     # This directory belongs only to the launcher; never point it at a desktop data directory.
     Protect-LocalDirectory $DataDirectory
     if ($Configure -or !(Test-Path -LiteralPath $configPath)) {
-        $config = Read-ConfigurationWizard
+        $existing = $null
+        if ($Provider -and (Test-Path -LiteralPath $configPath)) {
+            try { $existing = Import-Clixml -LiteralPath $configPath }
+            catch { throw 'Cannot read existing configuration. No settings were replaced.' }
+        }
+        $config = Read-ConfigurationWizard $existing
         Save-Configuration $config $configPath
     } else {
         try { $config = Import-Clixml -LiteralPath $configPath } catch { throw 'Cannot decrypt saved settings. Use the original Windows user or run npm run coordinator:configure.' }

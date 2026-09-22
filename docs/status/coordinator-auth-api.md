@@ -63,3 +63,9 @@ Cloudflare SMTP主机现在默认选择tls/465，拒绝不支持的starttls/587�
 - **补充测试（原M4）**：新增存储层"同nonce重放恢复/撤销后拒绝"、"每邮箱小时窗口满一小时重置"（此前reset分支从未被测试执行），HTTP层"同邮箱并发请求恰一个成功"；单次码并发测试改为验证同nonce收敛同一会话、异nonce拒绝。
 
 修订后验证：`cargo test --workspace --locked` 102项通过（协调8、领域13、宿主32+1忽略、存储49）；`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check`通过；`npm run test:coordinator-launcher -- -Smoke`（含预热构建与真实HTTP健康检查）通过。审查遗留未修项：受邀枚举的时延/状态码双通道与无来源IP限额（原M1/L1）——按既定边界保留为公网暴露前必做项；向导整体校验、端口错误分类、孤儿进程清理等low项未处理。Rust前端与桌面宿主未改动；`npm run check`与`verify:docs`在文档更新后复核通过（见下）。
+
+## QQ / 163测试邮箱切换入口（2026-09-23）
+
+按用户选择新增两种快捷配置命令，输入邮箱与SMTP授权码后自动设置服务器、tls/465、用户名与同地址发件人。沿用现有受邀收件人/端口，不复用旧供应商凭据，也不更换认证密钥或账号库。真实本机SMTP配置尚未替换，待用户在本机输入对应邮箱授权码；没有注册/购买服务、修改DNS或发送测试邮件。
+
+`npm run test:coordinator-launcher`已通过：新增验证QQ/163主机/加密/发件人、旧凭据替换、收件人与端口保留、密钥不变、首次默认值及域名不匹配拒绝。本轮`npm run check`（34项测试、类型检查、前端构建）、文档检查（47份文档/299个本地链接）与8条原型模拟流程也通过。Rust业务实现未修改。操作见[邮箱切换指南](../development/coordinator-auth.md)。

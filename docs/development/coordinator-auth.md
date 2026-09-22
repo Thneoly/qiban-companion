@@ -29,6 +29,33 @@ npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
 
 启动入口只对当前PowerShell子进程设置脚本执行策略，不改系统策略。实现见[启动脚本](../../apps/coordinator/scripts/start.ps1)，验证记录见[协调服务交付记录](../status/coordinator-auth-api.md)。
 
+## 换成QQ / 163邮箱测试
+
+先在自己的邮箱设置中启用SMTP服务并生成客户端授权码。这里填写的是SMTP授权码，不是网页登录密码，也不能复用Cloudflare API Token。
+
+停止当前协调服务，在仓库根目录按邮箱类型选择一个命令：
+
+```powershell
+npm run coordinator:configure:qq
+# 或者：
+npm run coordinator:configure:163
+```
+
+只需输入完整邮箱与授权码。预设自动填写：
+
+| 项目 | QQ邮箱 | 163邮箱 |
+|---|---|---|
+| SMTP主机 | smtp.qq.com | smtp.163.com |
+| 加密 | tls / 465 | tls / 465 |
+| 用户名与Sender Email | 你输入的@qq.com邮箱 | 你输入的@163.com邮箱 |
+| 密码 | 新输入的SMTP授权码 | 新输入的SMTP授权码 |
+
+预设仅接受对应的@qq.com或@163.com地址；Foxmail、126、企业邮箱或其他服务可继续使用通用 `npm run coordinator:configure` 手动配置。服务器参数参考[腾讯云官方SMTP配置表](https://intl.cloud.tencent.com/zh/document/product/1266/71700)。
+
+已有配置时保留受邀收件邮箱和本机端口；首次配置时将输入邮箱设为唯一受邀收件人，端口4318。新授权码仍通过Windows DPAPI保存，旧供应商密码不会被带入新服务。账号库与认证密钥不会迁移或清空；Cloudflare DNS和收信转发不需要为这次测试修改。发件地址将使用QQ/163邮箱，而不是原来的自定义域名地址。
+
+保存后运行 `npm run coordinator`。启动不发送邮件；仍需显式请求验证码，并使用受邀列表中的收件邮箱。没有输入新授权码前，仅代表切换入口已准备好，不能宣称实际配置已切换或发信已通过。
+
 ## Cloudflare发信排障
 
 Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固定为 `api_token`，密码使用具备 `Email Sending: Edit` 权限的API Token；发件域名须已加入Email Sending。它只支持隐式TLS/465，启动向导中必须选择 `tls`，不支持 `starttls`/587。[官方SMTP说明](https://developers.cloudflare.com/email-service/api/send-emails/smtp/)
