@@ -29,6 +29,33 @@ npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
 
 启动入口只对当前PowerShell子进程设置脚本执行策略，不改系统策略。实现见[启动脚本](../../apps/coordinator/scripts/start.ps1)，验证记录见[协调服务交付记录](../status/coordinator-auth-api.md)。
 
+## 邮箱登录：获取账号和伙伴ID
+
+保持协调服务运行，另开一个终端，在仓库根目录执行：
+
+```powershell
+npm run coordinator:login
+```
+
+按提示输入受邀邮箱，再输入邮件中的8位验证码（输入隐藏）。成功后只显示accountId和companionId，不再需要手工拼请求、保存challengeId或生成nonce。这两个ID是服务端分配的身份标识，不是登录凭据或配对码。
+
+[登录脚本](../../apps/coordinator/scripts/login.ps1)固化以下协议流程，未来手机Web仍调用同一组后端接口：
+
+1. 检查本机healthz，再请求一次 `/v1/auth/request-code`。
+2. 持有challengeId，并用系统随机数生成32字节nonce（base64url编码）。
+3. 输入验证码，提交challengeId、code、nonce到 `/v1/auth/verify-code`。
+4. 仅在内存中使用返回的accessToken调用 `/v1/me`，显示账号/伙伴ID。
+
+发邮件请求不会自动重试，因为响应丢失时邮件仍可能已发送。换取会话或查询身份遇到网络/5xx错误时最多自动重试一次，其中换会话始终保留同一challengeId、code和nonce。验证码错误/过期/被替换会明确提示，最多5轮输入，可输入q退出；过期后重新运行命令请求新验证码。遇到429按服务端冷却/小时限制等待，脚本不绕过限流。
+
+账号需在服务端受邀列表内。request-code返回成功表示请求已处理，不保证最终投递；不在受邀列表中的邮箱也返回challengeId，但不发信。
+
+脚本只连接127.0.0.1，拒绝HTTP跳转。默认只读取启动配置的端口字段，不解密SMTP凭据；手动启动使用其他端口时可运行 `npm run coordinator:login -- -Port 4321`。这是本机登录验证入口，不是手机客户端。
+
+验证码和会话令牌不输出、不写文件。当前命令退出后不提供凭据恢复；服务端会话仍按原来的24小时绝对期限/30分钟闲置期限失效，本命令未自动撤销它。重复登录使用新验证码，并由服务端保持稳定的账号/伙伴映射。
+
+可重复检查：`npm run test:coordinator-login`。脚本流程测试模拟输入/响应，另有3项本机HTTP夹具测试验证响应丢失恢复、429与跳转拒绝；不使用真实SMTP，也不绕过产品验证码。
+
 ## 换成QQ / 163邮箱测试
 
 先在自己的邮箱设置中启用SMTP服务并生成客户端授权码。这里填写的是SMTP授权码，不是网页登录密码，也不能复用Cloudflare API Token。
