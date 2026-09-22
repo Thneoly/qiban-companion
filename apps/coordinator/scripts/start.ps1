@@ -25,10 +25,19 @@ function Protect-LocalDirectory([string]$Path) {
     [IO.Directory]::SetAccessControl($Path, $acl)
 }
 
+function Get-DefaultSmtpTls([string]$SmtpHost) {
+    if ($SmtpHost.Trim().TrimEnd('.') -ieq 'smtp.mx.cloudflare.net') { return 'tls' }
+    return 'starttls'
+}
+
 function Assert-Configuration($Config) {
     if ($Config.Version -ne 1 -or $Config.Port -lt 1 -or $Config.Port -gt 65535) { throw 'Invalid configuration version or port.' }
     if ($Config.Tls -notin @('starttls', 'tls')) { throw 'SMTP TLS must be starttls or tls.' }
     if ([string]::IsNullOrWhiteSpace($Config.Host) -or $Config.Host -match '[\s/:]') { throw 'Enter an SMTP hostname without a URL or port.' }
+    if ((Get-DefaultSmtpTls $Config.Host) -eq 'tls') {
+        if ($Config.Tls -ne 'tls') { throw 'Cloudflare SMTP requires tls (465), not starttls (587). Run npm run coordinator:configure, then restart the service.' }
+        if ($Config.Username -cne 'api_token') { throw 'Cloudflare SMTP username must be the literal api_token; put the API token in the password field.' }
+    }
     if ([string]::IsNullOrWhiteSpace($Config.Username)) { throw 'SMTP username is required.' }
     if ($Config.Password -isnot [Security.SecureString] -or $Config.Password.Length -eq 0) { throw 'SMTP password is required.' }
     try { $null = [Net.Mail.MailAddress]::new($Config.From) } catch { throw 'Invalid sender mailbox.' }
@@ -56,17 +65,20 @@ function Save-Configuration($Config, [string]$Path) {
 function Read-ConfigurationWizard {
     Write-Host 'First-time setup / replace mail settings. Nothing is sent during setup.'
     Write-Host 'The SMTP password is hidden and saved encrypted for this Windows user.'
+    $smtpHost = (Read-Host 'SMTP hostname (e.g. smtp.example.com)').Trim()
+    $defaultTls = Get-DefaultSmtpTls $smtpHost
+    if ($defaultTls -eq 'tls') { Write-Host 'Cloudflare detected: use username api_token, API token as password, and tls (465).' }
     $config = [pscustomobject]@{
         Version = 1
-        Host = (Read-Host 'SMTP hostname (e.g. smtp.example.com)').Trim()
+        Host = $smtpHost
         Username = (Read-Host 'SMTP username').Trim()
         Password = (Read-Host 'SMTP password / app password' -AsSecureString)
         From = (Read-Host 'Sender email').Trim()
         Emails = (Read-Host 'Invited emails (comma-separated)').Trim()
-        Tls = (Read-Host 'TLS mode: starttls=587, tls=465 [starttls]').Trim().ToLowerInvariant()
+        Tls = (Read-Host "TLS mode: starttls=587, tls=465 [$defaultTls]").Trim().ToLowerInvariant()
         Port = 4318
     }
-    if (!$config.Tls) { $config.Tls = 'starttls' }
+    if (!$config.Tls) { $config.Tls = $defaultTls }
     $port = (Read-Host 'Local service port [4318]').Trim()
     if ($port) { $config.Port = [int]$port }
     Assert-Configuration $config

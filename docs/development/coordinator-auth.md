@@ -12,7 +12,7 @@ npm run coordinator
 
 也可以直接双击 [apps/coordinator/start.cmd](../../apps/coordinator/start.cmd)。两种入口使用同一份配置。需要已安装Rust/MSVC与Windows C++构建工具；首次构建可能下载依赖。单独启动此后端不需要先执行npm ci。
 
-首次按提示填写SMTP主机、用户名、密码/应用授权码、发件邮箱和受邀邮箱。TLS默认为starttls/587，可选tls/465；本机端口默认4318。SMTP资料需要来自你自己的邮箱服务商，脚本不自动申请账号。下次启动无需再填写。
+首次按提示填写SMTP主机、用户名、密码/应用授权码、发件邮箱和受邀邮箱。普通SMTP的TLS默认starttls/587，可选tls/465；识别到Cloudflare主机时默认tls/465，并校验用户名为api_token。本机端口默认4318。SMTP资料需要来自你自己的邮箱服务商，脚本不自动申请账号。下次启动无需再填写。
 
 脚本自动建立独立账号库、生成并保留认证密钥、检查端口、增量构建并前台启动。看到服务监听提示后可访问 `http://127.0.0.1:4318/healthz` 检查进程，按Ctrl+C停止；它是API后端，当前没有手机页面。启动不会发邮件。
 
@@ -28,6 +28,20 @@ npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
 此前手动配置使用的 `.cache/coordinator-accounts.db` 和 `.cache/qiban-auth-secret` 不会自动导入。若已有真实数据，继续使用下方手动入口，或在停止服务并备份后迁移；不要把桌面数据库移入账号库。
 
 启动入口只对当前PowerShell子进程设置脚本执行策略，不改系统策略。实现见[启动脚本](../../apps/coordinator/scripts/start.ps1)，验证记录见[协调服务交付记录](../status/coordinator-auth-api.md)。
+
+## Cloudflare发信排障
+
+Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固定为 `api_token`，密码使用具备 `Email Sending: Edit` 权限的API Token；发件域名须已加入Email Sending。它只支持隐式TLS/465，启动向导中必须选择 `tls`，不支持 `starttls`/587。[官方SMTP说明](https://developers.cloudflare.com/email-service/api/send-emails/smtp/)
+
+向导会为该主机选择正确默认值，并在保存/读取配置时拒绝错误TLS模式或用户名。配置修改后必须停止旧服务，再执行 `npm run coordinator`；正在运行的进程不会自动重载文件。
+
+没有发送记录时先区分三个阶段：
+
+- 未进入SMTP：邮箱不在受邀列表时，接口仍返回challengeId，但不会发信；还需检查接口是否返回429/503。
+- 连接失败：DNS、网络代理、465连通性或TLS握手问题可能发生在SMTP认证之前。进程healthz正常、Token active都不代表邮件连接成功。
+- SMTP已接收：再核对Cloudflare投递/抑制日志以及收件箱、垃圾箱。
+
+如果本机域名被网络代理解析为虚拟IP，且TLS握手提前断开，需核查代理的SMTP/465出站规则或换一条可用网络路径；不能仅凭虚拟IP断言代理就是根因。不要关闭证书验证来绕过错误。
 
 ## 运行边界
 

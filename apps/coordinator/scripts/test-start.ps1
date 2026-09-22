@@ -52,6 +52,19 @@ try {
     [IO.File]::WriteAllText($secretPath, $original)
     Write-Host 'PASS: invalid configuration and secret fail without replacing saved data'
 
+    Assert-True ((Get-DefaultSmtpTls 'SMTP.MX.CLOUDFLARE.NET.') -eq 'tls') 'Cloudflare TLS default is incorrect.'
+    Assert-True ((Get-DefaultSmtpTls 'smtp.example.invalid') -eq 'starttls') 'Generic SMTP default changed.'
+    $config.Host = 'smtp.mx.cloudflare.net'
+    $config.Username = 'api_token'
+    $config.Tls = 'starttls'
+    Assert-Rejected { Save-Configuration $config $configPath } 'Cloudflare accepted unsupported STARTTLS.'
+    $config.Tls = 'tls'
+    Assert-Configuration $config
+    $config.Username = 'API_TOKEN'
+    Assert-Rejected { Assert-Configuration $config } 'Cloudflare accepted an invalid username.'
+    Assert-True ((Import-Clixml -LiteralPath $configPath).Host -eq 'updated.example.invalid') 'Rejected Cloudflare settings overwrote saved configuration.'
+    Write-Host 'PASS: Cloudflare implicit TLS and exact username requirements'
+
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Server.ExclusiveAddressUse = $true
     $listener.Start()
