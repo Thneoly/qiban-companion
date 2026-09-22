@@ -28,6 +28,14 @@ npm run dev         # 浏览器预览：http://127.0.0.1:1420
 npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 ```
 
+账号协调后端另有一键入口（首次引导填写SMTP，之后复用本机配置）：
+
+```powershell
+npm run coordinator
+```
+
+也可双击 [apps/coordinator/start.cmd](apps/coordinator/start.cmd)。这是手机接续所需的后端API，当前没有手机页面。修改配置用 `npm run coordinator:configure`，详细步骤见[启动指南](docs/development/coordinator-auth.md)。
+
 ### 体验桌面角色
 
 构建后可直接运行：

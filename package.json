@@ -23,7 +23,11 @@
     "test:browser": "npm run test:browser --workspace @companion/desktop",
     "verify:docs": "node scripts/verification/verify-docs.cjs && node scripts/verification/verify-plan.cjs",
     "verify:prototype": "node scripts/verification/verify-prototype.cjs",
-    "build:installer": "npm run build:installer --workspace @companion/desktop --"
+    "build:installer": "npm run build:installer --workspace @companion/desktop --",
+    "coordinator": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/start.ps1",
+    "coordinator:configure": "npm run coordinator -- -Configure",
+    "coordinator:check": "npm run coordinator -- -Check",
+    "test:coordinator-launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/test-start.ps1"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

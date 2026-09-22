@@ -2,6 +2,33 @@
 
 栖伴自行管理账号、邮箱验证码和会话，不需要托管身份平台。手机首发采用Web；当前交付协调HTTP服务，尚无手机登录页面或设备配对。实现证据见[交付记录](../status/coordinator-auth-api.md)。
 
+## 一键启动（Windows，推荐）
+
+在仓库根目录运行：
+
+```powershell
+npm run coordinator
+```
+
+也可以直接双击 [apps/coordinator/start.cmd](../../apps/coordinator/start.cmd)。两种入口使用同一份配置。需要已安装Rust/MSVC与Windows C++构建工具；首次构建可能下载依赖。单独启动此后端不需要先执行npm ci。
+
+首次按提示填写SMTP主机、用户名、密码/应用授权码、发件邮箱和受邀邮箱。TLS默认为starttls/587，可选tls/465；本机端口默认4318。SMTP资料需要来自你自己的邮箱服务商，脚本不自动申请账号。下次启动无需再填写。
+
+脚本自动建立独立账号库、生成并保留认证密钥、检查端口、增量构建并前台启动。看到服务监听提示后可访问 `http://127.0.0.1:4318/healthz` 检查进程，按Ctrl+C停止；它是API后端，当前没有手机页面。启动不会发邮件。
+
+```powershell
+npm run coordinator:configure  # 修改邮件/受邀邮箱/端口，保存后退出
+npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
+```
+
+`check`不编译，也不验证SMTP连接/送达。端口占用会提示处理，不终止已有进程；正常启动会再次检查端口。配置损坏时明确报错，不自动清空数据。
+
+配置保存在被Git忽略的 `.cache/coordinator/`，目录仅授权当前Windows用户和SYSTEM访问。SMTP密码通过Windows DPAPI加密写入 `settings.clixml`，只能由同一Windows用户/设备解密；启动时仅向服务进程传入明文密码。`auth-secret`是受目录权限保护的认证密钥文件，`accounts.db`是账号库，两者不是加密数据库。重新配置邮件不会更换密钥或删除账号库。不要清理此目录；换设备后需重新配置SMTP并单独迁移账号库和认证密钥。
+
+此前手动配置使用的 `.cache/coordinator-accounts.db` 和 `.cache/qiban-auth-secret` 不会自动导入。若已有真实数据，继续使用下方手动入口，或在停止服务并备份后迁移；不要把桌面数据库移入账号库。
+
+启动入口只对当前PowerShell子进程设置脚本执行策略，不改系统策略。实现见[启动脚本](../../apps/coordinator/scripts/start.ps1)，验证记录见[协调服务交付记录](../status/coordinator-auth-api.md)。
+
 ## 运行边界
 
 服务使用Rust/Axum和独立SQLite账号库，只监听127.0.0.1。邮件通过支持TLS的SMTP服务发送，认证状态由栖伴保管。生产HTTPS、反向代理、账号/IP滥用防护、监测、备份和PostgreSQL业务库属于T43，当前不可直接公开试用。
@@ -14,7 +41,7 @@ SMTP成功仅代表中继服务器确认接收，不保证进入收件箱。发�
 
 会话使用操作系统随机数生成的256位不透明令牌，仅首次登录返回明文，数据库只保存SHA-256摘要。最长24小时、闲置30分钟失效；当前不提供刷新令牌，失效后重新验证邮箱。读取会话会更新活动时间，绝对到期不延长。单会话退出与全部退出立即写入服务端状态；全部退出同时作废该账号未用验证码。账号、会话和待办在同一SQLite事务域核验，失效身份不能继续读写。
 
-## 本机配置
+## 手动本机配置（可选）
 
 从仓库根目录使用独立数据库，不指向桌面的companion.db/chat-history.db/executions.db。新账号库为schema v2；本增量会将既有协调账号库v1事务迁移到v2并保留账号、伙伴及任务。
 

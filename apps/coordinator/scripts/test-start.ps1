@@ -1,0 +1,103 @@
+param([switch]$Smoke)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot/start.ps1"
+
+function Assert-True($Value, [string]$Message) {
+    if (!$Value) { throw $Message }
+}
+function Assert-Rejected([scriptblock]$Action, [string]$Message) {
+    $rejected = $false
+    try { & $Action } catch { $rejected = $true }
+    Assert-True $rejected $Message
+}
+
+$testDirectory = Join-Path $workspace ('.cache/launcher-test-' + [Guid]::NewGuid().ToString('N'))
+Protect-LocalDirectory $testDirectory
+$configPath = Join-Path $testDirectory 'settings.clixml'
+$secretPath = Join-Path $testDirectory 'auth-secret'
+$config = [pscustomobject]@{
+    Version = 1; Host = 'smtp.example.invalid'; Username = 'test'
+    Password = (ConvertTo-SecureString 'fixture-password-not-real' -AsPlainText -Force)
+    From = 'test@example.invalid'; Emails = 'one@example.invalid,two@example.invalid'
+    Tls = 'starttls'; Port = 4318
+}
+try {
+    Save-Configuration $config $configPath
+    $loaded = Import-Clixml -LiteralPath $configPath
+    Assert-Configuration $loaded
+    Assert-True ([Net.NetworkCredential]::new('', $loaded.Password).Password -eq 'fixture-password-not-real') 'DPAPI round trip failed.'
+    Assert-True (![IO.File]::ReadAllText($configPath).Contains('fixture-password-not-real')) 'Password was persisted in plaintext.'
+    $acl = Get-Acl -LiteralPath $testDirectory
+    Assert-True $acl.AreAccessRulesProtected 'Private directory inherited permissions.'
+    Assert-True ($acl.Access.Count -eq 2) 'Unexpected private directory access entries.'
+    Write-Host 'PASS: protected configuration and DPAPI round trip'
+
+    Initialize-AuthSecret $secretPath
+    $original = [IO.File]::ReadAllText($secretPath)
+    Initialize-AuthSecret $secretPath
+    Assert-True ($original -ceq [IO.File]::ReadAllText($secretPath)) 'Existing secret changed.'
+    Assert-True ([Convert]::FromBase64String($original).Length -eq 32) 'Invalid generated secret size.'
+    $config.Host = 'updated.example.invalid'
+    Save-Configuration $config $configPath
+    Assert-True ($original -ceq [IO.File]::ReadAllText($secretPath)) 'Reconfiguration rotated the secret.'
+    Write-Host 'PASS: repeat setup preserves identity secret'
+
+    $config.Tls = 'plain'
+    Assert-Rejected { Save-Configuration $config $configPath } 'Plaintext SMTP was accepted.'
+    Assert-True ((Import-Clixml -LiteralPath $configPath).Tls -eq 'starttls') 'Invalid settings replaced saved configuration.'
+    [IO.File]::WriteAllText($secretPath, 'invalid-secret')
+    Assert-Rejected { Initialize-AuthSecret $secretPath } 'Malformed secret was accepted.'
+    Assert-True ([IO.File]::ReadAllText($secretPath) -eq 'invalid-secret') 'Malformed secret was overwritten.'
+    [IO.File]::WriteAllText($secretPath, $original)
+    Write-Host 'PASS: invalid configuration and secret fail without replacing saved data'
+
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Server.ExclusiveAddressUse = $true
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    try { Assert-Rejected { Assert-FreePort $port } 'Occupied port was accepted.' }
+    finally { $listener.Stop() }
+    Assert-FreePort $port
+    $loaded.Port = $port
+    Save-Configuration $loaded $configPath
+    Write-Host 'PASS: occupied port detection'
+
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/start.ps1" -Check -DataDirectory $testDirectory
+    Assert-True ($LASTEXITCODE -eq 0) 'Saved-settings check failed.'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/start.ps1" -Check -DataDirectory (Join-Path $testDirectory 'missing')
+    Assert-True ($LASTEXITCODE -eq 1) 'Missing settings did not fail without prompting.'
+    Assert-True (!(Test-Path -LiteralPath (Join-Path $testDirectory 'missing'))) 'Check created missing configuration.'
+    Write-Host 'PASS: noninteractive checks and missing configuration'
+    if ($Smoke) {
+        $process = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSScriptRoot/start.ps1`"", '-DataDirectory', "`"$testDirectory`"") -RedirectStandardOutput (Join-Path $testDirectory 'stdout.log') -RedirectStandardError (Join-Path $testDirectory 'stderr.log')
+        try {
+            $ready = $false
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            while ([DateTime]::UtcNow -lt $deadline -and !$process.HasExited) {
+                try {
+                    $health = Invoke-RestMethod "http://127.0.0.1:$port/healthz" -TimeoutSec 1
+                    if ($health.status -eq 'ok') { $ready = $true; break }
+                } catch { Start-Sleep -Milliseconds 250 }
+                $process.Refresh()
+            }
+            Assert-True $ready 'Real coordinator did not become healthy within 60 seconds.'
+            Assert-True (Test-Path -LiteralPath (Join-Path $testDirectory 'accounts.db')) 'Dedicated database was not created.'
+            Assert-True ($original -ceq [IO.File]::ReadAllText($secretPath)) 'Startup changed the secret.'
+            Write-Host 'PASS: actual launcher build/start and HTTP health (no SMTP requests)'
+        } finally {
+            # Stop only this test process and its direct coordinator child, never an existing service.
+            Get-CimInstance Win32_Process -Filter "ParentProcessId = $($process.Id)" | Where-Object { $_.Name -eq 'companion-coordinator.exe' } | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+            if (!$process.WaitForExit(5000)) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }
+            $process.Dispose()
+        }
+    }
+    Write-Host 'Launcher checks passed. No email sent.'
+} finally {
+    # Only exact files created by this test are removed; no recursive cleanup.
+    $files = @($configPath, $secretPath) + @('accounts.db', 'accounts.db-shm', 'accounts.db-wal', 'stdout.log', 'stderr.log' | ForEach-Object { Join-Path $testDirectory $_ })
+    foreach ($file in $files) {
+        if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
+    }
+    [IO.Directory]::Delete($testDirectory)
+}
