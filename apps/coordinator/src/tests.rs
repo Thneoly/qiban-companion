@@ -40,6 +40,52 @@ struct Fixture {
     path: std::path::PathBuf,
     mail: Arc<TestMail>,
 }
+
+// Explicit opt-in only: a real HTTP/SQLite/auth chain with an in-memory mail sink.
+// This route and mail access are compiled solely into the Rust test executable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires built mobile Web and local Microsoft Edge; npm run test:mobile:integration"]
+async fn mobile_web_browser_integration() {
+    let fixture = Fixture::new();
+    let mail = fixture.mail.clone();
+    let app = fixture.app().route(
+        "/__test/code/{email}",
+        get(move |Path(email): Path<String>| {
+            let mail = mail.clone();
+            async move {
+                let sent = mail.sent.lock().unwrap();
+                let code = sent
+                    .iter()
+                    .rev()
+                    .find(|(to, _)| to == &email)
+                    .map(|(_, code)| code.clone());
+                Json(json!({"code": code}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("node")
+            .arg("apps/mobile-web/tests/browser/continuity.mjs")
+            .current_dir(workspace)
+            .env("QIBAN_TEST_UPSTREAM", format!("http://{address}"))
+            .status()
+            .expect("Node is required for the mobile integration test")
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+    assert!(status.success(), "mobile browser integration failed");
+}
 impl Fixture {
     fn new() -> Self {
         Self {
