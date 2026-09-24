@@ -6,6 +6,13 @@
     "main"
   ],
   "permissions": [
+    "allow-account-snapshot",
+    "allow-account-port-save",
+    "allow-account-code-request",
+    "allow-account-login",
+    "allow-account-task-create",
+    "allow-account-task-cancel",
+    "allow-account-logout",
     "allow-voice-probe",
     "allow-voice-cancel",
     "allow-voice-key-set",

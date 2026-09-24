@@ -1,0 +1,200 @@
+import { test, expect } from "@playwright/test";
+
+test("preview never offers real account credential access", async ({
+  page,
+}) => {
+  await page.goto("/?view=panel");
+  await expect(
+    page.getByRole("button", { name: "获取登录验证码", exact: true }),
+  ).toBeDisabled();
+  await expect(page.locator(".account-notice")).toContainText(
+    "浏览器预览不读写系统凭据",
+  );
+});
+
+test("native account UI separates local data, deduplicates retry and clears late responses after logout", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    Object.defineProperty(window, "isTauri", { value: true });
+    Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+      value: { unregisterListener: () => {} },
+    });
+    let authenticated = false;
+    let pendingLogout = false;
+    let failedOnce = false;
+    const tasks: any[] = [];
+    const requestIds = new Map();
+    const snapshot = () => ({
+      port: 4318,
+      status: pendingLogout
+        ? "logout_pending"
+        : authenticated
+          ? "authenticated"
+          : "signed_out",
+      profile: authenticated
+        ? {
+            accountId: "ea80aff6-a661-49d2-8175-74ec3c67dc21",
+            companionId: "e8b6c3d9-694f-4b13-86f7-2bd8c7b9cd6d",
+          }
+        : null,
+      tasks: authenticated ? structuredClone(tasks) : [],
+    });
+    w.holdSnapshot = false;
+    w.offlineLogout = false;
+    w.requests = [];
+    w.finishRevocation = () => {
+      pendingLogout = false;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {
+        transformCallback: () => 1,
+        unregisterCallback: () => {},
+        invoke: async (cmd: string, args: any) => {
+          if (cmd === "get_runtime_info")
+            return {
+              protocolVersion: 2,
+              appVersion: "test",
+              runtime: "desktop",
+              persistence: "sqlite",
+              executorAvailable: true,
+            };
+          if (cmd === "list_tasks")
+            return [
+              {
+                id: "local",
+                title: "只存在本机的手记",
+                status: "queued",
+                createdAt: 1,
+                updatedAt: 1,
+                revision: 0,
+              },
+            ];
+          if (cmd === "model_settings_get")
+            return {
+              baseUrl: "https://example.com/v1",
+              model: "test",
+              useApiKey: false,
+              hasApiKey: false,
+              maxOutputTokens: 1024,
+            };
+          if (cmd === "account_snapshot") {
+            const value = snapshot();
+            if (w.holdSnapshot) {
+              w.holdSnapshot = false;
+              return new Promise((resolve) => {
+                w.deliverOldSnapshot = () => resolve(value);
+              });
+            }
+            return value;
+          }
+          if (cmd === "account_code_request") return;
+          if (cmd === "account_login") {
+            if (args.code !== "12345678")
+              throw { code: "invalid_code", message: "验证码无效或已过期" };
+            authenticated = true;
+            return snapshot();
+          }
+          if (cmd === "account_task_create") {
+            w.requests.push(args.requestId);
+            if (!requestIds.has(args.requestId)) {
+              const task = {
+                id: crypto.randomUUID(),
+                title: args.title,
+                status: "queued",
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                revision: 0,
+              };
+              requestIds.set(args.requestId, task);
+              tasks.push(task);
+            }
+            if (!failedOnce) {
+              failedOnce = true;
+              throw {
+                code: "unavailable",
+                message: "操作结果尚未确认，请重试",
+              };
+            }
+            return requestIds.get(args.requestId);
+          }
+          if (cmd === "account_task_cancel") {
+            const task = tasks.find((t) => t.id === args.id);
+            task.status = "cancelled";
+            task.revision++;
+            return task;
+          }
+          if (cmd === "account_logout") {
+            authenticated = false;
+            pendingLogout = w.offlineLogout;
+            return snapshot();
+          }
+          return 1;
+        },
+      },
+    });
+  });
+  await page.goto("/?view=panel");
+  const panel = page.locator(".account-panel");
+  await page.getByLabel("账号邮箱", { exact: true }).fill("alice@example.com");
+  await page
+    .getByRole("button", { name: "获取登录验证码", exact: true })
+    .click();
+  await page.getByLabel("8 位登录验证码", { exact: true }).fill("00000000");
+  await page
+    .getByRole("button", { name: "登录并接续伙伴", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText("验证码无效");
+  await page.getByLabel("8 位登录验证码", { exact: true }).fill("12345678");
+  await page
+    .getByRole("button", { name: "登录并接续伙伴", exact: true })
+    .click();
+  await expect(page.getByTestId("desktop-companion-id")).toHaveText(
+    "e8b6c3d9-694f-4b13-86f7-2bd8c7b9cd6d",
+  );
+  await expect(panel).not.toContainText("只存在本机的手记");
+  await expect(page.locator(".task-panel")).toContainText("只存在本机的手记");
+  await page
+    .getByLabel("新增共享待办", { exact: true })
+    .fill("手机也能看到的事");
+  await page.getByRole("button", { name: "保存共享待办", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("操作结果尚未确认");
+  await page.getByRole("button", { name: "保存共享待办", exact: true }).click();
+  await expect(panel.locator(".account-tasks li")).toHaveCount(1);
+  const ids = await page.evaluate(() => (window as any).requests);
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).toBe(ids[1]);
+  await page.screenshot({
+    path: "test-results/desktop-account.png",
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", {
+      name: "取消共享待办：手机也能看到的事",
+      exact: true,
+    })
+    .click();
+  await expect(panel.locator(".account-tasks")).toContainText("已取消");
+  await page.evaluate(() => {
+    (window as any).holdSnapshot = true;
+    (window as any).offlineLogout = true;
+  });
+  await page.getByRole("button", { name: "刷新账号", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => typeof (window as any).deliverOldSnapshot))
+    .toBe("function");
+  await page
+    .getByRole("button", { name: "退出此桌面会话", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText("服务端撤销待连接恢复");
+  await page.evaluate(() => (window as any).deliverOldSnapshot());
+  await expect(panel.locator(".account-tasks li")).toHaveCount(0);
+  await expect(page.getByTestId("desktop-companion-id")).toHaveCount(0);
+  await expect(page.locator(".task-panel")).toContainText("只存在本机的手记");
+  await page.evaluate(() => (window as any).finishRevocation());
+  await page
+    .getByRole("button", { name: "重试服务端撤销", exact: true })
+    .click();
+  await expect(page.getByLabel("账号邮箱", { exact: true })).toBeVisible();
+});

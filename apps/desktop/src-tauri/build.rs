@@ -1,5 +1,12 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "account_snapshot",
+        "account_port_save",
+        "account_code_request",
+        "account_login",
+        "account_task_create",
+        "account_task_cancel",
+        "account_logout",
         "chat_context_preview",
         "memory_policy_set",
         "memory_list",

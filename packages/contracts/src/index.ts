@@ -4,6 +4,7 @@ export * from './memory-context';
 export const PROTOCOL_VERSION = 2;
 export * from './memory';
 export * from './execution';
+export * from './account';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
 export interface Task {

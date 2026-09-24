@@ -1,3 +1,5 @@
+mod account;
+mod account_vault;
 mod chat;
 mod commands;
 mod credentials;
@@ -39,6 +41,10 @@ pub fn run() {
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
             app.manage(execution::ExecutionState::open(&data_dir)?);
+            app.manage(
+                account::open_state(&data_dir.join("account-settings.db"))
+                    .map_err(|e| e.message)?,
+            );
             app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(
                 &data_dir.join("model-settings.db"),
             )?));
@@ -86,6 +92,13 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            account::account_snapshot,
+            account::account_port_save,
+            account::account_code_request,
+            account::account_login,
+            account::account_task_create,
+            account::account_task_cancel,
+            account::account_logout,
             memory_context::chat_context_preview,
             memory_context::memory_policy_set,
             memory::memory_list,

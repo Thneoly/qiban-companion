@@ -12,13 +12,15 @@ account_id 表示数据归属，companion_id 表示稳定伙伴，device_id 表�
 
 ## 配对与授权
 
-已落地[账号隔离基础](../status/account-isolation-foundation.md)及[自有账号协调接口](../status/coordinator-auth-api.md)。接口仅用于本机联调，真实邮件投递、登录页面和部署尚待验收，不能直接启用远程执行。
+已落地[账号隔离基础](../status/account-isolation-foundation.md)及[自有账号协调接口](../status/coordinator-auth-api.md)。当前自有协调服务使用 SQLite，并提供[手机 Web 同源网关与 HTTPS 隧道](../status/mobile-web.md)，用户已确认真实邮件和手机首轮可用；[原生桌面账号模块](../status/desktop-account.md)接入同一回环 HTTP 服务。正式部署和远程执行尚未实现。
 
 依用户2026-09-22选择，T41改为自有邮箱验证码与服务端会话；设备分别持有可撤销会话。已登录电脑发起短时、一次性的配对请求，绑定账号、设备和权限范围；手机登录、扫码、核对设备及确认信息后绑定。二维码不携带长期令牌或模型 Key。每次 API 访问由服务端推导用户并核对 owner，不能信任客户端传入的 account_id。
 
 配对只是设备身份。查看、交办、确认、访问资源和记忆管理分别授权。确认绑定 action_id、参数摘要、资源版本、授权版本、有效期；内容变化重新确认。服务端动作准入与撤销顺序可判定，执行端在副作用前检查准入凭据。撤销后拒绝新准入；已准入动作按在途处理，执行中取消必须等待核对，不承诺即时回滚。设备丢失可单独撤销，也要覆盖排队消息与旧凭据重放。
 
 协议选择参考 [RFC 8628](https://www.rfc-editor.org/info/rfc8628/) 与跨设备威胁指南 [RFC 10027](https://www.rfc-editor.org/rfc/rfc10027.html)；仅照搬二维码界面不足以建立授权安全性。
+
+桌面通过 `SessionVault` 屏蔽系统安全存储差异，当前只有 Windows 适配。每个设备独立登录和撤销，跨系统不复制长期会话令牌；同一伙伴由服务端稳定映射保证。原生 HTTP 客户端当前只允许本机回环端口并禁用重定向/代理。离线退出先持久化撤销意图，重开优先完成撤销，不能重新展示旧身份。详见[运行与存储边界](../development/desktop-account.md)。
 
 ## 执行与断线
 

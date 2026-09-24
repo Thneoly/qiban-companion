@@ -2,11 +2,11 @@
 
 React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“栖伴／栖栖”作为开发名称。产品、设计、计划与验证资料统一进入[文档中心](docs/README.md)。
 
-当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**普通待办只记录，不自动执行；新增受限文档摘录任务，需选定文件、预览并确认保存。** 已加入可配置的 Chat Completions 本机多轮对话与本地 Live2D 模型导入；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、账号、手机控制、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
+当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**普通待办只记录，不自动执行；新增受限文档摘录任务，需选定文件、预览并确认保存。** 已加入可配置的 Chat Completions 本机多轮对话与本地 Live2D 模型导入；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、手机远程执行、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
 
 有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，[M3分模型许可、预览与受控注入](docs/status/memory-model-context.md)也已实现。M4的[本地Q6验收包](docs/status/memory-q6-local.md)已通过50例发送边界和20例删除竞争测试，真实模型质量及独立体验待补，M4尚未整体准出。最新记忆增量见[模型使用记录](docs/status/memory-model-context.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
 
-已新增[T41/T42账号隔离基础](docs/status/account-isolation-foundation.md)：认证适配器边界、账号/伙伴稳定映射、账号内待办及会话撤销的Rust基础与测试。已接续[自有账号与协调HTTP接口](docs/status/coordinator-auth-api.md)，用户已确认真实邮件验证码和账号/伙伴查询成功；已加入本机登录命令及[手机 Web 登录与共享待办](docs/status/mobile-web.md)，原生桌面账号接入仍待实现。首发手机入口已确定为[手机Web](docs/architecture/mobile-client-strategy.md)。
+已新增[T41/T42账号隔离基础](docs/status/account-isolation-foundation.md)：认证适配器边界、账号/伙伴稳定映射、账号内待办及会话撤销的Rust基础与测试。已接续[自有账号与协调HTTP接口](docs/status/coordinator-auth-api.md)，用户已确认真实邮件验证码和账号/伙伴查询成功；已加入本机登录命令及[手机 Web 登录与共享待办](docs/status/mobile-web.md)，已加入[原生桌面账号与共享待办](docs/status/desktop-account.md)：邮箱登录、安全会话保存、重开恢复及退出，真实桌面界面与手机的人工联合验收待补。首发手机入口已确定为[手机Web](docs/architecture/mobile-client-strategy.md)。
 
 已新增[T16本地文档执行台账](docs/status/local-document-execution.md)：任务面板的“文档任务”可生成摘录预览、确认创建草稿、核对产物与重开恢复。它是[手机接续](docs/architecture/device-continuity.md)的执行前置，不代表手机已能触发本地执行。
 
@@ -36,7 +36,9 @@ npm run coordinator
 
 也可双击 [apps/coordinator/start.cmd](apps/coordinator/start.cmd)。这是手机接续所需的后端 API。另开终端运行 `npm run mobile:https` 启动手机网页与 HTTPS 联调入口，详见[手机 Web 指南](docs/development/mobile-web.md)。修改配置用 `npm run coordinator:configure`；QQ/163快捷切换用 `npm run coordinator:configure:qq` / `npm run coordinator:configure:163`，详细步骤见[启动指南](docs/development/coordinator-auth.md)。
 
-服务启动后，另开终端运行 `npm run coordinator:login`，按提示输入受邀邮箱和验证码，即可显示账号与伙伴ID。命令自动完成验证码请求、nonce生成和身份查询，令牌不打印或保存。
+原生桌面从角色的「任务面板」→「账号与共享待办」登录，步骤见[桌面接续指南](docs/development/desktop-account.md)。
+
+服务启动后，也可另开终端运行 `npm run coordinator:login`，按提示输入受邀邮箱和验证码，即可显示账号与伙伴ID。命令自动完成验证码请求、nonce生成和身份查询，令牌不打印或保存。
 
 ### 体验桌面角色
 
@@ -101,6 +103,7 @@ Rust工作区与npm工作区分开，保留 `Cargo.lock` 和 `package-lock.json`
 
 ```powershell
 npm run check             # TS、Vitest、前端生产构建
+npm run test:desktop-account # 原生账号模块、Windows凭据与手机Web集成（测试邮箱）
 npm run test:browser      # 使用本机Edge，无需下载另一套浏览器
 npm run verify:docs       # 文档链接、目录约定及计划人日核对
 npm run verify:prototype  # 独立验证早期研究原型
