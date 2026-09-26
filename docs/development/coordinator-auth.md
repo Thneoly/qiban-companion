@@ -2,6 +2,101 @@
 
 栖伴自行管理账号、邮箱验证码和会话，不需要托管身份平台。手机首发采用Web；当前交付协调HTTP服务，尚无手机登录页面或设备配对。实现证据见[交付记录](../status/coordinator-auth-api.md)。
 
+## 一键启动（Windows，推荐）
+
+在仓库根目录运行：
+
+```powershell
+npm run coordinator
+```
+
+也可以直接双击 [apps/coordinator/start.cmd](../../apps/coordinator/start.cmd)。两种入口使用同一份配置。需要已安装Rust/MSVC与Windows C++构建工具；首次构建可能下载依赖。单独启动此后端不需要先执行npm ci。
+
+首次按提示填写SMTP主机、用户名、密码/应用授权码、发件邮箱和受邀邮箱。普通SMTP的TLS默认starttls/587，可选tls/465；识别到Cloudflare主机时默认tls/465，并校验用户名为api_token。本机端口默认4318。SMTP资料需要来自你自己的邮箱服务商，脚本不自动申请账号。下次启动无需再填写。
+
+脚本自动建立独立账号库、生成并保留认证密钥、检查端口、增量构建并前台启动。看到服务监听提示后可访问 `http://127.0.0.1:4318/healthz` 检查进程，按Ctrl+C停止；它是 API 后端；手机网页另开终端运行 `npm run mobile:https`，见[手机 Web 指南](mobile-web.md)。启动不会发邮件。
+
+```powershell
+npm run coordinator:configure  # 修改邮件/受邀邮箱/端口，保存后退出
+npm run coordinator:check      # 无交互检查配置、密钥、Cargo和端口
+```
+
+`check`不编译，也不验证SMTP连接/送达。端口占用会提示处理，不终止已有进程；正常启动会再次检查端口。配置损坏时明确报错，不自动清空数据。
+
+配置保存在被Git忽略的 `.cache/coordinator/`，目录仅授权当前Windows用户和SYSTEM访问。SMTP密码通过Windows DPAPI加密写入 `settings.clixml`，只能由同一Windows用户/设备解密；启动时以进程环境变量把明文密码传给启动器及其子进程（构建在注入前完成，命令行参数不出现密码，但运行中的启动器进程环境可被同账户管理员读取）。`auth-secret`是受目录权限保护的认证密钥文件，`accounts.db`是账号库，两者不是加密数据库。重新配置邮件不会更换密钥或删除账号库。不要清理此目录；换设备后需重新配置SMTP并单独迁移账号库和认证密钥。
+
+此前手动配置使用的 `.cache/coordinator-accounts.db` 和 `.cache/qiban-auth-secret` 不会自动导入。若已有真实数据，继续使用下方手动入口，或在停止服务并备份后迁移；不要把桌面数据库移入账号库。
+
+启动入口只对当前PowerShell子进程设置脚本执行策略，不改系统策略。实现见[启动脚本](../../apps/coordinator/scripts/start.ps1)，验证记录见[协调服务交付记录](../status/coordinator-auth-api.md)。
+
+## 邮箱登录：获取账号和伙伴ID
+
+保持协调服务运行，另开一个终端，在仓库根目录执行：
+
+```powershell
+npm run coordinator:login
+```
+
+按提示输入受邀邮箱，再输入邮件中的8位验证码（输入隐藏）。成功后只显示accountId和companionId，不再需要手工拼请求、保存challengeId或生成nonce。这两个ID是服务端分配的身份标识，不是登录凭据或配对码。
+
+[登录脚本](../../apps/coordinator/scripts/login.ps1)固化以下协议流程，未来手机Web仍调用同一组后端接口：
+
+1. 检查本机healthz，再请求一次 `/v1/auth/request-code`。
+2. 持有challengeId，并用系统随机数生成32字节nonce（base64url编码）。
+3. 输入验证码，提交challengeId、code、nonce到 `/v1/auth/verify-code`。
+4. 仅在内存中使用返回的accessToken调用 `/v1/me`，显示账号/伙伴ID。
+
+发邮件请求不会自动重试，因为响应丢失时邮件仍可能已发送。换取会话或查询身份遇到网络/5xx错误时最多自动重试一次，其中换会话始终保留同一challengeId、code和nonce。验证码错误/过期/被替换会明确提示，最多5轮输入，可输入q退出；过期后重新运行命令请求新验证码。遇到429按服务端冷却/小时限制等待，脚本不绕过限流。
+
+账号需在服务端受邀列表内。request-code返回成功表示请求已处理，不保证最终投递；不在受邀列表中的邮箱也返回challengeId，但不发信。
+
+脚本只连接127.0.0.1，拒绝HTTP跳转。默认只读取启动配置的端口字段，不解密SMTP凭据；手动启动使用其他端口时可运行 `npm run coordinator:login -- -Port 4321`。这是本机登录验证入口，不是手机客户端。
+
+验证码和会话令牌不输出、不写文件。当前命令退出后不提供凭据恢复；服务端会话仍按原来的24小时绝对期限/30分钟闲置期限失效，本命令未自动撤销它。重复登录使用新验证码，并由服务端保持稳定的账号/伙伴映射。
+
+可重复检查：`npm run test:coordinator-login`。脚本流程测试模拟输入/响应，另有3项本机HTTP夹具测试验证响应丢失恢复、429与跳转拒绝；不使用真实SMTP，也不绕过产品验证码。
+
+## 换成QQ / 163邮箱测试
+
+先在自己的邮箱设置中启用SMTP服务并生成客户端授权码。这里填写的是SMTP授权码，不是网页登录密码，也不能复用Cloudflare API Token。
+
+停止当前协调服务，在仓库根目录按邮箱类型选择一个命令：
+
+```powershell
+npm run coordinator:configure:qq
+# 或者：
+npm run coordinator:configure:163
+```
+
+只需输入完整邮箱与授权码。预设自动填写：
+
+| 项目 | QQ邮箱 | 163邮箱 |
+|---|---|---|
+| SMTP主机 | smtp.qq.com | smtp.163.com |
+| 加密 | tls / 465 | tls / 465 |
+| 用户名与Sender Email | 你输入的@qq.com邮箱 | 你输入的@163.com邮箱 |
+| 密码 | 新输入的SMTP授权码 | 新输入的SMTP授权码 |
+
+预设仅接受对应的@qq.com或@163.com地址；Foxmail、126、企业邮箱或其他服务可继续使用通用 `npm run coordinator:configure` 手动配置。服务器参数参考[腾讯云官方SMTP配置表](https://intl.cloud.tencent.com/zh/document/product/1266/71700)。
+
+已有配置时保留受邀收件邮箱和本机端口；首次配置时将输入邮箱设为唯一受邀收件人，端口4318。新授权码仍通过Windows DPAPI保存，旧供应商密码不会被带入新服务。账号库与认证密钥不会迁移或清空；Cloudflare DNS和收信转发不需要为这次测试修改。发件地址将使用QQ/163邮箱，而不是原来的自定义域名地址。
+
+保存后运行 `npm run coordinator`。启动不发送邮件；仍需显式请求验证码，并使用受邀列表中的收件邮箱。没有输入新授权码前，仅代表切换入口已准备好，不能宣称实际配置已切换或发信已通过。
+
+## Cloudflare发信排障
+
+Cloudflare Email Sending的SMTP主机为 `smtp.mx.cloudflare.net`，用户名固定为 `api_token`，密码使用具备 `Email Sending: Edit` 权限的API Token；发件域名须已加入Email Sending。它只支持隐式TLS/465，启动向导中必须选择 `tls`，不支持 `starttls`/587。[官方SMTP说明](https://developers.cloudflare.com/email-service/api/send-emails/smtp/)
+
+向导会为该主机选择正确默认值，并在保存/读取配置时拒绝错误TLS模式或用户名；手动环境变量路径由服务在启动时执行同样的校验。配置修改后必须停止旧服务，再执行 `npm run coordinator`；正在运行的进程不会自动重载文件。
+
+没有发送记录时先区分三个阶段：
+
+- 未进入SMTP：邮箱不在受邀列表时，接口仍返回challengeId，但不会发信；还需检查接口是否返回429/503。
+- 连接失败：DNS、网络代理、465连通性或TLS握手问题可能发生在SMTP认证之前。进程healthz正常、Token active都不代表邮件连接成功。
+- SMTP已接收：再核对Cloudflare投递/抑制日志以及收件箱、垃圾箱。
+
+如果本机域名被网络代理解析为虚拟IP，且TLS握手提前断开，需核查代理的SMTP/465出站规则或换一条可用网络路径；不能仅凭虚拟IP断言代理就是根因。不要关闭证书验证来绕过错误。SMTP的TLS校验使用Windows系统证书存储（SChannel）：若本机网络做TLS拦截，需把拦截方根证书装入本机"受信任的根证书颁发机构"，系统不认的根会在握手阶段被拒绝。
+
 ## 运行边界
 
 服务使用Rust/Axum和独立SQLite账号库，只监听127.0.0.1。邮件通过支持TLS的SMTP服务发送，认证状态由栖伴保管。生产HTTPS、反向代理、账号/IP滥用防护、监测、备份和PostgreSQL业务库属于T43，当前不可直接公开试用。
@@ -12,9 +107,9 @@
 
 SMTP成功仅代表中继服务器确认接收，不保证进入收件箱。发送失败/超时不激活验证码；邮件已发出但激活提交失败时不能据此登录。用户稍后重新获取，不自动重发。验证码HMAC绑定challengeId、邮箱和验证码；数据库只保存HMAC摘要，密钥独立保管。
 
-会话使用操作系统随机数生成的256位不透明令牌，仅首次登录返回明文，数据库只保存SHA-256摘要。最长24小时、闲置30分钟失效；当前不提供刷新令牌，失效后重新验证邮箱。读取会话会更新活动时间，绝对到期不延长。单会话退出与全部退出立即写入服务端状态；全部退出同时作废该账号未用验证码。账号、会话和待办在同一SQLite事务域核验，失效身份不能继续读写。
+会话使用256位不透明令牌，由服务端HMAC密钥与客户端登录nonce派生，仅验证响应返回明文，数据库只保存SHA-256摘要；验证响应在网络上丢失时，客户端用同一challengeId、验证码与nonce重试可恢复同一会话，换nonce不能复用已消耗的验证码，会话撤销后恢复同样被拒。最长24小时、闲置30分钟失效；当前不提供刷新令牌，失效后重新验证邮箱。读取会话会更新活动时间，绝对到期不延长。单会话退出与全部退出立即写入服务端状态；全部退出同时作废该账号未用验证码。账号、会话和待办在同一SQLite事务域核验，失效身份不能继续读写。
 
-## 本机配置
+## 手动本机配置（可选）
 
 从仓库根目录使用独立数据库，不指向桌面的companion.db/chat-history.db/executions.db。新账号库为schema v2；本增量会将既有协调账号库v1事务迁移到v2并保留账号、伙伴及任务。
 
@@ -60,7 +155,7 @@ HTTP /v1与桌面IPC v2分别版本化，POST使用application/json。登录以�
 |---|---|---|
 | GET /healthz | 无 | 服务进程存活，不保证SMTP可用 |
 | POST /v1/auth/request-code | email | challengeId；若可发送则先由SMTP确认接收并激活 |
-| POST /v1/auth/verify-code | challengeId、code | accessToken、sessionId、expiresAt、idleTimeoutSeconds |
+| POST /v1/auth/verify-code | challengeId、code、nonce | accessToken、sessionId、expiresAt、idleTimeoutSeconds；nonce为客户端生成的32字节base64url（43字符），令牌由服务端密钥与nonce派生，响应丢失后用同一组参数重试可取回同一会话 |
 | GET /v1/me | Bearer token | accountId、companionId |
 | GET /v1/tasks | Bearer token | 当前账号待办 |
 | POST /v1/tasks | requestId（UUID）、title | 创建/去重；仅记录，不自动执行 |
@@ -68,9 +163,9 @@ HTTP /v1与桌面IPC v2分别版本化，POST使用application/json。登录以�
 | POST /v1/tasks/{id}/cancel | revision | queued取消，版本不符409 |
 | POST /v1/logout | allSessions（布尔） | revoked、allSessions；同步完成服务端撤销 |
 
-错误码区分401身份/验证码无效、429频率限制、503存储/发信不可用。限制16个并发请求、8 KiB JSON正文，邮件整体等待最多10秒。尚无按来源IP限制、可持久邮件队列或分布式速率限制，不把本地限制当成公网运营防护。
+错误码区分401身份/验证码无效、429频率限制、503存储/发信不可用；request-code期间的并发状态变化（如全部退出作废了待激活验证码）按503上报，不伪装成验证码错误。除healthz外的接口限制16个并发请求、8 KiB JSON正文，邮件整体等待最多10秒；healthz不在并发限制内，邮件堆积不会掩盖进程存活信号。尚无按来源IP限制、可持久邮件队列或分布式速率限制，不把本地限制当成公网运营防护。
 
-令牌不得进入URL、截图、代码提交或共享终端记录。手机Web下一增量需实现同源BFF/HttpOnly会话或明确的端侧凭据方案与CSRF防护；目前没有登录页面，也没有把长期令牌放localStorage的实现。
+令牌不得进入URL、截图、代码提交或共享终端记录。手机 Web 已通过独立同源网关接入 HttpOnly 会话及 CSRF 防护，详见[启动与验收](mobile-web.md)；原生桌面账号接入仍待实现。
 
 ## 可重复验证
 

@@ -65,6 +65,34 @@ fn limited(
     Ok(())
 }
 
+fn recover_login(
+    tx: &Transaction<'_>,
+    hash: &[u8],
+    now: i64,
+) -> Result<Option<NativeLogin>, StorageError> {
+    let row: Option<(String, i64, i64, bool, i64)> = tx
+        .query_row(
+            "SELECT s.session_id,t.expires_at,s.authenticated_at,s.revoked,a.revoked_before
+            FROM native_tokens t JOIN accounts a ON a.id=t.account_id
+            JOIN account_sessions s ON s.account_id=t.account_id AND s.session_id=t.session_id
+            WHERE t.hash=?1 AND a.issuer=?2",
+            params![hash, NATIVE_ISSUER],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let (session_id, expires_at, authenticated_at, revoked, cutoff) = match row {
+        Some(row) => row,
+        None => return Ok(None),
+    };
+    if revoked || authenticated_at <= cutoff || now < authenticated_at || now >= expires_at {
+        return Err(IdentityError::SessionEnded.into());
+    }
+    Ok(Some(NativeLogin {
+        session_id,
+        expires_at: expires_at as u64,
+    }))
+}
+
 impl AccountStore {
     pub fn reserve_login_code(
         &self,
@@ -153,6 +181,13 @@ impl AccountStore {
             .map_err(|_| StorageError::Unavailable)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = i64::try_from((self.clock)()).map_err(|_| StorageError::InvalidTimestamp)?;
+        // Replay recovery: when the original verify response was lost, retrying
+        // with the same login nonce must regain the existing session instead of
+        // failing on the already-consumed code. Only the nonce holder can hit
+        // this row: the derived token hash is a 256-bit secret.
+        if let Some(login) = recover_login(&tx, token_hash, now)? {
+            return Ok(login);
+        }
         type CodeRow = (String, Option<Vec<u8>>, i64, u32, String);
         let row: Option<CodeRow> = tx
             .query_row(
@@ -391,6 +426,47 @@ mod tests {
             .is_ok());
     }
     #[test]
+    fn replay_with_same_token_hash_recovers_and_revocation_ends_recovery() {
+        let mut store = fixture();
+        let id = ready(&store, "a@example.com");
+        let first = store.redeem_login_code(&id, &[1; 32], &[7; 32]).unwrap();
+        // Retrying the same login nonce regains the existing session even
+        // though the code row is already consumed.
+        let second = store.redeem_login_code(&id, &[1; 32], &[7; 32]).unwrap();
+        assert_eq!(first.session_id, second.session_id);
+        assert_eq!(first.expires_at, second.expires_at);
+        // A different nonce cannot reuse the consumed code.
+        assert!(store.redeem_login_code(&id, &[1; 32], &[8; 32]).is_err());
+        // Recovery stops once the underlying session is revoked.
+        let identity = store.authenticate_native_token(&[7; 32]).unwrap();
+        store.clock = || 160_000;
+        store.sign_out(&identity, true).unwrap();
+        assert!(store.redeem_login_code(&id, &[1; 32], &[7; 32]).is_err());
+    }
+    #[test]
+    fn hourly_email_window_resets_after_a_full_hour() {
+        let mut store = fixture();
+        store.clock = || 100_000;
+        ready(&store, "a@example.com");
+        store.clock = || 161_000;
+        ready(&store, "a@example.com");
+        store.clock = || 222_000;
+        ready(&store, "a@example.com");
+        store.clock = || 283_000;
+        ready(&store, "a@example.com");
+        store.clock = || 344_000;
+        ready(&store, "a@example.com");
+        store.clock = || 405_000; // Cooldown passed, still inside the hour window.
+        assert!(matches!(
+            store.reserve_login_code("a@example.com", &uuid::Uuid::new_v4().to_string(), &[1; 32]),
+            Err(StorageError::Identity(IdentityError::RateLimited))
+        ));
+        store.clock = || 3_700_001; // One full hour after window_start 100_000.
+        assert!(store
+            .reserve_login_code("a@example.com", &uuid::Uuid::new_v4().to_string(), &[1; 32])
+            .is_ok());
+    }
+    #[test]
     fn same_email_keeps_partner_single_logout_and_all_logout_are_immediate() {
         let mut store = fixture();
         let first = ready(&store, "a@example.com");
@@ -477,7 +553,7 @@ mod tests {
             store.clock = || 100_000;
             old_profile = store.profile(&identity).unwrap();
             let c = store.connection.lock().unwrap();
-            c.execute_batch("DROP TABLE native_tokens;DROP TABLE native_codes;DROP TABLE native_users;DROP TABLE native_rate_limits;PRAGMA user_version=1;").unwrap();
+            c.execute_batch("DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;DROP TABLE native_tokens;DROP TABLE native_codes;DROP TABLE native_users;DROP TABLE native_rate_limits;PRAGMA user_version=1;").unwrap();
         }
         {
             let mut store = AccountStore::open(&path).unwrap();

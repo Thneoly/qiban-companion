@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-task-cancel"
+description = "Enables the account_task_cancel command without any pre-configured scope."
+commands.allow = ["account_task_cancel"]
+
+[[permission]]
+identifier = "deny-account-task-cancel"
+description = "Denies the account_task_cancel command without any pre-configured scope."
+commands.deny = ["account_task_cancel"]

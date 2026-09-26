@@ -12,9 +12,10 @@ test.beforeEach(async ({ page }) => {
       transformCallback: (callback: any) => { callbacks.set(++sequence, callback); return sequence; }, unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
         if (cmd === 'plugin:event|listen') { events.set(args.event, callbacks.get(args.handler)); return ++sequence; }
-        if (cmd === 'get_runtime_info') return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if (cmd === 'get_runtime_info') return {protocolVersion:3,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
         if (cmd === 'list_tasks') return [];
-        if (cmd === 'chat_context_preview') return {scope:{baseUrl:'https://fixture.test',model:'fixture'},contextEpoch:w.memoryEpoch,policy:{enabled:false,revision:0,selectedIds:[]},items:[],bodyChars:0,contextChars:0};
+        if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
+        if (cmd === 'chat_context_preview') return {scope:{baseUrl:'https://fixture.test',model:'fixture'},contextEpoch:w.memoryEpoch,policy:{enabled:false,revision:0,selectedIds:[]},items:[],bodyChars:0,contextChars:0,personal:{status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0}};
         if (cmd === 'memory_list') { if (w.failRead) throw {code:'storage_unavailable'}; return {items:structuredClone(w.memoryItems),contextEpoch:w.memoryEpoch,modelUseEnabled:false}; }
         if (cmd === 'memory_export') { if (w.memoryFail) throw {code:w.memoryFail}; return w.exportOutcome; }
         if (cmd === 'memory_mutate') {

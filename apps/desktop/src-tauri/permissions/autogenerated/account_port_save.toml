@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-port-save"
+description = "Enables the account_port_save command without any pre-configured scope."
+commands.allow = ["account_port_save"]
+
+[[permission]]
+identifier = "deny-account-port-save"
+description = "Denies the account_port_save command without any pre-configured scope."
+commands.deny = ["account_port_save"]

@@ -12,7 +12,7 @@ test('document preview requires confirmation and a failed receipt preserves the 
     const id='00000000-0000-4000-8000-000000000001',actionId='00000000-0000-4000-8000-000000000002';let task:any=null;let failed=false;
     const detail=()=>({task,attempts:[],events:[{sequence:task.revision+1,taskId:id,revision:task.revision,status:task.status,createdAt:1}]});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(cmd:string,args:any)=>{
-      if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+      if(cmd==='get_runtime_info')return {protocolVersion:3,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
       if(cmd==='list_tasks')return [];
       if(cmd==='model_settings_get')return {baseUrl:'https://example.com/v1',model:'fixture',useApiKey:false,hasApiKey:false,maxOutputTokens:1024};
       if(cmd==='memory_list')return {items:[],contextEpoch:0};

@@ -137,6 +137,18 @@ impl NativeAuth {
         }
         mac.finalize().into_bytes().into()
     }
+    // The session secret is derived from a client-chosen login nonce so a lost
+    // verify response can be recovered by retrying with the same nonce; without
+    // the pepper, the nonce alone never reveals or forges the token.
+    fn token_from_nonce(&self, nonce: &[u8]) -> [u8; 32] {
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(self.pepper.as_ref()).expect("HMAC accepts 32-byte key");
+        for value in ["qiban-session-token-v1".as_bytes(), nonce] {
+            mac.update(&(value.len() as u64).to_be_bytes());
+            mac.update(value);
+        }
+        mac.finalize().into_bytes().into()
+    }
     pub async fn request_code(&self, email: &str) -> Result<CodeReceipt, AuthError> {
         let email = canonical_email(email)?;
         let challenge_id = uuid::Uuid::new_v4().to_string();
@@ -156,17 +168,35 @@ impl NativeAuth {
         );
         let code_id = challenge_id.clone();
         self.storage(move |store| store.finish_code_delivery(&code_id, delivered))
-            .await?;
+            .await
+            // A concurrent invalidation (for example all-logout) must not
+            // surface as invalid_code on this endpoint: the caller never
+            // submitted a code here, and the mail outcome is separate state.
+            .map_err(|_| AuthError::Unavailable)?;
         if !delivered {
             return Err(AuthError::Unavailable);
         }
         Ok(CodeReceipt { challenge_id })
     }
-    pub async fn verify_code(&self, id: &str, code: &str) -> Result<SessionToken, AuthError> {
+    pub async fn verify_code(
+        &self,
+        id: &str,
+        code: &str,
+        nonce: &str,
+    ) -> Result<SessionToken, AuthError> {
         if uuid::Uuid::parse_str(id).is_err()
             || code.len() != 8
             || !code.bytes().all(|b| b.is_ascii_digit())
+            || nonce.len() != 43
         {
+            return Err(AuthError::InvalidCode);
+        }
+        let secret = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(nonce)
+                .map_err(|_| AuthError::InvalidCode)?,
+        );
+        if secret.len() != 32 {
             return Err(AuthError::InvalidCode);
         }
         let code_id = id.to_string();
@@ -177,8 +207,7 @@ impl NativeAuth {
             return Err(AuthError::InvalidCode);
         }
         let candidate = self.code_mac(id, &email, code);
-        let mut random = Zeroizing::new([0u8; 32]);
-        getrandom::fill(random.as_mut()).map_err(|_| AuthError::Unavailable)?;
+        let random = Zeroizing::new(self.token_from_nonce(secret.as_ref()));
         let token = format!("qbs_{}", URL_SAFE_NO_PAD.encode(random.as_ref()));
         let hash: [u8; 32] = Sha256::digest(random.as_ref()).into();
         let code_id = id.to_string();

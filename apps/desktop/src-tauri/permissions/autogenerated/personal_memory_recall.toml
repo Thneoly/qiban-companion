@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-personal-memory-recall"
+description = "Enables the personal_memory_recall command without any pre-configured scope."
+commands.allow = ["personal_memory_recall"]
+
+[[permission]]
+identifier = "deny-personal-memory-recall"
+description = "Denies the personal_memory_recall command without any pre-configured scope."
+commands.deny = ["personal_memory_recall"]

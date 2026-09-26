@@ -4,12 +4,20 @@ use axum::{
     body::{to_bytes, Body},
     http::Request,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde_json::Value;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use tower::ServiceExt;
+
+fn nonce() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
+}
 
 #[derive(Default)]
 struct TestMail {
@@ -31,6 +39,52 @@ impl CodeMailer for TestMail {
 struct Fixture {
     path: std::path::PathBuf,
     mail: Arc<TestMail>,
+}
+
+// Explicit opt-in only: a real HTTP/SQLite/auth chain with an in-memory mail sink.
+// This route and mail access are compiled solely into the Rust test executable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires built mobile Web and local Microsoft Edge; npm run test:mobile:integration"]
+async fn mobile_web_browser_integration() {
+    let fixture = Fixture::new();
+    let mail = fixture.mail.clone();
+    let app = fixture.app().route(
+        "/__test/code/{email}",
+        get(move |Path(email): Path<String>| {
+            let mail = mail.clone();
+            async move {
+                let sent = mail.sent.lock().unwrap();
+                let code = sent
+                    .iter()
+                    .rev()
+                    .find(|(to, _)| to == &email)
+                    .map(|(_, code)| code.clone());
+                Json(json!({"code": code}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("node")
+            .arg("apps/mobile-web/tests/browser/continuity.mjs")
+            .current_dir(workspace)
+            .env("QIBAN_TEST_UPSTREAM", format!("http://{address}"))
+            .status()
+            .expect("Node is required for the mobile integration test")
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+    assert!(status.success(), "mobile browser integration failed");
 }
 impl Fixture {
     fn new() -> Self {
@@ -107,7 +161,7 @@ async fn login(f: &Fixture, app: &Router, email: &str) -> String {
         "POST",
         "/v1/auth/verify-code",
         None,
-        json!({"challengeId":receipt["challengeId"],"code":f.code(email)}),
+        json!({"challengeId":receipt["challengeId"],"code":f.code(email),"nonce":nonce()}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -185,7 +239,7 @@ async fn real_otp_flow_enforces_two_account_ownership_and_task_dedup() {
     );
 }
 #[tokio::test]
-async fn code_is_one_time_and_concurrent_redemption_has_one_winner() {
+async fn same_nonce_replays_recover_one_session_and_other_nonces_are_rejected() {
     let f = Fixture::new();
     let app = f.app();
     let (_, receipt) = call(
@@ -196,20 +250,70 @@ async fn code_is_one_time_and_concurrent_redemption_has_one_winner() {
         json!({"email":"alice@example.com"}),
     )
     .await;
-    let body = json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com")});
+    let shared = nonce();
+    let body = json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com"),"nonce":shared});
+    // A retried verify whose first response was lost re-derives the same
+    // session token; concurrent retries with one nonce also converge.
     let (a, b) = tokio::join!(
         call(&app, "POST", "/v1/auth/verify-code", None, body.clone()),
         call(&app, "POST", "/v1/auth/verify-code", None, body.clone())
     );
-    assert_eq!(
-        [a.0, b.0].iter().filter(|s| **s == StatusCode::OK).count(),
-        1
-    );
+    assert_eq!(a.0, StatusCode::OK);
+    assert_eq!(b.0, StatusCode::OK);
+    assert_eq!(a.1["accessToken"], b.1["accessToken"]);
+    assert_eq!(a.1["sessionId"], b.1["sessionId"]);
     assert_eq!(
         call(&app, "POST", "/v1/auth/verify-code", None, body)
             .await
             .0,
+        StatusCode::OK
+    );
+    // The consumed code cannot mint a session for a different nonce.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/auth/verify-code",
+            None,
+            json!({"challengeId":receipt["challengeId"],"code":f.code("alice@example.com"),"nonce":nonce()})
+        )
+        .await
+        .0,
         StatusCode::UNAUTHORIZED
+    );
+}
+#[tokio::test]
+async fn concurrent_same_email_code_requests_allow_exactly_one() {
+    let f = Fixture::new();
+    let app = f.app();
+    let (a, b) = tokio::join!(
+        call(
+            &app,
+            "POST",
+            "/v1/auth/request-code",
+            None,
+            json!({"email":"alice@example.com"})
+        ),
+        call(
+            &app,
+            "POST",
+            "/v1/auth/request-code",
+            None,
+            json!({"email":"alice@example.com"})
+        )
+    );
+    let statuses = [a.0, b.0];
+    assert_eq!(
+        statuses.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "expected exactly one accepted request, got {statuses:?}"
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
+            .count(),
+        1
     );
 }
 #[tokio::test]
@@ -237,7 +341,7 @@ async fn wrong_codes_consume_attempts_and_resend_is_throttled() {
                 "POST",
                 "/v1/auth/verify-code",
                 None,
-                json!({"challengeId":receipt["challengeId"],"code":wrong})
+                json!({"challengeId":receipt["challengeId"],"code":wrong,"nonce":nonce()})
             )
             .await
             .0,
@@ -250,7 +354,7 @@ async fn wrong_codes_consume_attempts_and_resend_is_throttled() {
             "POST",
             "/v1/auth/verify-code",
             None,
-            json!({"challengeId":receipt["challengeId"],"code":correct})
+            json!({"challengeId":receipt["challengeId"],"code":correct,"nonce":nonce()})
         )
         .await
         .0,
@@ -425,4 +529,91 @@ async fn tcp_server_handles_authenticated_profile_request() {
     assert_eq!(response.headers()["cache-control"], "no-store");
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn pairing_http_rejects_owner_injection_self_pairing_and_cross_account() {
+    let f = Fixture::new();
+    let app = f.app();
+    let a = login(&f, &app, "alice@example.com").await;
+    let b = login(&f, &app, "bob@example.com").await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/pairings/offer",
+            None,
+            json!({"name":"电脑"})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/pairings/offer",
+            Some(&a),
+            json!({"name":"电脑","accountId":"other"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, o) = call(
+        &app,
+        "POST",
+        "/v1/pairings/offer",
+        Some(&a),
+        json!({"name":"电脑"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for token in [&a, &b] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/v1/pairings/preview",
+                Some(token),
+                json!({"code":o["code"]})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let path = format!(
+        "/v1/pairings/{}/revoke",
+        o["pairing"]["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        call(&app, "POST", &path, Some(&b), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "GET", "/v1/pairings", Some(&b), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+    let listed = call(&app, "GET", "/v1/pairings", Some(&a), Value::Null)
+        .await
+        .1;
+    assert!(!listed.to_string().contains(o["code"].as_str().unwrap()));
+    assert_eq!(
+        call(&app, "POST", &path, Some(&a), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, "POST", &path, Some(&a), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
 }
