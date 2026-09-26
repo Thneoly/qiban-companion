@@ -147,7 +147,7 @@ const personalMemoryErrors: Record<string, string> = {
 export function personalMemoryErrorMessage(value: unknown): string {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const code = (value as Record<string, unknown>).code;
-    if (typeof code === 'string' && code in personalMemoryErrors) return personalMemoryErrors[code];
+    if (typeof code === 'string' && code in personalMemoryErrors) return personalMemoryErrors[code] ?? '个人记忆错误协议不兼容，请更新客户端。';
   }
   return '个人记忆错误协议不兼容，请更新客户端。';
 }

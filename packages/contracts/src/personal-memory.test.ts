@@ -17,7 +17,7 @@ describe('decodePersonalMemoryRecord', () => {
   test('accepts the real-shape fixture', () => {
     const list = decodePersonalMemoryList(fixture);
     expect(list.count).toBe(2);
-    expect(list.memories[1].tags).toEqual(['memory-service', 'architecture', '老搭档']);
+    expect(list.memories[1]?.tags).toEqual(['memory-service', 'architecture', '老搭档']);
   });
   test('accepts loose-GLOB timestamps and null origin from migrated rows', () => {
     // Schema GLOB digit classes only: legacy rows can be GLOB-legal yet not
