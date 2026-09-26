@@ -21,6 +21,8 @@ pub enum StorageError {
     Execution(#[from] companion_core::execution::ExecutionError),
     #[error(transparent)]
     Identity(#[from] companion_core::identity::IdentityError),
+    #[error(transparent)]
+    Authorization(#[from] companion_core::authorization::AuthorizationError),
     #[error("本地存储暂时不可用")]
     Unavailable,
     #[error("未找到任务")]

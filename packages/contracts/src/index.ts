@@ -110,3 +110,5 @@ export function decodeChatHistory(value:unknown):ChatTurn[] {
   if(!Array.isArray(value)||value.length>6)throw Error('会话记录协议不兼容');
   return value.map(item=>{const v=record(item);if(typeof v.user!=='string'||typeof v.assistant!=='string')throw Error('会话记录协议不兼容');return {user:v.user,assistant:v.assistant};});
 }
+
+export * from "./pairing";

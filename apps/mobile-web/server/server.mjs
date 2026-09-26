@@ -9,6 +9,9 @@ const routes = new Set([
   "GET /api/me",
   "GET /api/state",
   "GET /api/tasks",
+  "GET /api/pairings",
+  "POST /api/pairings/preview",
+  "POST /api/pairings/accept",
   "POST /api/tasks",
   "POST /api/logout",
 ]);
@@ -23,6 +26,9 @@ const knownErrors = new Set([
   "authentication_unavailable",
   "storage_unavailable",
   "not_found",
+  "pairing_denied",
+  "pairing_conflict",
+  "pairing_capacity",
 ]);
 
 // The public origin is explicit. Neither Host nor forwarded headers select a backend.
@@ -93,7 +99,8 @@ export function createWebServer({
         !routes.has(`${req.method} ${path}`) &&
         !(
           req.method === "POST" &&
-          /^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/.test(path)
+          (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/.test(path) ||
+            /^\/api\/pairings\/[0-9a-f-]{36}\/revoke$/.test(path))
         )
       )
         return fail(404, "not_found");

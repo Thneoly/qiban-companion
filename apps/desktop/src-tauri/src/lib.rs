@@ -92,6 +92,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            account::account_pairings,
+            account::account_pairing_offer,
+            account::account_pairing_revoke,
             account::account_snapshot,
             account::account_port_save,
             account::account_code_request,

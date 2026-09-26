@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
+    "allow-account-pairings",
+    "allow-account-pairing-offer",
+    "allow-account-pairing-revoke",
     "allow-account-snapshot",
     "allow-account-port-save",
     "allow-account-code-request",

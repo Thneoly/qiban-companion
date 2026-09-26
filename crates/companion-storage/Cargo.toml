@@ -11,3 +11,4 @@ rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 subtle = "2"
+sha2 = "0.10"

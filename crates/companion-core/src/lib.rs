@@ -1,4 +1,5 @@
 //! Pure domain contracts. No Tauri, network, filesystem or model dependency.
+pub mod authorization;
 pub mod conversation;
 pub mod execution;
 pub mod identity;

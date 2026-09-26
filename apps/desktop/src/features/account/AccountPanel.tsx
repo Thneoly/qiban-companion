@@ -9,6 +9,7 @@ import {
 import { nativeDesktop } from "../../lib/surface";
 import { errorMessage } from "../../lib/client";
 import "./account.css";
+import { PairingPanel } from "./PairingPanel";
 
 const empty: AccountSnapshot = {
   port: 4318,
@@ -222,6 +223,7 @@ export function AccountPanel() {
               </dd>
             </dl>
           </div>
+          <PairingPanel key={snapshot.profile.accountId} onAuthError={failure} />
           <form
             onSubmit={(e) => {
               e.preventDefault();

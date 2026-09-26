@@ -1,4 +1,5 @@
 pub mod auth;
+mod pairing;
 
 use auth::{AuthError, NativeAuth};
 use axum::{
@@ -45,6 +46,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/v1/logout", post(sign_out))
+        .route("/v1/pairings", get(pairing::list))
+        .route("/v1/pairings/offer", post(pairing::offer))
+        .route("/v1/pairings/preview", post(pairing::preview))
+        .route("/v1/pairings/accept", post(pairing::accept))
+        .route("/v1/pairings/{id}/revoke", post(pairing::revoke))
         .layer(DefaultBodyLimit::max(8192))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -101,6 +107,15 @@ impl From<AuthError> for ApiError {
 impl From<StorageError> for ApiError {
     fn from(error: StorageError) -> Self {
         match error {
+            StorageError::Authorization(error) => {
+                use companion_core::authorization::AuthorizationError::*;
+                match error {
+                    Denied => Self(StatusCode::FORBIDDEN, "pairing_denied"),
+                    Conflict => Self(StatusCode::CONFLICT, "pairing_conflict"),
+                    Invalid => Self(StatusCode::BAD_REQUEST, "invalid_request"),
+                    Capacity => Self(StatusCode::CONFLICT, "pairing_capacity"),
+                }
+            }
             StorageError::NotFound => Self(StatusCode::NOT_FOUND, "not_found"),
             StorageError::Identity(IdentityError::SessionEnded | IdentityError::InvalidSession) => {
                 Self(StatusCode::UNAUTHORIZED, "authentication_required")

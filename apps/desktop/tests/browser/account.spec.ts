@@ -25,6 +25,14 @@ test("native account UI separates local data, deduplicates retry and clears late
     let pendingLogout = false;
     let failedOnce = false;
     const tasks: any[] = [];
+    const pairings: any[] = [];
+    w.connectPair = () => {
+      const p = pairings[0];
+      p.controllerId = crypto.randomUUID();
+      p.controllerName = "测试手机";
+      p.status = "active";
+      p.revision++;
+    };
     const requestIds = new Map();
     const snapshot = () => ({
       port: 4318,
@@ -88,6 +96,28 @@ test("native account UI separates local data, deduplicates retry and clears late
               });
             }
             return value;
+          }
+          if (cmd === "account_pairings") return structuredClone(pairings);
+          if (cmd === "account_pairing_offer") {
+            const p = {
+              id: crypto.randomUUID(),
+              desktopId: crypto.randomUUID(),
+              desktopName: args.name,
+              controllerId: null,
+              controllerName: null,
+              scope: "document_excerpt",
+              revision: 1,
+              status: "pending",
+              expiresAt: Date.now() + 300000,
+              currentRole: "desktop",
+            };
+            pairings.push(p);
+            return { pairing: structuredClone(p), code: "a".repeat(32) };
+          }
+          if (cmd === "account_pairing_revoke") {
+            pairings[0].status = "revoked";
+            pairings[0].revision++;
+            return;
           }
           if (cmd === "account_code_request") return;
           if (cmd === "account_login") {
@@ -161,7 +191,7 @@ test("native account UI separates local data, deduplicates retry and clears late
   await page.getByRole("button", { name: "保存共享待办", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("操作结果尚未确认");
   await page.getByRole("button", { name: "保存共享待办", exact: true }).click();
-  await expect(panel.locator(".account-tasks li")).toHaveCount(1);
+  await expect(panel.locator(":scope > .account-tasks li")).toHaveCount(1);
   const ids = await page.evaluate(() => (window as any).requests);
   expect(ids).toHaveLength(2);
   expect(ids[0]).toBe(ids[1]);
@@ -175,7 +205,23 @@ test("native account UI separates local data, deduplicates retry and clears late
       exact: true,
     })
     .click();
-  await expect(panel.locator(".account-tasks")).toContainText("已取消");
+  await expect(panel.locator(":scope > .account-tasks")).toContainText("已取消");
+  const pairing = panel.locator(".pairing-panel");
+  await pairing
+    .getByRole("button", { name: "生成五分钟配对码", exact: true })
+    .click();
+  await expect(pairing.getByTestId("pairing-code")).toHaveText("a".repeat(32));
+  await expect(pairing).toContainText("等待手机确认");
+  await page.evaluate(() => (window as any).connectPair());
+  await pairing.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(pairing).toContainText("已配对");
+  await expect(pairing.getByTestId("pairing-code")).toHaveCount(0);
+  await pairing.screenshot({ path: "test-results/desktop-pairing.png" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await pairing
+    .getByRole("button", { name: "撤销配对 我的电脑", exact: true })
+    .click();
+  await expect(pairing).toContainText("已撤销");
   await page.evaluate(() => {
     (window as any).holdSnapshot = true;
     (window as any).offlineLogout = true;
@@ -189,7 +235,7 @@ test("native account UI separates local data, deduplicates retry and clears late
     .click();
   await expect(panel.getByRole("status")).toContainText("服务端撤销待连接恢复");
   await page.evaluate(() => (window as any).deliverOldSnapshot());
-  await expect(panel.locator(".account-tasks li")).toHaveCount(0);
+  await expect(panel.locator(":scope > .account-tasks li")).toHaveCount(0);
   await expect(page.getByTestId("desktop-companion-id")).toHaveCount(0);
   await expect(page.locator(".task-panel")).toContainText("只存在本机的手记");
   await page.evaluate(() => (window as any).finishRevocation());

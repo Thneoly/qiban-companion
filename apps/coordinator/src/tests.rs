@@ -530,3 +530,90 @@ async fn tcp_server_handles_authenticated_profile_request() {
     server.abort();
     let _ = server.await;
 }
+
+#[tokio::test]
+async fn pairing_http_rejects_owner_injection_self_pairing_and_cross_account() {
+    let f = Fixture::new();
+    let app = f.app();
+    let a = login(&f, &app, "alice@example.com").await;
+    let b = login(&f, &app, "bob@example.com").await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/pairings/offer",
+            None,
+            json!({"name":"电脑"})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/pairings/offer",
+            Some(&a),
+            json!({"name":"电脑","accountId":"other"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, o) = call(
+        &app,
+        "POST",
+        "/v1/pairings/offer",
+        Some(&a),
+        json!({"name":"电脑"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for token in [&a, &b] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/v1/pairings/preview",
+                Some(token),
+                json!({"code":o["code"]})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let path = format!(
+        "/v1/pairings/{}/revoke",
+        o["pairing"]["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        call(&app, "POST", &path, Some(&b), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "GET", "/v1/pairings", Some(&b), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+    let listed = call(&app, "GET", "/v1/pairings", Some(&a), Value::Null)
+        .await
+        .1;
+    assert!(!listed.to_string().contains(o["code"].as_str().unwrap()));
+    assert_eq!(
+        call(&app, "POST", &path, Some(&a), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, "POST", &path, Some(&a), json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+}

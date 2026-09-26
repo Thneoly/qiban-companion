@@ -380,3 +380,6 @@ footer {
     display: block;
   }
 }
+
+.pairing { grid-column:1 / -1; }
+.pairing .notice {overflow-wrap:anywhere;}

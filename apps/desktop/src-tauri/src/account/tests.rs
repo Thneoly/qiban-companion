@@ -426,11 +426,15 @@ async fn desktop_mobile_same_companion_integration() {
         .unwrap()
         .to_path_buf();
     let port = f.port;
+    let offer = c.pairing_offer("集成测试电脑".into()).await.unwrap();
+    let pairing_id = offer.pairing.id.clone();
     let status = tokio::task::spawn_blocking(move || {
         std::process::Command::new("node")
             .arg("apps/desktop/tests/browser/mobile-peer.mjs")
             .current_dir(workspace)
             .env("QIBAN_TEST_UPSTREAM", format!("http://127.0.0.1:{port}"))
+            .env("QIBAN_TEST_PAIRING_CODE", offer.code)
+            .env("QIBAN_EXPECT_DESKTOP", offer.pairing.desktop_id)
             .env("QIBAN_EXPECT_ACCOUNT", profile.account_id)
             .env("QIBAN_EXPECT_COMPANION", profile.companion_id)
             .status()
@@ -450,5 +454,9 @@ async fn desktop_mobile_same_companion_integration() {
         .tasks
         .iter()
         .any(|t| t.id == native_task.id && t.status == companion_core::TaskStatus::Cancelled));
+    let pairs = reopened.pairings().await.unwrap();
+    assert!(pairs
+        .iter()
+        .any(|p| p.id == pairing_id && p.status == "revoked"));
     assert_eq!(reopened.logout(true).await.unwrap().status, "signed_out");
 }

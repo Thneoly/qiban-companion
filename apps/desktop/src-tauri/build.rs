@@ -1,5 +1,8 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "account_pairings",
+        "account_pairing_offer",
+        "account_pairing_revoke",
         "account_snapshot",
         "account_port_save",
         "account_code_request",

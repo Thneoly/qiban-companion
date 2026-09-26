@@ -12,6 +12,9 @@ account_id 表示数据归属，companion_id 表示稳定伙伴，device_id 表�
 
 ## 配对与授权
 
+2026-09-26首轮实现见[配对与动作授权协议](device-authorization.md)：输入一次性配对码、同账号另一会话明确确认、关系撤销和动作授权内核已实现；当前设备关系绑定登录会话，没有扫码、长期设备凭据、出站派发或远程执行。下文的完整链路仍是目标设计。
+
+
 已落地[账号隔离基础](../status/account-isolation-foundation.md)及[自有账号协调接口](../status/coordinator-auth-api.md)。当前自有协调服务使用 SQLite，并提供[手机 Web 同源网关与 HTTPS 隧道](../status/mobile-web.md)，用户已确认真实邮件和手机首轮可用；[原生桌面账号模块](../status/desktop-account.md)接入同一回环 HTTP 服务。正式部署和远程执行尚未实现。
 
 依用户2026-09-22选择，T41改为自有邮箱验证码与服务端会话；设备分别持有可撤销会话。已登录电脑发起短时、一次性的配对请求，绑定账号、设备和权限范围；手机登录、扫码、核对设备及确认信息后绑定。二维码不携带长期令牌或模型 Key。每次 API 访问由服务端推导用户并核对 owner，不能信任客户端传入的 account_id。

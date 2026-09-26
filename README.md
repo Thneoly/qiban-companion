@@ -8,6 +8,8 @@ React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“�
 
 已新增[T41/T42账号隔离基础](docs/status/account-isolation-foundation.md)：认证适配器边界、账号/伙伴稳定映射、账号内待办及会话撤销的Rust基础与测试。已接续[自有账号与协调HTTP接口](docs/status/coordinator-auth-api.md)，用户已确认真实邮件验证码和账号/伙伴查询成功；已加入本机登录命令及[手机 Web 登录与共享待办](docs/status/mobile-web.md)，已加入[原生桌面账号与共享待办](docs/status/desktop-account.md)：邮箱登录、安全会话保存、重开恢复及退出，真实桌面界面与手机的人工联合验收待补。首发手机入口已确定为[手机Web](docs/architecture/mobile-client-strategy.md)。
 
+已新增[T44/T21 设备配对与动作授权首轮增量](docs/status/device-pairing.md)：电脑生成短时码，手机核对并确认、两端查看和撤销；底层支持资源版本与单次动作准入，远程执行尚未开放。步骤见[配对指南](docs/development/device-pairing.md)。
+
 已新增[T16本地文档执行台账](docs/status/local-document-execution.md)：任务面板的“文档任务”可生成摘录预览、确认创建草稿、核对产物与重开恢复。它是[手机接续](docs/architecture/device-continuity.md)的执行前置，不代表手机已能触发本地执行。
 
 已新增[2D数字人、模型导入与轻量透明舞台](docs/status/avatar-appearance.md)，从气泡“角色与场景”设置，外观与模型可重开恢复。此前[小天地背景与角色拖动](docs/status/pet-scene-drag.md)，底部把手改为舞台，可见背景和角色均可拖动。已新增[Windows安装包与数据保留说明](docs/development/windows-installer.md)，本机隔离安装、重装、默认卸载和记录恢复已验证，见[交付记录](docs/status/windows-installer.md)。干净设备和独立体验仍待验收。
