@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  decodeContextPreview, decodeMemoryReceipt,
   decodePersonalMemoryDetail, decodePersonalMemoryList, decodePersonalMemoryOverview,
-  personalMemoryErrorMessage, personalMemoryKinds,
-  type PersonalMemoryDetail, type PersonalMemoryList, type PersonalMemoryOverview, type PersonalMemoryRecord,
+  personalMemoryErrorMessage, personalPolicyErrorMessage, personalMemoryKinds,
+  type ContextPreview, type PersonalMemoryDetail, type PersonalMemoryList, type PersonalMemoryOverview, type PersonalMemoryRecord,
 } from '@companion/contracts';
 import { nativeDesktop } from '../../lib/surface';
 import './personal-memory.css';
@@ -43,6 +44,15 @@ export function PersonalMemoryPanel() {
   const [kind, setKind] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Injection policy family (per current model scope, from chat_context_preview).
+  const [preview, setPreview] = useState<ContextPreview | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [ids, setIds] = useState<number[]>([]);
+  const [injectionBusy, setInjectionBusy] = useState(false);
+  const [injectionError, setInjectionError] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const injectionSerial = useRef(0);
+  const injectionActing = useRef(false);
   // Separate serial spaces: a search must never invalidate a concurrent
   // overview refresh (and vice versa).
   const alive = useRef(true), overviewSerial = useRef(0), searchSerial = useRef(0), acting = useRef(false);
@@ -111,9 +121,69 @@ export function PersonalMemoryPanel() {
       alive.current = false;
       overviewSerial.current++;
       searchSerial.current++;
+      injectionSerial.current++;
       window.removeEventListener('focus', focus);
     };
   }, [refreshOverview]);
+
+  const refreshInjection = useCallback(async () => {
+    const id = ++injectionSerial.current;
+    try {
+      const next = decodeContextPreview(await invoke('chat_context_preview'));
+      if (alive.current && injectionSerial.current === id) {
+        setPreview(next);
+        setEnabled(next.personal.policy.enabled);
+        setIds(next.personal.policy.selectedIds);
+        setInjectionError('');
+      }
+    } catch (e) {
+      if (alive.current && injectionSerial.current === id) setInjectionError(personalMemoryErrorMessage(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    alive.current = true;
+    if (nativeDesktop) void refreshInjection();
+    // The injection policy shares the global context epoch: any memory-changed
+    // event or window focus can make the cached scope/epoch/revision stale,
+    // and a stale save fails with "请刷新" — so refresh alongside overview.
+    const focus = () => { if (nativeDesktop && !injectionActing.current) void refreshInjection(); };
+    window.addEventListener('focus', focus);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    if (nativeDesktop) void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen('memory-changed', () => { if (!injectionActing.current) void refreshInjection(); })
+    ).then(remove => { if (disposed) remove?.(); else unlisten = remove; }).catch(() => {});
+    return () => {
+      disposed = true;
+      injectionSerial.current++;
+      unlisten?.();
+      window.removeEventListener('focus', focus);
+    };
+  }, [refreshInjection]);
+
+  function toggleId(id: number) {
+    setIds(previous => previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]);
+  }
+
+  async function saveInjection(restartConversation: boolean) {
+    if (injectionActing.current || !preview) return;
+    injectionActing.current = true;
+    setInjectionBusy(true); setInjectionError(''); setConfirming(false);
+    try {
+      decodeMemoryReceipt(await invoke('personal_memory_policy_set', { request: {
+        expectedScope: preview.scope, expectedEpoch: preview.contextEpoch,
+        expectedRevision: preview.personal.policy.revision,
+        enabled, selectedIds: enabled ? ids : [], restartConversation,
+      }}));
+      await refreshInjection();
+    } catch (e) {
+      if (alive.current) setInjectionError(personalPolicyErrorMessage(e));
+    } finally {
+      injectionActing.current = false;
+      if (alive.current) setInjectionBusy(false);
+    }
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -125,6 +195,13 @@ export function PersonalMemoryPanel() {
     setExpanded(id); setDetail(null);
     void loadDetail(id);
   }
+
+  const injection = preview?.personal;
+  const resultsById = new Map((results?.memories ?? []).map(m => [m.id, m]));
+  const chosen = enabled ? ids : [];
+  const chars = chosen.reduce((sum, id) => sum + [...(resultsById.get(id)?.content ?? preview?.personal.items.find(m => m.id === id)?.content ?? '')].length, 0);
+  const removing = !!preview && preview.personal.policy.selectedIds.some(id => !chosen.includes(id));
+  const changed = !!preview && (enabled !== preview.personal.policy.enabled || ids.join(',') !== preview.personal.policy.selectedIds.join(','));
 
   const online = overview?.online === true;
   const offline = overview?.online === false;
@@ -198,5 +275,39 @@ export function PersonalMemoryPanel() {
         </article>
       </li>)}
     </ul>}
+    {nativeDesktop && injection && <div className="personal-memory-injection">
+      <h3>让交流用上这些个人记忆</h3>
+      <p className="personal-memory-help">为当前模型勾选发送时携带的个人记忆；按勾选顺序注入，与应用记忆分开计数（各 5 条 / 800 字）。发送前可在聊天气泡预览，发送后回执如实记录。</p>
+      <p>当前服务：{preview!.scope.baseUrl} · 模型：{preview!.scope.model} · 已保存状态：{injection.policy.enabled ? `启用 · ${injection.policy.selectedIds.length}条` : '关闭'}</p>
+      {!online && <p role="status" className="personal-memory-notice">个人记忆服务未连接：无法新增或保留勾选（需核对内容与预算）；可移除全部勾选或关闭注入，保存时会如实提示。</p>}
+      <fieldset disabled={injectionBusy} className="personal-memory-choice-set">
+        <label className="personal-memory-choice">
+          <input type="checkbox" checked={enabled} onChange={e => { setEnabled(e.target.checked); if (!e.target.checked) setIds([]); }}/>
+          <span>允许此模型使用所选个人记忆（发送时携带）</span>
+        </label>
+        {injection.policy.selectedIds.length > 0 && <div className="personal-memory-choice-list">
+          {injection.policy.selectedIds.map(id => <label key={id} className="personal-memory-choice">
+            <input type="checkbox" checked={ids.includes(id)} disabled={!enabled} onChange={() => toggleId(id)}/>
+            <span>#{id}{resultsById.get(id) ? ` ${resultsById.get(id)!.title}` : online ? '' : '（离线中，仅显编号）'}</span>
+          </label>)}
+        </div>}
+        {online && results && results.count > 0 && <div className="personal-memory-choice-list">
+          {results.memories.filter(m => !injection.policy.selectedIds.includes(m.id)).map(m => <label key={m.id} className="personal-memory-choice">
+            <input type="checkbox" checked={ids.includes(m.id)} disabled={!enabled} onChange={() => toggleId(m.id)}/>
+            <span>#{m.id} {m.title}（{kindLabels[m.type] ?? m.type} · {m.project ?? '全局'}）</span>
+          </label>)}
+        </div>}
+      </fieldset>
+      <p className="personal-memory-help">{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送{online ? '' : ' · 离线时字数为已显示内容的下限'}</p>
+      {injectionError && <p role="alert" className="personal-memory-error">{injectionError}</p>}
+      {confirming && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
+        <h4 id="personal-injection-confirm-title">确认收回个人记忆使用</h4>
+        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并清空这台电脑上<strong>全部模型的聊天记录</strong>。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
+        <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并清空聊天</button>
+        <button disabled={injectionBusy} onClick={() => setConfirming(false)}>返回，不修改</button>
+      </div>}
+      <button disabled={injectionBusy || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirming(true); else void saveInjection(false); }}>保存选择</button>
+      {!online && <p className="personal-memory-help">服务未连接时保存不可用；如需临时停用注入，请启动服务后操作。</p>}
+    </div>}
   </section>;
 }

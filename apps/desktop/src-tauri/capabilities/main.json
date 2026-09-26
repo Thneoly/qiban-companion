@@ -27,6 +27,7 @@
     "allow-memory-policy-set",
     "allow-personal-memory-overview",
     "allow-personal-memory-recall",
-    "allow-personal-memory-detail"
+    "allow-personal-memory-detail",
+    "allow-personal-memory-policy-set"
   ]
 }

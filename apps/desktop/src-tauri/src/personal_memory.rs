@@ -83,6 +83,18 @@ fn service_code(code: &str) -> &'static str {
     }
 }
 
+/// True when the record is currently injectable: not superseded and its
+/// validity window has not passed. Pure UTC string comparison, exactly like
+/// the service's own active predicate — `validUntil` expiry bumps nothing,
+/// which is why admission compares against the ACTIVE-filtered set.
+pub fn active_at(record: &PersonalMemoryRecord, now_utc: &str) -> bool {
+    record.superseded_by.is_none()
+        && record
+            .valid_until
+            .as_deref()
+            .is_none_or(|until| until > now_utc)
+}
+
 /// The seven personal memory categories; `type` is a Rust keyword so the
 /// field is `kind`, renamed on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +206,20 @@ pub struct PersonalMemoryClient {
     response_cap: usize,
 }
 
+/// Test-only redirection of the production address so integration tests can
+/// point the send-path fetch at an ephemeral router; serialized by the same
+/// mutex to keep parallel tests from cross-talking.
+#[cfg(test)]
+static TEST_BASE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+pub(crate) static TEST_BASE_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn test_use_base_url(url: String) {
+    *TEST_BASE.lock().unwrap() = Some(url);
+}
+
 impl PersonalMemoryClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -203,6 +229,10 @@ impl PersonalMemoryClient {
     }
 
     pub fn service() -> Self {
+        #[cfg(test)]
+        if let Some(base) = TEST_BASE.lock().unwrap().clone() {
+            return Self::new(base);
+        }
         Self::new(SERVICE_URL)
     }
 
@@ -316,6 +346,33 @@ impl PersonalMemoryClient {
         .await
     }
 
+    /// Resolves a batch of ids to their CURRENT full row states, aligned with
+    /// the input order. `not_found` becomes a `None` slot (the memory is
+    /// gone from the archive — a drift signal); any transport failure fails
+    /// the whole batch, because a partial resolve cannot back an admission
+    /// decision. Requests run concurrently so a dead port surfaces via one
+    /// connect timeout instead of five serial ones.
+    pub async fn resolve(
+        &self,
+        ids: &[i64],
+    ) -> Result<Vec<Option<PersonalMemoryRecord>>, PersonalMemoryFailure> {
+        let mut futures = Vec::with_capacity(ids.len());
+        for id in ids {
+            let client = PersonalMemoryClient::new(self.base_url.clone());
+            futures.push(async move {
+                match client.detail(*id).await {
+                    Ok(detail) => Ok(Some(detail.memory)),
+                    Err(PersonalMemoryFailure {
+                        code: "not_found", ..
+                    }) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            });
+        }
+        let results = futures::future::try_join_all(futures).await?;
+        Ok(results)
+    }
+
     pub async fn overview(&self) -> PersonalMemoryOverview {
         let online = self.healthz().await;
         let stats = if online {
@@ -378,12 +435,12 @@ pub async fn personal_memory_detail(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use memory_service::{app_state, router, MemoryStore};
     use std::sync::Arc;
 
-    struct TempDb(std::path::PathBuf);
+    pub(crate) struct TempDb(pub(crate) std::path::PathBuf);
 
     impl Drop for TempDb {
         fn drop(&mut self) {
@@ -413,19 +470,20 @@ mod tests {
         }
     }
 
-    struct TestService {
-        base_url: String,
+    pub(crate) struct TestService {
+        pub(crate) base_url: String,
         task: tokio::task::JoinHandle<()>,
-        _database: TempDb,
+        pub(crate) _database: TempDb,
     }
 
     impl Drop for TestService {
+        // abort() is enough for borrowers; they only need the port gone.
         fn drop(&mut self) {
             self.task.abort();
         }
     }
 
-    fn draft(
+    pub(crate) fn draft(
         kind: memory_service::MemoryKind,
         title: &str,
         content: &str,
@@ -441,7 +499,7 @@ mod tests {
     }
 
     /// Serves the real memory-service router on an ephemeral loopback port.
-    async fn spawn_service() -> TestService {
+    pub(crate) async fn spawn_service() -> TestService {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "personal-memory-desktop-{}.db",
@@ -633,4 +691,40 @@ async fn real_service_walkthrough_via_production_address() {
     let first = results.memories[0].clone();
     let detail = client.detail(first.id).await.expect("detail");
     assert!(detail.chain.iter().any(|item| item.id == first.id));
+}
+
+/// Real-service injection-path walkthrough: resolve batch + admission
+/// agreement on live data (run with the service on 127.0.0.1:4322).
+#[tokio::test]
+#[ignore = "requires the personal memory service running on 127.0.0.1:4322"]
+async fn real_service_injection_walkthrough() {
+    let client = PersonalMemoryClient::service();
+    let results = client.recall(None, None, None, None).await.expect("recall");
+    assert!(
+        results.count >= 1,
+        "archive needs at least one active memory"
+    );
+    let ids: Vec<i64> = results.memories.iter().map(|m| m.id).take(3).collect();
+    let rows = client.resolve(&ids).await.expect("resolve");
+    assert_eq!(rows.len(), ids.len());
+    for row in &rows {
+        assert!(row.is_some(), "active ids must resolve on the live archive");
+    }
+    let now = crate::personal_memory_context::now_utc();
+    let active: Vec<_> = rows
+        .into_iter()
+        .flatten()
+        .filter(|record| crate::personal_memory::active_at(record, &now))
+        .collect();
+    let expected: Vec<crate::personal_memory_context::PersonalSeqReference> = active
+        .iter()
+        .map(|r| crate::personal_memory_context::PersonalSeqReference {
+            id: r.id,
+            seq: r.seq,
+        })
+        .collect();
+    assert!(
+        crate::personal_memory_context::admit_personal(&expected, &active).is_ok(),
+        "fresh resolve must admit against itself"
+    );
 }

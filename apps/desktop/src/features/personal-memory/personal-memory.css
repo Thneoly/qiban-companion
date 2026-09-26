@@ -41,3 +41,13 @@
 .personal-memory-chain-title{overflow-wrap:anywhere}
 .personal-memory-next{font-size:11px;color:#6f796e}
 @media(max-width:900px){.personal-memory-panel{padding:20px}}
+.personal-memory-injection{margin-top:24px;padding:20px;border:1px solid #dce4d8;border-radius:16px;background:#f8faf6}
+.personal-memory-injection h3{margin:0 0 6px;font-size:16px}
+.personal-memory-injection>p{margin:6px 0;font-size:13px;color:#515d51;line-height:1.7}
+.personal-memory-choice-set{border:0;padding:0;margin:12px 0;display:grid;gap:8px}
+.personal-memory-choice{display:flex;align-items:flex-start;gap:10px;font-size:13px;overflow-wrap:anywhere}
+.personal-memory-choice input{flex:0 0 auto;margin-top:4px}
+.personal-memory-choice-list{padding-left:6px;border-left:2px solid #e4e9df;display:grid;gap:8px;margin:4px 0}
+.personal-memory-confirm{padding:14px;border:1px solid #dfc8a8;background:#fcf4e6;border-radius:12px;margin:12px 0}
+.personal-memory-confirm h4{margin:0 0 8px;font-size:14px}
+.personal-memory-confirm button{margin-right:10px}
