@@ -2,6 +2,8 @@
 
 日期：2026-09-26。对应 O3 的配对闭环及动作授权内核；[协议与门禁](../architecture/device-authorization.md)、[运行指南](../development/device-pairing.md)。T44/T21 全包、T22 和 G3 未准出。
 
+后续已接通[文档确认与受限执行](remote-document-confirmation.md)，下文保留本轮交付时的边界与测试数据。
+
 ## 实现
 
 - 电脑生成五分钟一次性码，手机同账号另一会话核对电脑/范围并明确确认；两端显示配对关系，支持按版本撤销。重新生成使旧待确认码失效，消费或撤销后码摘要被清除。

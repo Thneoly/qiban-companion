@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
+    "allow-remote-document-prepare",
+    "allow-remote-document-share",
+    "allow-remote-document-sync",
     "allow-account-pairings",
     "allow-account-pairing-offer",
     "allow-account-pairing-revoke",

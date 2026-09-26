@@ -356,6 +356,7 @@ fn save_action(
 fn invalidated_state(state: &str) -> &str {
     match state {
         "admitted" | "cancel_requested" => "cancel_requested",
+        "completed" | "failed" | "unknown" => state,
         _ => "cancelled",
     }
 }
@@ -381,3 +382,6 @@ fn invalidate(
 }
 #[cfg(test)]
 mod tests;
+
+mod documents;
+pub(super) use documents::migrate_documents;

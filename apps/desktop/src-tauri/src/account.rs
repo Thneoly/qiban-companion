@@ -18,8 +18,10 @@ pub struct AccountError {
     pub message: &'static str,
 }
 impl AccountError {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         let message = match code {
+            "document_storage" => "文档预览或本地执行台账不可用，请检查文档格式、容量和数据目录。",
+            "document_capacity" => "共享文档或动作记录已达上限，当前版本尚未提供清理入口。",
             "pairing_denied" => "配对信息已失效，或当前会话没有此权限。",
             "pairing_conflict" => "配对状态已变化，请刷新后重新核对。",
             "pairing_capacity" => "配对记录已达上限。",
@@ -168,7 +170,7 @@ impl AccountClient {
         self.challenge = None;
         Ok(())
     }
-    async fn request(
+    pub(crate) async fn request(
         &self,
         method: Method,
         path: &str,
@@ -195,7 +197,7 @@ impl AccountClient {
             .await
             .map_err(|_| AccountError::new("unavailable"))?
         {
-            if bytes.len() + chunk.len() > 128 * 1024 {
+            if bytes.len() + chunk.len() > 512 * 1024 {
                 return Err(AccountError::new("unavailable"));
             }
             bytes.extend_from_slice(&chunk);
@@ -342,7 +344,7 @@ impl AccountClient {
             notice: None,
         })
     }
-    fn active_secret(&self) -> Result<SessionSecret> {
+    pub(crate) fn active_secret(&self) -> Result<SessionSecret> {
         let secret = self
             .secret()?
             .ok_or(AccountError::new("authentication_required"))?;
@@ -385,6 +387,17 @@ impl AccountClient {
             .await?,
         )
         .map_err(|_| AccountError::new("unavailable"))
+    }
+    pub(crate) async fn remote_owner(&self) -> Result<String> {
+        let secret = self.active_secret()?;
+        let profile: Profile = serde_json::from_value(
+            self.request(Method::GET, "/v1/me", Some(&secret.token), None)
+                .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))?;
+        let id = uuid::Uuid::parse_str(&profile.account_id)
+            .map_err(|_| AccountError::new("unavailable"))?;
+        Ok(format!("{}-{id}", self.port))
     }
     pub async fn pairings(&self) -> Result<Vec<companion_core::authorization::Pairing>> {
         let secret = self.active_secret()?;

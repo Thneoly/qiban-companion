@@ -72,3 +72,42 @@ pub struct ActionAuthorization {
     pub expires_at: u64,
     pub state: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShareDocument {
+    pub pairing_id: String,
+    pub binding: ActionBinding,
+    pub source_name: String,
+    pub preview: String,
+}
+impl ShareDocument {
+    pub fn validate(&self) -> Result<(), AuthorizationError> {
+        self.binding.validate()?;
+        crate::execution::prepare_document(
+            &self.binding.action_id,
+            &self.source_name,
+            &self.preview,
+        )
+        .map_err(|_| AuthorizationError::Invalid)?;
+        if self.preview.len() > 12 * 1024
+            || self.binding.resource_version != 1
+            || self.binding.parameters_digest != document_digest(&self.source_name, &self.preview)
+        {
+            return Err(AuthorizationError::Invalid);
+        }
+        Ok(())
+    }
+}
+pub fn document_digest(name: &str, preview: &str) -> String {
+    crate::execution::digest(format!("remote-excerpt-v1\0{name}\0{preview}").as_bytes())
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentAction {
+    pub authorization: ActionAuthorization,
+    pub source_name: String,
+    pub preview: String,
+    pub artifact_hash: String,
+    pub current_role: String,
+}

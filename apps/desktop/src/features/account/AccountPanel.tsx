@@ -9,6 +9,7 @@ import {
 import { nativeDesktop } from "../../lib/surface";
 import { errorMessage } from "../../lib/client";
 import "./account.css";
+import { RemoteDocuments } from "./RemoteDocuments";
 import { PairingPanel } from "./PairingPanel";
 
 const empty: AccountSnapshot = {
@@ -224,6 +225,7 @@ export function AccountPanel() {
             </dl>
           </div>
           <PairingPanel key={snapshot.profile.accountId} onAuthError={failure} />
+          <RemoteDocuments key={snapshot.profile.accountId} onAuthError={failure} />
           <form
             onSubmit={(e) => {
               e.preventDefault();

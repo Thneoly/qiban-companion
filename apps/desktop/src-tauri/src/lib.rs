@@ -11,6 +11,7 @@ mod memory_export;
 mod model_settings;
 mod pet;
 mod placement;
+mod remote_documents;
 mod tray;
 mod voice;
 
@@ -41,6 +42,9 @@ pub fn run() {
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
             app.manage(execution::ExecutionState::open(&data_dir)?);
+            app.manage(remote_documents::RemoteDocuments::new(
+                data_dir.join("remote-documents"),
+            ));
             app.manage(
                 account::open_state(&data_dir.join("account-settings.db"))
                     .map_err(|e| e.message)?,
@@ -60,6 +64,7 @@ pub fn run() {
                         None
                     }
                 };
+            remote_documents::start(app.handle().clone());
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
@@ -92,6 +97,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            remote_documents::remote_document_prepare,
+            remote_documents::remote_document_share,
+            remote_documents::remote_document_sync,
             account::account_pairings,
             account::account_pairing_offer,
             account::account_pairing_revoke,

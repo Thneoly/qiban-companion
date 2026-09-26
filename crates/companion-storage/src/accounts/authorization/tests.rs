@@ -156,7 +156,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
             },
         )
         .unwrap();
-        s.connection.lock().unwrap().execute_batch("DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
+        s.connection.lock().unwrap().execute_batch("DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
     }
     {
         let mut s = AccountStore::open(&path).unwrap();
@@ -168,6 +168,11 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
             .accept_pairing(&m, &o.code, &o.pairing.id, "手机")
             .unwrap()
             .id;
+        s.connection
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TABLE shared_documents; PRAGMA user_version=3;")
+            .unwrap();
     }
     {
         let mut s = AccountStore::open(&path).unwrap();
@@ -213,4 +218,100 @@ fn concurrent_revoke_and_admit_have_one_durable_order() {
         }
     );
     assert!(s.admit_action(&d, &b).is_err());
+}
+
+#[test]
+fn shared_document_confirmation_receipt_and_cancellation_are_exact() {
+    use companion_core::authorization::{document_digest, ShareDocument};
+    let mut s = fixture();
+    let (d, m, p) = connected(&s);
+    let mut b = binding(&p);
+    let preview = "# fixed excerpt".to_string();
+    b.parameters_digest = document_digest("demo.txt", &preview);
+    let request = ShareDocument {
+        pairing_id: p.id.clone(),
+        binding: b.clone(),
+        source_name: "demo.txt".into(),
+        preview,
+    };
+    let first = s.share_document(&d, &request).unwrap();
+    assert_eq!(
+        s.share_document(&d, &request)
+            .unwrap()
+            .authorization
+            .binding,
+        b
+    );
+    assert!(s.share_document(&m, &request).is_err());
+    assert!(s
+        .list_documents(&identity("alice", "outsider"))
+        .unwrap()
+        .is_empty());
+    assert!(s
+        .document_action(&identity("bob", "outsider"), &b.action_id)
+        .is_err());
+    assert!(s
+        .receipt_document(&d, &b, "completed", &first.artifact_hash)
+        .is_err());
+    s.confirm_action(&m, &b).unwrap();
+    s.admit_action(&d, &b).unwrap();
+    assert!(s
+        .receipt_document(&m, &b, "completed", &first.artifact_hash)
+        .is_err());
+    assert!(s
+        .receipt_document(&d, &b, "completed", &"b".repeat(64))
+        .is_err());
+    s.receipt_document(&d, &b, "completed", &first.artifact_hash)
+        .unwrap();
+    assert_eq!(
+        s.receipt_document(&d, &b, "completed", &first.artifact_hash)
+            .unwrap()
+            .authorization
+            .state,
+        "completed"
+    );
+    let mut cancelled = request.clone();
+    cancelled.binding.action_id = uuid::Uuid::new_v4().to_string();
+    cancelled.binding.resource_id = uuid::Uuid::new_v4().to_string();
+    s.share_document(&d, &cancelled).unwrap();
+    s.confirm_action(&m, &cancelled.binding).unwrap();
+    s.cancel_document(&m, &cancelled.binding.action_id).unwrap();
+    assert!(s.admit_action(&d, &cancelled.binding).is_err());
+    s.revoke_pairing(&d, &p.id, p.revision).unwrap();
+    s.clock = || 301001;
+    assert_eq!(
+        s.document_action(&m, &b.action_id)
+            .unwrap()
+            .authorization
+            .state,
+        "completed"
+    );
+}
+#[test]
+fn shared_document_rejects_changed_preview_and_rolls_back_partial_writes() {
+    use companion_core::authorization::{document_digest, ShareDocument};
+    let s = fixture();
+    let (d, _, p) = connected(&s);
+    let mut b = binding(&p);
+    b.parameters_digest = document_digest("demo.txt", "preview");
+    let mut request = ShareDocument {
+        pairing_id: p.id,
+        binding: b.clone(),
+        source_name: "demo.txt".into(),
+        preview: "changed".into(),
+    };
+    assert!(s.share_document(&d, &request).is_err());
+    request.preview = "preview".into();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER fail_shared BEFORE INSERT ON shared_documents BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(s.share_document(&d, &request).is_err());
+    assert!(s.get_action_authorization(&d, &b.action_id).is_err());
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_shared;")
+        .unwrap();
+    s.share_document(&d, &request).unwrap();
+    request.preview = "other".into();
+    request.binding.parameters_digest = document_digest("demo.txt", "other");
+    assert!(s.share_document(&d, &request).is_err());
 }

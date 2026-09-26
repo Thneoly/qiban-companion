@@ -26,6 +26,9 @@ test("native account UI separates local data, deduplicates retry and clears late
     let failedOnce = false;
     const tasks: any[] = [];
     const pairings: any[] = [];
+    const documents: any[] = [];
+    let prepared: any;
+    w.documentShares = 0;
     w.connectPair = () => {
       const p = pairings[0];
       p.controllerId = crypto.randomUUID();
@@ -96,6 +99,48 @@ test("native account UI separates local data, deduplicates retry and clears late
               });
             }
             return value;
+          }
+          if (cmd === "remote_document_sync") return structuredClone(documents);
+          if (cmd === "remote_document_prepare") {
+            const actionId = crypto.randomUUID();
+            prepared = {
+              id: crypto.randomUUID(),
+              actionId,
+              sourceName: args.sourceName,
+              preview: args.text,
+              artifactName: `${actionId}.md`,
+              artifactHash: "a".repeat(64),
+              status: "waiting_confirmation",
+              revision: 0,
+              createdAt: 1,
+              updatedAt: 1,
+              note: "",
+            };
+            return { task: structuredClone(prepared) };
+          }
+          if (cmd === "remote_document_share") {
+            w.documentShares++;
+            const d = {
+              authorization: {
+                pairingId: pairings[0].id,
+                binding: {
+                  actionId: prepared.actionId,
+                  resourceId: prepared.id,
+                  resourceVersion: 1,
+                  parametersDigest: "b".repeat(64),
+                  pairRevision: pairings[0].revision,
+                  scope: "document_excerpt",
+                },
+                expiresAt: Date.now() + 300000,
+                state: "awaiting_confirmation",
+              },
+              sourceName: prepared.sourceName,
+              preview: prepared.preview,
+              artifactHash: prepared.artifactHash,
+              currentRole: "desktop",
+            };
+            documents.push(d);
+            return structuredClone(d);
           }
           if (cmd === "account_pairings") return structuredClone(pairings);
           if (cmd === "account_pairing_offer") {
@@ -205,7 +250,9 @@ test("native account UI separates local data, deduplicates retry and clears late
       exact: true,
     })
     .click();
-  await expect(panel.locator(":scope > .account-tasks")).toContainText("已取消");
+  await expect(panel.locator(":scope > .account-tasks")).toContainText(
+    "已取消",
+  );
   const pairing = panel.locator(".pairing-panel");
   await pairing
     .getByRole("button", { name: "生成五分钟配对码", exact: true })
@@ -217,6 +264,33 @@ test("native account UI separates local data, deduplicates retry and clears late
   await expect(pairing).toContainText("已配对");
   await expect(pairing.getByTestId("pairing-code")).toHaveCount(0);
   await pairing.screenshot({ path: "test-results/desktop-pairing.png" });
+  const remote = panel.locator(".remote-documents");
+  await remote
+    .getByRole("button", { name: "刷新文档协作", exact: true })
+    .click();
+  await expect(remote.locator("select option")).toHaveCount(2);
+  await remote.getByLabel("接收确认的手机").selectOption({ index: 1 });
+  await remote
+    .getByLabel("选择要分享摘录的文档")
+    .setInputFiles({
+      name: "桌面测试.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("只分享用户核对过的摘录"),
+    });
+  await remote
+    .getByRole("button", { name: "生成本地预览", exact: true })
+    .click();
+  await expect(remote.getByLabel("待分享摘录预览")).toContainText(
+    "只分享用户核对过的摘录",
+  );
+  expect(await page.evaluate(() => (window as any).documentShares)).toBe(0);
+  await expect(remote.locator("article")).toHaveCount(0);
+  await remote
+    .getByRole("button", { name: "分享预览并等待手机确认", exact: true })
+    .click();
+  await expect(remote.locator("article")).toContainText("等待手机确认");
+  expect(await page.evaluate(() => (window as any).documentShares)).toBe(1);
+  await remote.screenshot({ path: "test-results/remote-document-desktop.png" });
   page.once("dialog", (dialog) => dialog.accept());
   await pairing
     .getByRole("button", { name: "撤销配对 我的电脑", exact: true })

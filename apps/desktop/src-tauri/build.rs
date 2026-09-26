@@ -1,5 +1,8 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "remote_document_prepare",
+        "remote_document_share",
+        "remote_document_sync",
         "account_pairings",
         "account_pairing_offer",
         "account_pairing_revoke",
