@@ -100,7 +100,7 @@ const personalPolicyErrors: Record<string, string> = {
 export function personalPolicyErrorMessage(value: unknown): string {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const code = (value as Record<string, unknown>).code;
-    if (typeof code === 'string' && code in personalPolicyErrors) return personalPolicyErrors[code];
+    if (typeof code === 'string' && code in personalPolicyErrors) return personalPolicyErrors[code] ?? '个人记忆错误协议不兼容，请更新客户端。';
   }
   return '个人记忆错误协议不兼容，请更新客户端。';
 }
