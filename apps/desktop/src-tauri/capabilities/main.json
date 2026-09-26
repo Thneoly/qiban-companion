@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
+    "allow-remote-document-prepare",
+    "allow-remote-document-share",
+    "allow-remote-document-sync",
     "allow-account-pairings",
     "allow-account-pairing-offer",
     "allow-account-pairing-revoke",
@@ -41,6 +44,10 @@
     "allow-execution-cancel",
     "allow-execution-confirm",
     "allow-execution-reconcile",
-    "allow-execution-result"
+    "allow-execution-result",
+    "allow-personal-memory-overview",
+    "allow-personal-memory-recall",
+    "allow-personal-memory-detail",
+    "allow-personal-memory-policy-set"
   ]
 }

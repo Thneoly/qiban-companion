@@ -77,6 +77,41 @@ try {
     path: "apps/desktop/test-results/mobile-pairing.png",
     fullPage: true,
   });
+  const documents = page.locator(".remote-documents");
+  const save = documents.locator("article").filter({ hasText: "保存测试.txt" });
+  const cancel = documents
+    .locator("article")
+    .filter({ hasText: "取消测试.txt" });
+  await expect(save).toContainText("等待手机确认", { timeout: 15000 });
+  await cancel
+    .getByRole("button", { name: "取消或请求停止", exact: true })
+    .click();
+  await expect(cancel).toContainText("已取消");
+  await save.locator("summary").click();
+  await expect(save.locator("pre")).toContainText("测试摘录，不读取用户文件");
+  page.once("dialog", (dialog) => dialog.accept());
+  await save
+    .getByRole("button", { name: "确认电脑保存这份摘录", exact: true })
+    .click();
+  await expect(save).toContainText("已保存并核验", { timeout: 20000 });
+  for (const [name, outcome] of [
+    ["准入丢失.txt", "未保存成功"],
+    ["回执恢复.txt", "已保存并核验"],
+  ]) {
+    const item = documents.locator("article").filter({ hasText: name });
+    page.once("dialog", (dialog) => dialog.accept());
+    await item
+      .getByRole("button", { name: "确认电脑保存这份摘录", exact: true })
+      .click();
+    await expect(item).toContainText(outcome, { timeout: 20000 });
+  }
+  await page.screenshot({
+    path: "apps/desktop/test-results/remote-document-mobile.png",
+    fullPage: true,
+  });
+  console.log(
+    "PASS: phone confirmation, cancellation, lost-admission no-write and persisted-artifact receipt recovery.",
+  );
   page.once("dialog", (dialog) => dialog.accept());
   await pairing
     .getByRole("button", { name: "撤销配对 集成测试电脑", exact: true })

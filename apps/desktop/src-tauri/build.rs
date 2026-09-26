@@ -1,5 +1,8 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "remote_document_prepare",
+        "remote_document_share",
+        "remote_document_sync",
         "account_pairings",
         "account_pairing_offer",
         "account_pairing_revoke",
@@ -16,6 +19,10 @@ fn main() {
         "memory_mutate",
         "chat_context_epoch",
         "memory_export",
+        "personal_memory_overview",
+        "personal_memory_recall",
+        "personal_memory_detail",
+        "personal_memory_policy_set",
         "guide_status",
         "guide_complete",
         "voice_probe",

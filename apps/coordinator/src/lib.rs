@@ -1,4 +1,5 @@
 pub mod auth;
+mod documents;
 mod pairing;
 
 use auth::{AuthError, NativeAuth};
@@ -51,7 +52,13 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pairings/preview", post(pairing::preview))
         .route("/v1/pairings/accept", post(pairing::accept))
         .route("/v1/pairings/{id}/revoke", post(pairing::revoke))
-        .layer(DefaultBodyLimit::max(8192))
+        .route("/v1/documents", get(documents::list).post(documents::share))
+        .route("/v1/documents/{id}", get(documents::get_one))
+        .route("/v1/documents/{id}/confirm", post(documents::confirm))
+        .route("/v1/documents/{id}/admit", post(documents::admit))
+        .route("/v1/documents/{id}/cancel", post(documents::cancel))
+        .route("/v1/documents/{id}/receipt", post(documents::receipt))
+        .layer(DefaultBodyLimit::max(16384))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             response_boundary,

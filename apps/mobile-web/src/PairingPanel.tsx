@@ -79,7 +79,7 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
       </p>
       <p className="hint">
         文档摘录协作 ·
-        每次动作另行确认。执行尚未开放；配对不授予文件、聊天或记忆访问。退出或会话过期后需重新配对。
+        每次动作另行确认。支持确认电脑已分享的摘录；配对不授予任意文件、聊天或记忆访问。退出或会话过期后需重新配对。
       </p>
       {note && <p role="status">{note}</p>}
       <form
@@ -142,7 +142,7 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
                 setCode("");
                 setPreview(null);
                 await refresh();
-                setNote("配对成功。手机执行尚未开放。");
+                setNote("配对成功。电脑分享摘录后，可在下方确认保存。");
               })
             }
           >

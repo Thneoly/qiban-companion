@@ -105,7 +105,7 @@ test('native handoff starts once after threshold and includes the whole scene in
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
-        if (command === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (command === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (command === 'guide_status') return true;
         if (command === 'pet_action' && args.action === 'drag') w.dragCalls++;
         if (command === 'set_pet_regions') w.hitRegions = args.regions;

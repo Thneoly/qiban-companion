@@ -10,6 +10,7 @@ const routes = new Set([
   "GET /api/state",
   "GET /api/tasks",
   "GET /api/pairings",
+  "GET /api/documents",
   "POST /api/pairings/preview",
   "POST /api/pairings/accept",
   "POST /api/tasks",
@@ -100,7 +101,8 @@ export function createWebServer({
         !(
           req.method === "POST" &&
           (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/.test(path) ||
-            /^\/api\/pairings\/[0-9a-f-]{36}\/revoke$/.test(path))
+            /^\/api\/pairings\/[0-9a-f-]{36}\/revoke$/.test(path) ||
+            /^\/api\/documents\/[0-9a-f-]{36}\/(confirm|cancel)$/.test(path))
         )
       )
         return fail(404, "not_found");

@@ -3,6 +3,7 @@ use crate::{
     chat::{ChatInner, ChatState},
     memory::{MemoryChanged, MemoryFailure, MemoryReceipt},
     model_settings::{ModelConfig, ModelState},
+    personal_memory_context::PersonalUsage,
 };
 use companion_core::memory::{
     validate_selection, Memory, MemoryPolicy, MemoryPolicyChange, MemoryScope,
@@ -26,6 +27,7 @@ pub struct ContextPreview {
     pub items: Vec<Memory>,
     pub body_chars: usize,
     pub context_chars: usize,
+    pub personal: crate::personal_memory_context::PersonalContextPreview,
 }
 impl ContextPreview {
     pub fn read(inner: &ChatInner, scope: MemoryScope) -> Result<Self, MemoryFailure> {
@@ -42,6 +44,16 @@ impl ContextPreview {
             .collect();
         let body_chars = items.iter().map(|m| m.body.chars().count()).sum();
         let context_chars = reference_block(&items).map_or(0, |s| s.chars().count());
+        // Personal part defaults to offline-shaped; the async wrapper fills
+        // the fetched family after the locks release.
+        let personal = crate::personal_memory_context::PersonalContextPreview {
+            status: "offline",
+            policy: store.personal_memory_policy(&scope).unwrap_or_default(),
+            items: Vec::new(),
+            inactive_selected_ids: Vec::new(),
+            body_chars: 0,
+            context_chars: 0,
+        };
         Ok(Self {
             scope,
             context_epoch: store.context_epoch()?,
@@ -49,6 +61,7 @@ impl ContextPreview {
             items,
             body_chars,
             context_chars,
+            personal,
         })
     }
     pub fn admit(&self, expected_scope: &MemoryScope, expected_epoch: i64) -> Result<(), String> {
@@ -71,6 +84,7 @@ impl ContextPreview {
                 .collect(),
             body_chars: self.body_chars,
             context_chars: self.context_chars,
+            personal: crate::personal_memory_context::personal_usage_offline(),
         }
     }
 }
@@ -83,6 +97,7 @@ pub struct MemoryUsage {
     pub memories: Vec<MemoryReference>,
     pub body_chars: usize,
     pub context_chars: usize,
+    pub personal: PersonalUsage,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryReference {
@@ -99,13 +114,21 @@ pub fn reference_block(items: &[Memory]) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn chat_context_preview(
+pub async fn chat_context_preview(
     settings: State<'_, ModelState>,
     state: State<'_, ChatState>,
 ) -> Result<ContextPreview, MemoryFailure> {
-    let settings = settings.lock().map_err(|_| MemoryFailure::unavailable())?;
-    let inner = state.0.lock().map_err(|_| MemoryFailure::unavailable())?;
-    ContextPreview::read(&inner, scope(&settings.config))
+    // Atomic read of app preview + personal policy + epoch under both locks;
+    // the personal fetch happens after release (never hold the chat mutex
+    // across an await).
+    let mut preview = {
+        let settings = settings.lock().map_err(|_| MemoryFailure::unavailable())?;
+        let inner = state.0.lock().map_err(|_| MemoryFailure::unavailable())?;
+        ContextPreview::read(&inner, scope(&settings.config))?
+    };
+    let policy = preview.personal.policy.clone();
+    preview.personal = crate::personal_memory_context::personal_preview(policy).await;
+    Ok(preview)
 }
 
 #[tauri::command]

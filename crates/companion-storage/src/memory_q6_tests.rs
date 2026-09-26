@@ -20,6 +20,8 @@ fn fixture() -> (HistoryStore, Memory) {
     let tx = db.transaction().unwrap();
     tx.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL);").unwrap();
     tx.execute_batch(include_str!("memory-schema.sql")).unwrap();
+    tx.execute_batch(include_str!("memory-schema-v3.sql"))
+        .unwrap();
     tx.commit().unwrap();
     let mut store = HistoryStore(db);
     let memory = store.memory_create(&draft("Q6 合成正文"), 0).unwrap().value;

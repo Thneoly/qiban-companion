@@ -88,7 +88,7 @@ export function PairingPanel({
     <section className="pairing-panel" aria-labelledby="pairing-title">
       <h3 id="pairing-title">设备配对与权限</h3>
       <p className="helper">
-        仅用于文档摘录协作，每个动作仍需单独确认。当前尚未开放手机执行，配对不会授予文件、聊天或记忆访问。
+        仅用于文档摘录协作，每个动作仍需单独确认。电脑选定并分享预览后，可在手机确认保存。配对不授予任意文件、聊天或记忆访问。
       </p>
       <p className="helper">
         配对绑定本次登录；退出或会话过期后需重新配对。设备名称由用户填写，请核对两端信息。

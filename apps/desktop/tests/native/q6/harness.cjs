@@ -10,7 +10,7 @@ class Harness {
     this.directory=path.join(process.env.LOCALAPPDATA,this.id);assert(!fs.existsSync(this.directory),'Refusing an existing profile');
     this.evidence=path.resolve('.cache',this.id+'-'+crypto.randomUUID());fs.mkdirSync(this.evidence,{recursive:true});
     this.port=Number(process.env.QIBAN_CDP_PORT||9444);this.requests=[];
-    this.meta={runId:path.basename(this.evidence),startedAt:new Date().toISOString(),commit:execFileSync('git',['-c','safe.directory='+process.cwd().replaceAll('\\','/'),'rev-parse','HEAD'],{encoding:'utf8'}).trim(),binarySha256:crypto.createHash('sha256').update(fs.readFileSync(this.exe)).digest('hex'),identifier:this.id,schemaVersion:2,protocolVersion:2,reviewer:null};
+    this.meta={runId:path.basename(this.evidence),startedAt:new Date().toISOString(),commit:execFileSync('git',['-c','safe.directory='+process.cwd().replaceAll('\\','/'),'rev-parse','HEAD'],{encoding:'utf8'}).trim(),binarySha256:crypto.createHash('sha256').update(fs.readFileSync(this.exe)).digest('hex'),identifier:this.id,schemaVersion:3,protocolVersion:3,reviewer:null};
     this.meta.sourceDirty=!!execFileSync('git',['-c','safe.directory='+process.cwd().replaceAll('\\','/'),'status','--porcelain'],{encoding:'utf8'}).trim();
     this.meta.harnessSha256=crypto.createHash('sha256').update(fs.readdirSync(__dirname).filter(n=>n.endsWith('.cjs')).sort().map(n=>n+'\n'+fs.readFileSync(path.join(__dirname,n),'utf8')).join('\n')).digest('hex');
   }
@@ -31,8 +31,8 @@ class Harness {
     for(let n=0;n<100;n++){const pages=this.browser.contexts().flatMap(c=>c.pages());this.pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));this.panel=pages.find(p=>p.url().includes('view=panel'));if(this.pet&&this.panel)break;await delay(100);}
     assert(this.pet&&this.panel);await this.pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
     assert(fs.existsSync(path.join(this.directory,'instance.lock')),'Wrong build profile');
-    const db=new DatabaseSync(path.join(this.directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,2);db.close();
-    assert.equal((await this.invoke(this.pet,'get_runtime_info')).protocolVersion,2);
+    const db=new DatabaseSync(path.join(this.directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);db.close();
+    assert.equal((await this.invoke(this.pet,'get_runtime_info')).protocolVersion,3);
   }
   async stop(){if(this.browser)await this.browser.close();this.browser=undefined;if(this.child){const child=this.child;this.child=undefined;const exited=new Promise(r=>child.once('exit',r));child.kill();await exited;}await delay(250);}
   async close(){await this.stop();this.server?.closeAllConnections();this.server?.close();}
