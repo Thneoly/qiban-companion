@@ -202,6 +202,44 @@ pub fn validate_selection<'a>(
     Ok(result)
 }
 
+/// Personal memories live in the standalone memory service and use integer
+/// IDs with their own (id, seq) versioning; selection shares the app-memory
+/// budget constants but is validated against fetched content by the host
+/// (this layer cannot touch the network).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalMemoryPolicy {
+    pub enabled: bool,
+    pub revision: i64,
+    pub selected_ids: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonalMemoryChange {
+    pub expected_scope: MemoryScope,
+    pub expected_revision: i64,
+    pub expected_epoch: i64,
+    pub enabled: bool,
+    pub selected_ids: Vec<i64>,
+    pub restart_conversation: bool,
+}
+
+/// Order-preserving structural check only: positive integers, no duplicates,
+/// at most MAX_SELECTION. Existence, activity and the character budget are
+/// verified by the host against freshly fetched service content.
+pub fn validate_personal_selection(ids: &[i64]) -> Result<(), MemoryError> {
+    if ids.len() > MAX_SELECTION {
+        return Err(MemoryError::SelectionTooLarge);
+    }
+    for (i, id) in ids.iter().enumerate() {
+        if *id < 1 || ids[..i].contains(id) {
+            return Err(MemoryError::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
