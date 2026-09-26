@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, message, nonce, type Profile, type Task } from "./api";
 import "./style.css";
+import { DocumentPanel } from "./DocumentPanel";
+import { PairingPanel } from "./PairingPanel";
 
 function Companion() {
   return (
@@ -355,6 +357,8 @@ function App() {
               </button>
             </div>
           </section>
+          <PairingPanel key={profile.accountId} onExpired={clearSession} />
+          <DocumentPanel key={profile.accountId} onExpired={clearSession} />
           <section className="card todos">
             <div className="section-head">
               <div>

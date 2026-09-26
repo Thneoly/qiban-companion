@@ -69,6 +69,9 @@ impl VerifiedIdentity {
         }
         Ok(())
     }
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
     pub fn issuer(&self) -> &str {
         &self.issuer
     }

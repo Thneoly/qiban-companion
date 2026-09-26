@@ -380,3 +380,10 @@ footer {
     display: block;
   }
 }
+
+.pairing { grid-column:1 / -1; }
+.pairing .notice {overflow-wrap:anywhere;}
+
+.remote-documents {grid-column:1 / -1;}
+.remote-documents pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;}
+.remote-documents article{border-top:1px solid #d6dfce;margin-top:16px;padding-top:12px;}

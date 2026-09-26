@@ -72,12 +72,12 @@ try {
   await pc.getByRole("button", { name: "记下来", exact: true }).click();
   await expect(pc.getByRole("status")).toContainText("连接中断");
   await pc.getByRole("button", { name: "记下来", exact: true }).click();
-  await expect(pc.locator(".task-list li")).toHaveCount(1);
+  await expect(pc.locator(".todos .task-list li")).toHaveCount(1);
   await pc.locator("summary").click();
   const accountId = await pc.getByTestId("account-id").textContent();
   const companionId = await pc.getByTestId("companion-id").textContent();
   await pc.reload();
-  await expect(pc.locator(".task-list li")).toHaveCount(1);
+  await expect(pc.locator(".todos .task-list li")).toHaveCount(1);
   await pc.screenshot({ path: `${output}desktop-tasks.png`, fullPage: true });
   assert.equal(await pc.evaluate(() => localStorage.length), 0);
   assert.equal(await pc.evaluate(() => sessionStorage.length), 0);
@@ -88,7 +88,7 @@ try {
     true,
   );
   await login(bob, "bob@example.com");
-  await expect(bob.locator(".task-list li")).toHaveCount(0);
+  await expect(bob.locator(".todos .task-list li")).toHaveCount(0);
   // The real coordinator enforces a 60-second mail cooldown. Do not bypass it.
   console.log(
     "Real coordinator: first login, recovery, task dedup and second-account isolation passed; waiting for OTP cooldown.",
@@ -100,7 +100,7 @@ try {
   await phone.locator("summary").click();
   await expect(phone.getByTestId("account-id")).toHaveText(accountId);
   await expect(phone.getByTestId("companion-id")).toHaveText(companionId);
-  await expect(phone.locator(".task-list li")).toHaveCount(1);
+  await expect(phone.locator(".todos .task-list li")).toHaveCount(1);
   assert.equal(
     await phone.evaluate(
       () => document.documentElement.scrollWidth > innerWidth,
@@ -113,9 +113,9 @@ try {
   await expect(phone.getByRole("status")).toContainText("连接中断");
   await pc.getByLabel("想让栖栖记住什么？").fill("电脑新增的第二件小事");
   await pc.getByRole("button", { name: "记下来", exact: true }).click();
-  await expect(pc.locator(".task-list li")).toHaveCount(2);
+  await expect(pc.locator(".todos .task-list li")).toHaveCount(2);
   await mobile.setOffline(false);
-  await expect(phone.locator(".task-list li")).toHaveCount(2);
+  await expect(phone.locator(".todos .task-list li")).toHaveCount(2);
   await phone
     .getByRole("button", { name: "取消 周末一起整理旅行清单", exact: true })
     .click();
@@ -156,9 +156,9 @@ try {
   ).toBeVisible();
   release();
   await delivery;
-  await expect(phone.locator(".task-list li")).toHaveCount(0);
+  await expect(phone.locator(".todos .task-list li")).toHaveCount(0);
   await pc.getByRole("button", { name: "刷新", exact: true }).click();
-  await expect(pc.locator(".task-list li")).toHaveCount(2);
+  await expect(pc.locator(".todos .task-list li")).toHaveCount(2);
   // A second context with a copy of the PC session checks global revocation
   // without sending a third code. The previous phone session was independent.
   const copy = await browser.newContext({
@@ -166,7 +166,7 @@ try {
   });
   const mirror = await copy.newPage();
   await mirror.goto(origin);
-  await expect(mirror.locator(".task-list li")).toHaveCount(2);
+  await expect(mirror.locator(".todos .task-list li")).toHaveCount(2);
   pc.once("dialog", (dialog) => dialog.accept());
   await pc.getByRole("button", { name: "退出所有设备", exact: true }).click();
   await expect(pc.getByRole("heading", { name: "接回你的伙伴" })).toBeVisible();

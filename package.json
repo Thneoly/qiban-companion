@@ -21,6 +21,8 @@
     "check": "npm run typecheck && npm test && npm run build && npm run test:mobile",
     "rust:check": "cargo check --workspace --locked",
     "rust:test": "cargo test --workspace --locked",
+    "memory:mcp": "cargo run -p memory-service --locked -- mcp",
+    "memory:serve": "cargo run -p memory-service --locked -- serve",
     "test:browser": "npm run test:browser --workspace @companion/desktop",
     "verify:docs": "node scripts/verification/verify-docs.cjs && node scripts/verification/verify-plan.cjs",
     "verify:prototype": "node scripts/verification/verify-prototype.cjs",
@@ -37,7 +39,8 @@
     "mobile": "npm run build:mobile && npm run start --workspace @companion/mobile-web",
     "mobile:https": "npm run build:mobile && npm run https --workspace @companion/mobile-web",
     "test:mobile": "npm run build:mobile && npm test --workspace @companion/mobile-web",
-    "test:mobile:integration": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/mobile-web/scripts/test-integration.ps1"
+    "test:mobile:integration": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/mobile-web/scripts/test-integration.ps1",
+    "test:desktop-account": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/desktop/scripts/test-account.ps1"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

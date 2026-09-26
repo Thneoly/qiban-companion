@@ -553,7 +553,7 @@ mod tests {
             store.clock = || 100_000;
             old_profile = store.profile(&identity).unwrap();
             let c = store.connection.lock().unwrap();
-            c.execute_batch("DROP TABLE native_tokens;DROP TABLE native_codes;DROP TABLE native_users;DROP TABLE native_rate_limits;PRAGMA user_version=1;").unwrap();
+            c.execute_batch("DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;DROP TABLE native_tokens;DROP TABLE native_codes;DROP TABLE native_users;DROP TABLE native_rate_limits;PRAGMA user_version=1;").unwrap();
         }
         {
             let mut store = AccountStore::open(&path).unwrap();

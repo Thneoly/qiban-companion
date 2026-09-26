@@ -1,4 +1,5 @@
 //! Pure domain contracts. No Tauri, network, filesystem or model dependency.
+pub mod authorization;
 pub mod conversation;
 pub mod execution;
 pub mod identity;
@@ -6,7 +7,7 @@ pub mod memory;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DomainError {
