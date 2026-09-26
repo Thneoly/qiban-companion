@@ -15,7 +15,7 @@ impl HistoryStore {
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(StorageError::NewerSchema);
         }
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -38,6 +38,11 @@ impl HistoryStore {
         Self::read(&tx, "", "")?;
         if version < 2 {
             tx.execute_batch(include_str!("memory-schema.sql"))?;
+        }
+        // v3 is additive (personal memory policy tables); replaying the v2
+        // file on an existing v2 archive would collide on its tables.
+        if version < 3 {
+            tx.execute_batch(include_str!("memory-schema-v3.sql"))?;
         }
         crate::memory::validate_schema(&tx)?;
         tx.commit()?;
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 3).unwrap();
+        connection.pragma_update(None, "user_version", 4).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -224,7 +229,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                2
+                3
             );
             assert_eq!(store.context_epoch().unwrap(), 0);
             assert!(store.memory_list().unwrap().is_empty());
@@ -315,7 +320,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(marker, 1);
-            s.0.pragma_update(None, "user_version", 3).unwrap();
+            s.0.pragma_update(None, "user_version", 4).unwrap();
         }
         let before = std::fs::read(&path).unwrap();
         assert!(matches!(
