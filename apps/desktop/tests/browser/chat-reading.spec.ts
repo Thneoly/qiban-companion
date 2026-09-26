@@ -139,7 +139,7 @@ test('companion follows real text phases and ignores late text after stopping or
   await expect(page.locator('.pet-portrait .thought-dots')).toBeVisible();
   await page.evaluate(() => (window as any).streamFixture.part('我们可以从一件小事开始。'));
   await expect(shell).toHaveAttribute('data-companion-state', 'responding');
-  await expect(page.locator('.pet-drag')).toContainText('正在回复你');
+  await expect(page.locator('.pet-scene-status')).toContainText('正在回复你');
   await page.evaluate(() => (window as any).streamFixture.finish());
   await expect(portrait).toHaveAttribute('data-expression', 'pleased');
   await page.screenshot({ path: test.info().outputPath('companion-reading.png') });

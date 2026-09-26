@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execution-prepare"
+description = "Enables the execution_prepare command without any pre-configured scope."
+commands.allow = ["execution_prepare"]
+
+[[permission]]
+identifier = "deny-execution-prepare"
+description = "Denies the execution_prepare command without any pre-configured scope."
+commands.deny = ["execution_prepare"]

@@ -41,7 +41,8 @@ pub fn get_runtime_info() -> RuntimeInfo {
         app_version: env!("CARGO_PKG_VERSION"),
         runtime: "desktop",
         persistence: "sqlite",
-        executor_available: false,
+        // Only the explicit document action is available; inbox tasks never auto-run.
+        executor_available: true,
     }
 }
 

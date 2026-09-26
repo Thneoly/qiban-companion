@@ -1,6 +1,9 @@
+mod account;
+mod account_vault;
 mod chat;
 mod commands;
 mod credentials;
+mod execution;
 mod instance;
 mod memory;
 mod memory_context;
@@ -10,6 +13,7 @@ mod personal_memory;
 mod personal_memory_context;
 mod pet;
 mod placement;
+mod remote_documents;
 mod tray;
 mod voice;
 
@@ -39,6 +43,14 @@ pub fn run() {
             app.manage(lease);
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
+            app.manage(execution::ExecutionState::open(&data_dir)?);
+            app.manage(remote_documents::RemoteDocuments::new(
+                data_dir.join("remote-documents"),
+            ));
+            app.manage(
+                account::open_state(&data_dir.join("account-settings.db"))
+                    .map_err(|e| e.message)?,
+            );
             app.manage(std::sync::Mutex::new(model_settings::ModelStore::open(
                 &data_dir.join("model-settings.db"),
             )?));
@@ -54,6 +66,7 @@ pub fn run() {
                         None
                     }
                 };
+            remote_documents::start(app.handle().clone());
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
@@ -86,6 +99,19 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            remote_documents::remote_document_prepare,
+            remote_documents::remote_document_share,
+            remote_documents::remote_document_sync,
+            account::account_pairings,
+            account::account_pairing_offer,
+            account::account_pairing_revoke,
+            account::account_snapshot,
+            account::account_port_save,
+            account::account_code_request,
+            account::account_login,
+            account::account_task_create,
+            account::account_task_cancel,
+            account::account_logout,
             memory_context::chat_context_preview,
             memory_context::memory_policy_set,
             memory::memory_list,
@@ -110,6 +136,13 @@ pub fn run() {
             chat::chat_clear,
             chat::chat_generate,
             chat::chat_cancel,
+            execution::execution_list,
+            execution::execution_prepare,
+            execution::execution_detail,
+            execution::execution_cancel,
+            execution::execution_confirm,
+            execution::execution_reconcile,
+            execution::execution_result,
             commands::get_runtime_info,
             commands::list_tasks,
             commands::create_task,

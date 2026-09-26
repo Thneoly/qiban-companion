@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execution-result"
+description = "Enables the execution_result command without any pre-configured scope."
+commands.allow = ["execution_result"]
+
+[[permission]]
+identifier = "deny-execution-result"
+description = "Denies the execution_result command without any pre-configured scope."
+commands.deny = ["execution_result"]

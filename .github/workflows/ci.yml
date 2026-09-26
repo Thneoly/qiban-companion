@@ -1,7 +1,8 @@
 name: Desktop skeleton
 on:
-  push:
-  pull_request:
+  # Paused at the project owner's request. Re-enable the workflow in GitHub
+  # before manually dispatching it; pushes and PRs do not start CI.
+  workflow_dispatch:
 jobs:
   verify:
     runs-on: windows-latest

@@ -15,9 +15,9 @@ Get-FileHash -LiteralPath 'target/release/bundle/nsis/栖伴_0.1.0_x64-setup.exe
 
 安装采用当前用户模式，默认路径为`%LOCALAPPDATA%\栖伴`；提供简体中文与英语。已装WebView2时复用现有运行时，缺少时下载安装引导程序，需要联网；此缺失运行时分支尚未在干净设备实测。未签名版本可能显示Windows发行者提示，当前仅用于内部验收，不宣称商用发行准备完成。
 
-实现采用[Tauri官方Windows安装配置](https://v2.tauri.app/distribute/windows-installer/)，配置覆盖层为[tauri.installer.conf.json](../../apps/desktop/src-tauri/tauri.installer.conf.json)。`npm run build:desktop`继续只构建可执行文件；安装包使用独立的`installer`前端模式，关闭本机`public`研究素材复制及Live2D实验入口，只含原创SVG角色和构建代码。开发模式仍可准备Live2D素材。
+实现采用[Tauri官方Windows安装配置](https://v2.tauri.app/distribute/windows-installer/)，配置覆盖层为[tauri.installer.conf.json](../../apps/desktop/src-tauri/tauri.installer.conf.json)。`npm run build:desktop`继续只构建可执行文件；安装包使用独立的`installer`前端模式，关闭本机`public`研究素材任意复制，包含原创SVG、构建代码及固定清单的Live2D运行库/许可声明，支持用户本地导入模型；不包含Hiyori或用户模型。见[数字人增量](../status/avatar-appearance.md)。
 
-构建后的[素材检查](../../apps/desktop/scripts/verify-installer-assets.cjs)拒绝额外文件、软链接、Live2D研究运行时及实验入口；未来新增正式静态素材需要更新明确的允许范围。[CI](../../.github/workflows/ci.yml)新增安装构建和7天保留的未签名工作流附件，未创建发布标签或自动更新服务；配置存在不等于外部CI已通过。
+构建后的[素材检查](../../apps/desktop/scripts/verify-installer-assets.cjs)拒绝白名单外文件、软链接、示例目录及旧实验入口，重新核验运行库哈希；未来新增正式静态素材需要更新明确的允许范围。[CI](../../.github/workflows/ci.yml)新增安装构建和7天保留的未签名工作流附件，未创建发布标签或自动更新服务；配置存在不等于外部CI已通过。
 
 ## 卸载与重装
 

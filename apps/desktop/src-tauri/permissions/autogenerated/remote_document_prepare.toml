@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remote-document-prepare"
+description = "Enables the remote_document_prepare command without any pre-configured scope."
+commands.allow = ["remote_document_prepare"]
+
+[[permission]]
+identifier = "deny-remote-document-prepare"
+description = "Denies the remote_document_prepare command without any pre-configured scope."
+commands.deny = ["remote_document_prepare"]

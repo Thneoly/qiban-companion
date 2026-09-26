@@ -18,6 +18,8 @@ uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zeroize = "1"
+base64 = "0.22"
+getrandom = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 futures = "0.3"
 tokio = { version = "1", features = ["sync", "time", "macros", "net", "rt"] }
@@ -30,6 +32,7 @@ tauri-plugin-single-instance = "2"
 # Real-service integration tests: serve the actual memory-service router on
 # an ephemeral loopback port (axum must match the service's major version).
 memory-service = { path = "../../memory-service" }
+companion-coordinator = { path = "../../coordinator" }
 axum = "0.8"
 
 [target.'cfg(windows)'.dependencies]
