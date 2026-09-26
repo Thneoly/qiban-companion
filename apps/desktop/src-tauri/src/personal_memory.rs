@@ -692,3 +692,39 @@ async fn real_service_walkthrough_via_production_address() {
     let detail = client.detail(first.id).await.expect("detail");
     assert!(detail.chain.iter().any(|item| item.id == first.id));
 }
+
+/// Real-service injection-path walkthrough: resolve batch + admission
+/// agreement on live data (run with the service on 127.0.0.1:4322).
+#[tokio::test]
+#[ignore = "requires the personal memory service running on 127.0.0.1:4322"]
+async fn real_service_injection_walkthrough() {
+    let client = PersonalMemoryClient::service();
+    let results = client.recall(None, None, None, None).await.expect("recall");
+    assert!(
+        results.count >= 1,
+        "archive needs at least one active memory"
+    );
+    let ids: Vec<i64> = results.memories.iter().map(|m| m.id).take(3).collect();
+    let rows = client.resolve(&ids).await.expect("resolve");
+    assert_eq!(rows.len(), ids.len());
+    for row in &rows {
+        assert!(row.is_some(), "active ids must resolve on the live archive");
+    }
+    let now = crate::personal_memory_context::now_utc();
+    let active: Vec<_> = rows
+        .into_iter()
+        .flatten()
+        .filter(|record| crate::personal_memory::active_at(record, &now))
+        .collect();
+    let expected: Vec<crate::personal_memory_context::PersonalSeqReference> = active
+        .iter()
+        .map(|r| crate::personal_memory_context::PersonalSeqReference {
+            id: r.id,
+            seq: r.seq,
+        })
+        .collect();
+    assert!(
+        crate::personal_memory_context::admit_personal(&expected, &active).is_ok(),
+        "fresh resolve must admit against itself"
+    );
+}
