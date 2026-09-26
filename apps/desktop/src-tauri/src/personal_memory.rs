@@ -6,7 +6,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
 const SERVICE_URL: &str = "http://127.0.0.1:4322";
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+// Covers the largest legal page (50 records x worst-case escaped content,
+// the same arithmetic the service uses for its request-body limit).
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 16 * 1024;
 
 /// Structured failure with stable codes so the frontend can branch on
@@ -24,6 +26,19 @@ impl PersonalMemoryFailure {
         Self {
             code: "service_offline",
             message: "个人记忆服务未运行或无法连接，请先启动服务后再刷新",
+        }
+    }
+    /// Connect-phase failures (including a dead port that drops instead of
+    /// refusing) mean the service is not reachable: offline guidance. A read
+    /// timeout on an established connection means slow-but-running.
+    fn transport(error: reqwest::Error) -> Self {
+        if !error.is_connect() && error.is_timeout() {
+            Self {
+                code: "timeout",
+                message: "个人记忆服务响应超时，请稍后重试",
+            }
+        } else {
+            Self::offline()
         }
     }
     fn invalid_request(message: &'static str) -> Self {
@@ -202,6 +217,11 @@ impl PersonalMemoryClient {
     ) -> Result<T, PersonalMemoryFailure> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            // This client only ever talks to a loopback service: a system or
+            // environment proxy must never intercept it (routing loopback
+            // traffic through a proxy both breaks offline detection and
+            // leaks memory contents and search terms).
+            .no_proxy()
             .connect_timeout(Duration::from_secs(2))
             .timeout(timeout)
             .build()
@@ -211,7 +231,7 @@ impl PersonalMemoryClient {
             .query(params)
             .send()
             .await
-            .map_err(|_| PersonalMemoryFailure::offline())?;
+            .map_err(PersonalMemoryFailure::transport)?;
         let status = response.status();
         let cap = if status.is_success() {
             self.response_cap
@@ -223,7 +243,7 @@ impl PersonalMemoryClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| PersonalMemoryFailure::offline())?
+            .map_err(PersonalMemoryFailure::transport)?
         {
             if bytes.len() + chunk.len() > cap {
                 return Err(PersonalMemoryFailure::incompatible());
@@ -367,8 +387,29 @@ mod tests {
 
     impl Drop for TempDb {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-            let _ = std::fs::remove_file(self.0.with_extension("db.v1.bak"));
+            // The aborted server task drops its connection asynchronously,
+            // so on Windows the delete can hit a sharing violation; retry
+            // briefly instead of leaking the file (and its WAL siblings).
+            for _ in 0..40 {
+                let mut pending = false;
+                for suffix in ["", "-wal", "-shm", ".v1.bak"] {
+                    let path = if suffix.is_empty() {
+                        self.0.clone()
+                    } else {
+                        // with_extension would mangle the stem; append raw.
+                        let mut sibling = self.0.as_os_str().to_owned();
+                        sibling.push(suffix);
+                        std::path::PathBuf::from(sibling)
+                    };
+                    if path.exists() && std::fs::remove_file(&path).is_err() {
+                        pending = true;
+                    }
+                }
+                if !pending {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
         }
     }
 
@@ -567,4 +608,29 @@ mod tests {
         let failure = client.recall(None, None, None, None).await.unwrap_err();
         assert_eq!(failure.code, "incompatible");
     }
+}
+
+/// Real-service walkthrough through the production constant: start the
+/// deployed service first (`npm run memory:serve` or the installed exe),
+/// then `cargo test -p companion-desktop real_service -- --ignored`.
+#[tokio::test]
+#[ignore = "requires the personal memory service running on 127.0.0.1:4322"]
+async fn real_service_walkthrough_via_production_address() {
+    let client = PersonalMemoryClient::service();
+    let overview = client.overview().await;
+    assert!(
+        overview.online,
+        "service must be running for this walkthrough"
+    );
+    let stats = overview.stats.expect("stats online");
+    assert!(stats.active >= 1);
+    let results = client.recall(None, None, None, None).await.expect("recall");
+    assert_eq!(
+        results.count as i64,
+        stats.active.min(20),
+        "default page matches active count up to the limit"
+    );
+    let first = results.memories[0].clone();
+    let detail = client.detail(first.id).await.expect("detail");
+    assert!(detail.chain.iter().any(|item| item.id == first.id));
 }

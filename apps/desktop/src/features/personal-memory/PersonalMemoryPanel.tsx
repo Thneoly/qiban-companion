@@ -15,6 +15,11 @@ const kindLabels: Record<string, string> = {
 };
 /** Expired rows are compared as plain UTC strings, exactly like the service. */
 const utcStamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+/** The service stores UTC text; show it in the user's local time. */
+const formatStamp = (value: string) => {
+  const parsed = new Date(`${value.replace(' ', 'T')}Z`);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+};
 const stateOf = (memory: PersonalMemoryRecord): '' | 'superseded' | 'expired' => {
   if (memory.supersededBy !== null) return 'superseded';
   if (memory.validUntil !== null && memory.validUntil <= utcStamp()) return 'expired';
@@ -38,37 +43,42 @@ export function PersonalMemoryPanel() {
   const [kind, setKind] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const alive = useRef(true), serial = useRef(0), acting = useRef(false);
+  // Separate serial spaces: a search must never invalidate a concurrent
+  // overview refresh (and vice versa).
+  const alive = useRef(true), overviewSerial = useRef(0), searchSerial = useRef(0), acting = useRef(false);
 
   const refreshOverview = useCallback(async () => {
-    const id = ++serial.current;
+    const id = ++overviewSerial.current;
     try {
       const next = decodePersonalMemoryOverview(await invoke('personal_memory_overview'));
-      if (alive.current && serial.current === id) {
+      if (alive.current && overviewSerial.current === id) {
         setOverview(next);
         if (!next.online) { setResults(null); setDetail(null); setExpanded(null); }
         setError('');
       }
     } catch (e) {
-      if (alive.current && serial.current === id) setError(personalMemoryErrorMessage(e));
+      if (alive.current && overviewSerial.current === id) setError(personalMemoryErrorMessage(e));
     }
   }, []);
 
   const search = useCallback(async (terms: { query: string; project: string; kind: string }) => {
     if (!nativeDesktop || acting.current) return;
     acting.current = true; setBusy(true); setError('');
-    const id = ++serial.current;
+    const id = ++searchSerial.current;
     try {
       const next = decodePersonalMemoryList(await invoke('personal_memory_recall', {
         query: terms.query || null, project: terms.project || null,
         kind: terms.kind || null, limit: SEARCH_LIMIT,
       }));
-      if (alive.current && serial.current === id) setResults(next);
+      if (alive.current && searchSerial.current === id) setResults(next);
     } catch (e) {
-      if (alive.current && serial.current === id) {
-        // The service may have gone down between overview and search.
+      if (alive.current && searchSerial.current === id) {
+        // The service may have gone down between overview and search; keep
+        // the address it reported instead of hardcoding one.
         if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'service_offline') {
-          setOverview({ online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' });
+          setOverview(previous => previous
+            ? { ...previous, online: false, stats: null }
+            : { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' });
           setResults(null);
         } else setError(personalMemoryErrorMessage(e));
       }
@@ -97,7 +107,12 @@ export function PersonalMemoryPanel() {
     if (nativeDesktop) void refreshOverview();
     const focus = () => { if (nativeDesktop && !acting.current) void refreshOverview(); };
     window.addEventListener('focus', focus);
-    return () => { alive.current = false; serial.current++; window.removeEventListener('focus', focus); };
+    return () => {
+      alive.current = false;
+      overviewSerial.current++;
+      searchSerial.current++;
+      window.removeEventListener('focus', focus);
+    };
   }, [refreshOverview]);
 
   function submit(event: FormEvent) {
@@ -118,7 +133,12 @@ export function PersonalMemoryPanel() {
     <div className="personal-memory-heading"><div><span className="eyebrow">ACROSS EVERYTHING WE USE</span><h2 id="personal-memories-title">个人记忆</h2></div><span className="personal-memory-badge">只读 · 独立服务</span></div>
     <p>这里陈列独立个人记忆服务中的档案：七类记忆、取代链与有效窗口，来自 Claude Code 等入口的共同记忆库。本视图只读，不写入、不注入聊天，也不会自动启动服务。</p>
     {!nativeDesktop && <p className="personal-memory-notice">浏览器仅预览界面，不连接个人记忆服务。请在桌面版使用。</p>}
-    {nativeDesktop && !overview && <p role="status" className="personal-memory-notice">正在连接个人记忆服务…</p>}
+    {nativeDesktop && !overview && !error && <p role="status" className="personal-memory-notice">正在连接个人记忆服务…</p>}
+    {nativeDesktop && !overview && error && <div className="personal-memory-offline" role="status">
+      <strong>暂时无法读取个人记忆服务状态</strong>
+      <p>{error}</p>
+      <button disabled={busy} onClick={() => void refreshOverview()}>重新连接</button>
+    </div>}
     {nativeDesktop && offline && <div className="personal-memory-offline" role="status">
       <strong>个人记忆服务未运行</strong>
       <p>服务地址：<code>{overview?.serviceUrl}</code>。可先在仓库运行 <code>npm run memory:serve</code>（或运行已部署的 <code>memory-service.exe serve</code>）再回来刷新。未连接时不会显示示例数据。</p>
@@ -149,14 +169,13 @@ export function PersonalMemoryPanel() {
           <header>
             <span className="personal-memory-kind">{kindLabels[memory.type] ?? memory.type}</span>
             <span className="personal-memory-importance">重要度 {memory.importance}/5</span>
-            <MemoryStates memory={memory}/>
           </header>
           <h3>{memory.title}</h3>
           <p className="personal-memory-content">{memory.content}</p>
           <footer>
             <span>{memory.project === null ? '全局' : memory.project}</span>
             {memory.tags.length > 0 && <span>{memory.tags.join(' · ')}</span>}
-            <span>更新于 {memory.updatedAt}</span>
+            <span>更新于 {formatStamp(memory.updatedAt)}</span>
           </footer>
           <button className="personal-memory-detail-toggle" aria-expanded={expanded === memory.id} disabled={busy} onClick={() => toggle(memory.id)}>
             {expanded === memory.id ? '收起详情' : '查看详情'}

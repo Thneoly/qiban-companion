@@ -93,7 +93,7 @@ export function decodePersonalMemoryList(value: unknown): PersonalMemoryList {
 export function decodePersonalMemoryDetail(value: unknown): PersonalMemoryDetail {
   const v = object(value);
   const memory = decodePersonalMemoryRecord(v.memory);
-  if (!Array.isArray(v.chain) || v.chain.length < 1 || v.chain.length > 1000) return incompatible();
+  if (!Array.isArray(v.chain) || v.chain.length < 1 || v.chain.length > 10000) return incompatible();
   const chain = v.chain.map(decodePersonalMemoryRecord);
   const ids = new Set(chain.map(m => m.id));
   if (ids.size !== chain.length || !ids.has(memory.id)) return incompatible();
@@ -112,7 +112,9 @@ export function decodePersonalMemoryStats(value: unknown): PersonalMemoryStats {
   if (!safeInteger(v.total) || !safeInteger(v.active) || !safeInteger(v.superseded) ||
       (v.active as number) + (v.superseded as number) > (v.total as number)) return incompatible();
   const byType = counterMap(v.byType, key => personalMemoryKinds.includes(key as PersonalMemoryKind), 7);
-  const byProject = counterMap(v.byProject, key => length(key) >= 1 && length(key) <= 64, 10);
+  // Same 512-char sanity cap as the record decoder: legacy rows can carry
+  // long project names and the service groups by the raw column value.
+  const byProject = counterMap(v.byProject, key => length(key) >= 1 && length(key) <= 512, 10);
   // Every active row has exactly one kind, so the type counters must sum to
   // the active total; the project view is a top-10 projection and may sum
   // lower. Both are read from one snapshot, so they cannot contradict.
@@ -136,6 +138,7 @@ export function decodePersonalMemoryOverview(value: unknown): PersonalMemoryOver
 
 const personalMemoryErrors: Record<string, string> = {
   service_offline: '个人记忆服务未运行或无法连接，请先启动服务后再刷新。',
+  timeout: '个人记忆服务响应超时，请稍后重试。',
   not_found: '未找到该记忆，可能已被删除，请刷新后重试。',
   busy: '个人记忆服务正忙，请稍后重试。',
   schema_mismatch: '个人记忆服务数据库结构不兼容，请升级服务后再使用。',

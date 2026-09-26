@@ -47,8 +47,11 @@ test('offline state names the service and never shows sample data', async ({ pag
 });
 
 test('online search shows cards and the supersession chain detail', async ({ page }) => {
+  // Recall results only ever contain ACTIVE rows (the service filters
+  // superseded/expired); supersession states appear in the detail chain.
   const superseded = record(1, { supersededBy: 2, seq: 3 });
   const current = record(2, { title: '决定 2（现行）', seq: 4 });
+  const another = record(3, { title: '决定 3', seq: 5, type: 'fact' });
   await page.goto('/?view=panel');
   const panel = page.getByRole('region', { name: '个人记忆' });
   // The page starts offline (the init default); flip the fixture and reconnect.
@@ -59,18 +62,18 @@ test('online search shows cards and the supersession chain detail', async ({ pag
     w.personalDetail = detail;
   }, [{
     online: true,
-    stats: { total: 2, active: 1, superseded: 1, byType: { decision: 1 }, byProject: { '(global)': 1 } },
+    stats: { total: 3, active: 2, superseded: 1, byType: { decision: 1, fact: 1 }, byProject: { R2R: 2 } },
     serviceUrl: 'http://127.0.0.1:4322',
-  }, { count: 2, memories: [superseded, current] }, { memory: superseded, chain: [superseded, current] }]);
+  }, { count: 2, memories: [current, another] }, { memory: current, chain: [superseded, current] }]);
   await panel.getByRole('button', { name: '重新连接' }).click();
-  await expect(panel).toContainText('共 2 条 · 活跃 1 · 已取代 1');
+  await expect(panel).toContainText('共 3 条 · 活跃 2 · 已取代 1');
   await panel.getByLabel('关键词').fill('决定');
   await panel.getByRole('button', { name: '检索', exact: true }).click();
   await expect(panel.locator('.personal-memory-card')).toHaveCount(2);
-  await expect(panel.locator('.personal-memory-card').first()).toContainText('已被取代');
   await panel.locator('.personal-memory-card').first().getByRole('button', { name: '查看详情' }).click();
   await expect(panel.locator('.personal-memory-detail ol')).toBeVisible();
   await expect(panel.locator('.personal-memory-detail')).toContainText('当前查看');
+  await expect(panel.locator('.personal-memory-detail')).toContainText('已被取代');
   await expect(panel.locator('.personal-memory-detail')).toContainText('→ 被 #2 取代');
   const calls = await page.evaluate(() => (window as any).personalCalls);
   expect(calls.some((call: unknown[]) => call[0] === 'recall' && (call[1] as { query?: string }).query === '决定')).toBe(true);
