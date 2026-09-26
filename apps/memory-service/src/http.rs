@@ -24,6 +24,16 @@ pub struct AppState {
     requests: Arc<Semaphore>,
 }
 
+/// Router wiring for an already-open store at production concurrency;
+/// lets workspace siblings (desktop integration tests) serve the real
+/// surface on an ephemeral loopback port.
+pub fn app_state(store: Arc<MemoryStore>) -> AppState {
+    AppState {
+        store,
+        requests: Arc::new(Semaphore::new(16)),
+    }
+}
+
 /// Builds the full router; tests drive this directly without a socket.
 /// Phase 2 (LAN) will insert an authentication middleware right before
 /// `response_boundary` on the gated sub-router; keep that slot in mind when

@@ -24,6 +24,9 @@
     "allow-memory-mutate",
     "allow-memory-export",
     "allow-chat-context-preview",
-    "allow-memory-policy-set"
+    "allow-memory-policy-set",
+    "allow-personal-memory-overview",
+    "allow-personal-memory-recall",
+    "allow-personal-memory-detail"
   ]
 }

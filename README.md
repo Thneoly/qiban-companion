@@ -24,7 +24,7 @@ npm run dev         # 浏览器预览：http://127.0.0.1:1420
 npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 ```
 
-个人记忆服务独立于桌面应用：`npm run memory:serve` 启动回环 HTTP，`mcp` 子命令供 Claude Code 拉起，详见[个人记忆服务指南](docs/development/personal-memory.md)。
+个人记忆服务独立于桌面应用：`npm run memory:serve` 启动回环 HTTP，`mcp` 子命令供 Claude Code 拉起，详见[个人记忆服务指南](docs/development/personal-memory.md)。任务面板的"个人记忆"区块可只读查看该服务（需先手动启动服务，离线时明确提示）。
 
 ### 体验桌面角色
 

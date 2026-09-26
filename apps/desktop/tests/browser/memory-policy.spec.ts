@@ -10,6 +10,7 @@ test.beforeEach(async({page})=>{
       if(cmd==='plugin:event|listen'){events.set(args.event,callbacks.get(args.handler));return ++seq;}
       if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
       if(cmd==='list_tasks')return [];
+      if(cmd==='personal_memory_overview')return{online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
       if(cmd==='memory_list')return {items:w.items,contextEpoch:w.epoch};
       if(cmd==='chat_context_preview'){const items=w.policy.selectedIds.map((id:string)=>w.items.find((m:any)=>m.id===id));return {scope:structuredClone(w.scope),contextEpoch:w.epoch,policy:structuredClone(w.policy),items,bodyChars:items.length*200,contextChars:items.length*500};}
       if(cmd==='memory_policy_set'){

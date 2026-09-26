@@ -68,6 +68,15 @@ curl.exe -X POST http://127.0.0.1:4322/v1/memories -H "Content-Type: application
 
 本机（现状）→ 局域网多设备 → VPS/边缘 → 互联网流转。API 已按"天生可远程"设计：`/v1/sync?since=` 提供基于全局 `seq` 的增量拉取（软删除/取代都是行状态，无 tombstone 问题）。Phase 2 局域网时需要在 `src/http.rs` 的 gated 路由前叠加认证中间件（代码注释已标注位置），并实现 `POST /v1/sync/push` 与多写者冲突合并（取代链语义：更新者胜、历史保留、矛盾标记不隐式覆盖）。在只有本机可验证之前不建设这些能力。
 
+## 桌面端只读视图
+
+任务面板（主窗口）的"个人记忆"区块读取本服务的回环 HTTP API：检索（关键词/类型/项目，最多 20 条）、查看单条与完整取代链。要点：
+
+- 桌面固定连接 `http://127.0.0.1:4322`（本增量无设置界面；服务侧改过 `QIBAN_MEMORY_ADDR` 端口时桌面暂无法跟随）。
+- **先启动服务再查看**：`npm run memory:serve` 或运行已部署的 `memory-service.exe serve`。未运行时面板显示离线块与启动指引，不显示示例数据；服务恢复后点"重新连接"。
+- 网络全部走 Rust IPC（`personal_memory_overview/recall/detail` 三命令，仅主窗口权限）；前端 CSP 不允许也不需要直连服务端口。
+- 视图只读：不写入、不注入聊天、不会自动启动或停止服务进程。
+
 ## 可重复验证
 
 ```powershell

@@ -14,6 +14,7 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
+        if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'model_settings_get') return { baseUrl: 'https://example.com/v1', model: 'custom-chat', useApiKey: false, hasApiKey: false, maxOutputTokens: 1024 };
         if (cmd === 'voice_cancel') { w.cancelled++; return; }
         if (cmd === 'voice_probe') {
