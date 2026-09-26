@@ -9,8 +9,11 @@ mod memory;
 mod memory_context;
 mod memory_export;
 mod model_settings;
+mod personal_memory;
+mod personal_memory_context;
 mod pet;
 mod placement;
+mod remote_documents;
 mod tray;
 mod voice;
 
@@ -41,6 +44,9 @@ pub fn run() {
             app.manage(chat::ChatState::open(&data_dir.join("chat-history.db")));
             app.manage(TaskStore::open(&data_dir.join("companion.db"))?);
             app.manage(execution::ExecutionState::open(&data_dir)?);
+            app.manage(remote_documents::RemoteDocuments::new(
+                data_dir.join("remote-documents"),
+            ));
             app.manage(
                 account::open_state(&data_dir.join("account-settings.db"))
                     .map_err(|e| e.message)?,
@@ -60,6 +66,7 @@ pub fn run() {
                         None
                     }
                 };
+            remote_documents::start(app.handle().clone());
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
@@ -92,6 +99,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            remote_documents::remote_document_prepare,
+            remote_documents::remote_document_share,
+            remote_documents::remote_document_sync,
+            account::account_pairings,
+            account::account_pairing_offer,
+            account::account_pairing_revoke,
             account::account_snapshot,
             account::account_port_save,
             account::account_code_request,
@@ -105,6 +118,10 @@ pub fn run() {
             memory::memory_mutate,
             memory::chat_context_epoch,
             memory_export::memory_export,
+            personal_memory::personal_memory_overview,
+            personal_memory::personal_memory_recall,
+            personal_memory::personal_memory_detail,
+            personal_memory_context::personal_memory_policy_set,
             placement::guide_status,
             placement::guide_complete,
             voice::voice_probe,

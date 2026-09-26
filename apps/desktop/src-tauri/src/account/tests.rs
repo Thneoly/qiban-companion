@@ -426,11 +426,90 @@ async fn desktop_mobile_same_companion_integration() {
         .unwrap()
         .to_path_buf();
     let port = f.port;
+    let offer = c.pairing_offer("集成测试电脑".into()).await.unwrap();
+    let pairing_id = offer.pairing.id.clone();
+    let remote_root =
+        std::env::temp_dir().join(format!("qiban-remote-test-{}", uuid::Uuid::new_v4()));
+    let worker_root = remote_root.clone();
+    let worker_client = f.client(Arc::new(SystemVault));
+    let worker = tokio::spawn(async move {
+        let remote = crate::remote_documents::RemoteDocuments::new(worker_root.clone());
+        let mut shared = false;
+        loop {
+            if !shared {
+                if let Some(pair) = worker_client
+                    .pairings()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.status == "active")
+                {
+                    for name in [
+                        "保存测试.txt",
+                        "取消测试.txt",
+                        "准入丢失.txt",
+                        "回执恢复.txt",
+                    ] {
+                        let prepared = remote
+                            .prepare(
+                                &worker_client,
+                                pair.id.clone(),
+                                uuid::Uuid::new_v4().to_string(),
+                                name.into(),
+                                "测试摘录，不读取用户文件".into(),
+                            )
+                            .await
+                            .unwrap();
+                        remote
+                            .share(&worker_client, &prepared.task.id)
+                            .await
+                            .unwrap();
+                    }
+                    shared = true;
+                }
+            }
+            if shared {
+                for d in remote.list(&worker_client).await.unwrap() {
+                    if d.authorization.state == "confirmed"
+                        && ["准入丢失.txt", "回执恢复.txt"].contains(&d.source_name.as_str())
+                    {
+                        // Fault injection at protocol boundaries: discard admission reply,
+                        // or persist a real artifact then reopen without sending a receipt.
+                        worker_client
+                            .request(
+                                Method::POST,
+                                &format!(
+                                    "/v1/documents/{}/admit",
+                                    d.authorization.binding.action_id
+                                ),
+                                Some(&worker_client.active_secret().unwrap().token),
+                                Some(serde_json::to_value(&d.authorization.binding).unwrap()),
+                            )
+                            .await
+                            .unwrap();
+                        if d.source_name == "回执恢复.txt" {
+                            let owner = worker_client.remote_owner().await.unwrap();
+                            let ledger =
+                                crate::execution::ExecutionState::open(&worker_root.join(owner))
+                                    .unwrap();
+                            ledger
+                                .execute(&d.authorization.binding.resource_id, 0)
+                                .unwrap();
+                        }
+                    }
+                }
+                let _ = remote.sync(&worker_client).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+    });
     let status = tokio::task::spawn_blocking(move || {
         std::process::Command::new("node")
             .arg("apps/desktop/tests/browser/mobile-peer.mjs")
             .current_dir(workspace)
             .env("QIBAN_TEST_UPSTREAM", format!("http://127.0.0.1:{port}"))
+            .env("QIBAN_TEST_PAIRING_CODE", offer.code)
+            .env("QIBAN_EXPECT_DESKTOP", offer.pairing.desktop_id)
             .env("QIBAN_EXPECT_ACCOUNT", profile.account_id)
             .env("QIBAN_EXPECT_COMPANION", profile.companion_id)
             .status()
@@ -438,7 +517,41 @@ async fn desktop_mobile_same_companion_integration() {
     })
     .await
     .unwrap();
+    worker.abort();
+    let _ = worker.await;
     assert!(status.success(), "mobile peer verification failed");
+    let owner = c.remote_owner().await.unwrap();
+    let ledger = crate::execution::ExecutionState::open(&remote_root.join(owner)).unwrap();
+    let tasks = ledger.store.list().unwrap();
+    assert_eq!(tasks.len(), 4);
+    for task in &tasks {
+        let expected = if ["保存测试.txt", "回执恢复.txt"].contains(&task.source_name.as_str())
+        {
+            companion_core::execution::ExecutionStatus::Completed
+        } else {
+            companion_core::execution::ExecutionStatus::Cancelled
+        };
+        assert_eq!(task.status, expected);
+        let attempts = ledger.store.detail(&task.id).unwrap().attempts.len();
+        assert_eq!(
+            attempts,
+            if expected == companion_core::execution::ExecutionStatus::Completed {
+                1
+            } else {
+                0
+            }
+        );
+    }
+    drop(ledger);
+    assert!(
+        remote_root.starts_with(std::env::temp_dir())
+            && remote_root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("qiban-remote-test-")
+    );
+    std::fs::remove_dir_all(&remote_root).unwrap();
     drop(c);
     let mut reopened = f.client(Arc::new(SystemVault));
     let snapshot = reopened.snapshot().await.unwrap();
@@ -450,5 +563,9 @@ async fn desktop_mobile_same_companion_integration() {
         .tasks
         .iter()
         .any(|t| t.id == native_task.id && t.status == companion_core::TaskStatus::Cancelled));
+    let pairs = reopened.pairings().await.unwrap();
+    assert!(pairs
+        .iter()
+        .any(|p| p.id == pairing_id && p.status == "revoked"));
     assert_eq!(reopened.logout(true).await.unwrap().status, "signed_out");
 }

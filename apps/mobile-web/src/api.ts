@@ -56,6 +56,9 @@ export function nonce() {
 }
 export function message(error: unknown) {
   const messages: Record<string, string> = {
+    pairing_denied: "配对码已失效，或当前登录没有此权限。请使用同账号的另一会话重新配对。",
+    pairing_conflict: "配对状态已变化，请刷新后重新核对。",
+    pairing_capacity: "配对记录已达上限。",
     network: "连接中断，操作结果尚未确认。恢复网络后重试即可。",
     authentication_required: "登录已过期或被退出，请重新登录。",
     invalid_code: "验证码不正确或已过期，请检查后重试。",

@@ -18,8 +18,13 @@ pub struct AccountError {
     pub message: &'static str,
 }
 impl AccountError {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         let message = match code {
+            "document_storage" => "文档预览或本地执行台账不可用，请检查文档格式、容量和数据目录。",
+            "document_capacity" => "共享文档或动作记录已达上限，当前版本尚未提供清理入口。",
+            "pairing_denied" => "配对信息已失效，或当前会话没有此权限。",
+            "pairing_conflict" => "配对状态已变化，请刷新后重新核对。",
+            "pairing_capacity" => "配对记录已达上限。",
             "credentials" => "系统安全凭据存储不可用，未降级为明文保存。请检查当前系统支持与权限。",
             "logout_not_saved" => {
                 "退出未完成：无法保存退出状态，请检查系统凭据存储后重试。当前会话仍可能有效。"
@@ -165,7 +170,7 @@ impl AccountClient {
         self.challenge = None;
         Ok(())
     }
-    async fn request(
+    pub(crate) async fn request(
         &self,
         method: Method,
         path: &str,
@@ -192,7 +197,7 @@ impl AccountClient {
             .await
             .map_err(|_| AccountError::new("unavailable"))?
         {
-            if bytes.len() + chunk.len() > 128 * 1024 {
+            if bytes.len() + chunk.len() > 512 * 1024 {
                 return Err(AccountError::new("unavailable"));
             }
             bytes.extend_from_slice(&chunk);
@@ -203,6 +208,9 @@ impl AccountClient {
             let code = match (status.as_u16(), value["error"]["code"].as_str()) {
                 (401, Some("invalid_code")) if token.is_none() => "invalid_code",
                 (401, _) => "authentication_required",
+                (403, Some("pairing_denied")) => "pairing_denied",
+                (409, Some("pairing_conflict")) => "pairing_conflict",
+                (409, Some("pairing_capacity")) => "pairing_capacity",
                 (429, _) => "rate_limited",
                 (409, Some("capacity")) => "capacity",
                 (409, _) => "conflict",
@@ -336,7 +344,7 @@ impl AccountClient {
             notice: None,
         })
     }
-    fn active_secret(&self) -> Result<SessionSecret> {
+    pub(crate) fn active_secret(&self) -> Result<SessionSecret> {
         let secret = self
             .secret()?
             .ok_or(AccountError::new("authentication_required"))?;
@@ -379,6 +387,55 @@ impl AccountClient {
             .await?,
         )
         .map_err(|_| AccountError::new("unavailable"))
+    }
+    pub(crate) async fn remote_owner(&self) -> Result<String> {
+        let secret = self.active_secret()?;
+        let profile: Profile = serde_json::from_value(
+            self.request(Method::GET, "/v1/me", Some(&secret.token), None)
+                .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))?;
+        let id = uuid::Uuid::parse_str(&profile.account_id)
+            .map_err(|_| AccountError::new("unavailable"))?;
+        Ok(format!("{}-{id}", self.port))
+    }
+    pub async fn pairings(&self) -> Result<Vec<companion_core::authorization::Pairing>> {
+        let secret = self.active_secret()?;
+        serde_json::from_value(
+            self.request(Method::GET, "/v1/pairings", Some(&secret.token), None)
+                .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))
+    }
+    pub async fn pairing_offer(
+        &self,
+        name: String,
+    ) -> Result<companion_core::authorization::PairingOffer> {
+        let secret = self.active_secret()?;
+        serde_json::from_value(
+            self.request(
+                Method::POST,
+                "/v1/pairings/offer",
+                Some(&secret.token),
+                Some(json!({"name":name})),
+            )
+            .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))
+    }
+    pub async fn pairing_revoke(&self, id: String, revision: u32) -> Result<()> {
+        if uuid::Uuid::parse_str(&id).is_err() {
+            return Err(AccountError::new("invalid_request"));
+        }
+        let secret = self.active_secret()?;
+        self.request(
+            Method::POST,
+            &format!("/v1/pairings/{id}/revoke"),
+            Some(&secret.token),
+            Some(json!({"revision":revision})),
+        )
+        .await?;
+        Ok(())
     }
     pub async fn logout(&mut self, all_sessions: bool) -> Result<Snapshot> {
         self.challenge = None;
@@ -451,3 +508,25 @@ pub async fn account_logout(
 
 #[cfg(test)]
 mod tests;
+
+#[tauri::command]
+pub async fn account_pairings(
+    state: State<'_, AccountState>,
+) -> Result<Vec<companion_core::authorization::Pairing>> {
+    state.lock().await.pairings().await
+}
+#[tauri::command]
+pub async fn account_pairing_offer(
+    name: String,
+    state: State<'_, AccountState>,
+) -> Result<companion_core::authorization::PairingOffer> {
+    state.lock().await.pairing_offer(name).await
+}
+#[tauri::command]
+pub async fn account_pairing_revoke(
+    id: String,
+    revision: u32,
+    state: State<'_, AccountState>,
+) -> Result<()> {
+    state.lock().await.pairing_revoke(id, revision).await
+}

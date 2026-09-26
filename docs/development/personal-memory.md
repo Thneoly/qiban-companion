@@ -1,0 +1,97 @@
+# 个人记忆服务：运行与切换指南
+
+`apps/memory-service` 是独立的个人记忆服务（Rust，单 exe），同一份 SQLite 库同时服务两类入口：Claude Code（MCP stdio）与回环 HTTP。实现与验证证据见[交付记录](../status/personal-memory-service.md)。
+
+## 子命令
+
+```powershell
+cargo run -p memory-service --locked -- mcp     # MCP stdio（Claude Code 拉起，无需手动运行）
+cargo run -p memory-service --locked -- serve   # HTTP 守护进程，默认 http://127.0.0.1:4322
+```
+
+根目录 npm 入口：`npm run memory:mcp`、`npm run memory:serve`。没有默认子命令：直接运行会打印用法并退出，避免误挂 stdin。
+
+## 配置
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `QIBAN_MEMORY_DB` | `%USERPROFILE%\.personal-memory\memory.db`（无则 `$HOME`） | 数据库路径；目录不存在会创建 |
+| `QIBAN_MEMORY_ADDR` | `127.0.0.1:4322` | HTTP 监听地址；v1 只接受回环地址，传其他值直接退出（见"演进路径"） |
+
+无密钥、无配置文件；v1 无鉴权，所以不暴露到回环之外。
+
+## 首次打开旧库时会发生什么
+
+Python 旧库（`user_version=0`、12 列 `memories` 表）在第一次被本服务打开时原地迁移：先整库预读校验（类型枚举、悬空取代/矛盾引用不过即拒绝，文件保持原样），再在数据库旁创建一次性备份 `memory.db.v1.bak`，然后单事务重建为 v2（保留全部 id 与内容，追加全局变更序号 `seq` 与写入来源 `origin`）。迁移后 `journal_mode=wal`，支持 MCP 与 HTTP 两进程同时读写。无法识别的库结构、更新的 `user_version` 一律 fail-closed。
+
+## HTTP API（v1）
+
+`/v1/*` 响应带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`（`/healthz` 在门外，不带这些头）；错误统一为 `{"error":{"code":"..."}}`（含路径参数解析失败等提取器拒绝）。请求体上限 258 KiB（覆盖 20000 字内容在 `\u` 转义下的最坏情形），并发上限 16（超发 429 `busy`）。
+
+| 方法与路径 | 用途 | 备注 |
+|---|---|---|
+| GET `/healthz` | 存活检查 | 在限流门外 |
+| GET `/v1/memories?query=&project=&type=&limit=` | 检索活跃记忆 | limit 钳制 1..50；project 过滤含全局记忆 |
+| POST `/v1/memories` | 新建 | body `{type,title,content,project?,importance?,tags?[]}` → 201 |
+| GET `/v1/memories/{id}` | 单条 + 完整取代链 | 404 `not_found` |
+| PATCH `/v1/memories/{id}` | 改正文 | body `{content}` |
+| POST `/v1/memories/{id}/supersede` | 取代 | body `{title,content}`；已被取代的行拒绝再取代 |
+| POST `/v1/memories/{id}/forget` | 软过期 | 幂等 |
+| GET `/v1/stats` | 统计 | |
+| GET `/v1/personality/summary` | 人格摘要 | 确定性聚合 preference/insight/person 各前 3 条，非生成式 |
+| GET `/v1/sync?since=&limit=` | 增量变更 | 返回 seq 大于 since 的行当前状态 + `currentSeq`（页内最大 seq，作为下次 `since` 的游标；分页拉取直到空页，不会跳行）；limit 默认 200 上限 1000 |
+
+示例：
+
+```powershell
+curl.exe http://127.0.0.1:4322/v1/stats
+curl.exe "http://127.0.0.1:4322/v1/memories?project=R2R&limit=5"
+curl.exe -X POST http://127.0.0.1:4322/v1/memories -H "Content-Type: application/json" -d '{\"type\":\"decision\",\"title\":\"示例\",\"content\":\"内容\"}'
+```
+
+## Claude Code 切换步骤
+
+1. 确认没有残留的 python server 进程。
+2. `cargo build --release -p memory-service --locked`，把 `target\release\memory-service.exe` 复制到 `C:\Users\<user>\.personal-memory\memory-service.exe`（脱离 target 目录存活）。
+3. 修改 `~/.claude.json` 的 `mcpServers.personal-memory`：
+
+```json
+{"type": "stdio",
+ "command": "C:\\Users\\<user>\\.personal-memory\\memory-service.exe",
+ "args": ["mcp"]}
+```
+
+4. 新开 Claude Code 会话，首次调用 `memory_recall` 会触发迁移并返回既有记忆；核对 `.personal-memory` 下出现 `memory.db.v1.bak`。
+5. 旧 `server.py` 留在原处即可，配置不再引用它。
+
+## 演进路径与预留槽位
+
+本机（现状）→ 局域网多设备 → VPS/边缘 → 互联网流转。API 已按"天生可远程"设计：`/v1/sync?since=` 提供基于全局 `seq` 的增量拉取（软删除/取代都是行状态，无 tombstone 问题）。Phase 2 局域网时需要在 `src/http.rs` 的 gated 路由前叠加认证中间件（代码注释已标注位置），并实现 `POST /v1/sync/push` 与多写者冲突合并（取代链语义：更新者胜、历史保留、矛盾标记不隐式覆盖）。在只有本机可验证之前不建设这些能力。
+
+## 桌面端只读视图
+
+任务面板（主窗口）的"个人记忆"区块读取本服务的回环 HTTP API：检索（关键词/类型/项目，最多 20 条）、查看单条与完整取代链。要点：
+
+- 桌面固定连接 `http://127.0.0.1:4322`（本增量无设置界面；服务侧改过 `QIBAN_MEMORY_ADDR` 端口时桌面暂无法跟随）。
+- **先启动服务再查看**：`npm run memory:serve` 或运行已部署的 `memory-service.exe serve`。未运行时面板显示离线块与启动指引，不显示示例数据；服务恢复后点"重新连接"。
+- 网络全部走 Rust IPC（`personal_memory_overview/recall/detail` 三命令，仅主窗口权限）；前端 CSP 不允许也不需要直连服务端口。
+- 视图只读：不写入、不会自动启动或停止服务进程。
+
+## 聊天注入（协议 v3）
+
+"让交流用上这些个人记忆"策略区（同一区块内）把选定的个人记忆注入栖栖的聊天，语义与应用记忆（M3）同构：
+
+- 按当前模型逐个勾选，5 条 / 800 字独立预算，按勾选顺序注入；发送前气泡预览两节（应用/个人），发送后回执如实记录（含"服务未连接则未含个人记忆"）。
+- **在线预览后服务掉线或条目在服务侧被取代/过期 → 拒绝发送**并提示刷新预览（预览即所发）。预览时就离线 → 明示后仍可发送，本次不含个人记忆。
+- 服务离线时仍可移除勾选或关闭注入（空选择无需核对）；新增勾选需要服务在线（核对预算）。
+- 策略数据存于 `chat-history.db`（schema v3），勾选变化推进与应用记忆相同的上下文 epoch，聊天协调无新增机制。
+- 详细语义（(id, seq) 准入、锁纪律、有界陈旧）见[技术设计 §7](../architecture/limited-memory.md)与[注入交付记录](../status/personal-memory-chat-injection.md)。
+
+## 可重复验证
+
+```powershell
+cargo test -p memory-service --locked          # 含真实子进程 stdio 集成测试
+cargo clippy -p memory-service --all-targets --locked -- -D warnings
+```
+
+在真实数据副本上演练迁移：复制 `memory.db` 到临时目录，`$env:QIBAN_MEMORY_DB` 指向副本后运行 `serve`，核对 `/v1/stats` 与 `/v1/sync?since=0` 的行数、副本旁的 `.v1.bak`、`PRAGMA user_version`（应为 2）。

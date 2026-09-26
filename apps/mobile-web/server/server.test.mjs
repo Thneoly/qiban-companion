@@ -205,3 +205,87 @@ test("snapshot uses the same captured credential for identity and tasks; partial
   assert.equal(second.status, 401);
   assert.doesNotMatch(second.text, /account-a|companion-a|task-a/);
 });
+
+test("pairing gateway only permits explicit control routes and never exposes action admission", async (t) => {
+  const calls = [];
+  const call = await fixture(t, async (url, options) => {
+    calls.push(url);
+    assert.equal(options.headers.Authorization, `Bearer ${token}`);
+    return Response.json([]);
+  });
+  const headers = { Cookie: `__Host-qiban_session=${token}` };
+  assert.equal((await call("/api/pairings", { headers })).status, 200);
+  for (const path of [
+    "/api/pairings/preview",
+    "/api/pairings/accept",
+    "/api/pairings/00000000-0000-0000-0000-000000000000/revoke",
+  ]) {
+    assert.equal(
+      (await call(path, { method: "POST", headers, body: "{}" })).status,
+      200,
+    );
+    assert.equal(
+      (
+        await call(path, {
+          method: "POST",
+          headers: { ...headers, Origin: "https://evil.example" },
+          body: "{}",
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await call(path, { method: "POST", body: "{}" })).status,
+      401,
+    );
+  }
+  for (const path of [
+    "/api/pairings/offer",
+    "/api/actions/admit",
+    "/api/execute",
+  ]) {
+    assert.equal(
+      (await call(path, { method: "POST", headers, body: "{}" })).status,
+      404,
+    );
+  }
+  assert.equal(calls.length, 4);
+});
+
+test("document gateway permits confirmation and cancellation but denies submission, admission and receipts", async (t) => {
+  const call = await fixture(t, async () => Response.json([]));
+  const headers = { Cookie: `__Host-qiban_session=${token}` };
+  const id = "00000000-0000-0000-0000-000000000000";
+  assert.equal((await call("/api/documents", { headers })).status, 200);
+  for (const op of ["confirm", "cancel"]) {
+    assert.equal(
+      (
+        await call(`/api/documents/${id}/${op}`, {
+          method: "POST",
+          headers,
+          body: "{}",
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await call(`/api/documents/${id}/${op}`, {
+          method: "POST",
+          headers: { ...headers, Origin: "https://evil.example" },
+          body: "{}",
+        })
+      ).status,
+      403,
+    );
+  }
+  for (const path of [
+    "/api/documents",
+    `/api/documents/${id}/admit`,
+    `/api/documents/${id}/receipt`,
+  ])
+    assert.equal(
+      (await call(path, { method: "POST", headers, body: "{}" })).status,
+      404,
+    );
+});
