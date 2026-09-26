@@ -42,6 +42,15 @@ fn run_serve() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 4322)));
+    // v1 has no authentication; binding beyond loopback belongs to the
+    // Phase 2 LAN plan together with an auth layer.
+    if !addr.ip().is_loopback() {
+        eprintln!(
+            "memory-service: refusing non-loopback bind {addr}; \
+             LAN exposure is a Phase 2 feature (docs/development/personal-memory.md)"
+        );
+        std::process::exit(1);
+    }
     let store = match MemoryStore::open(&database_path(), "http") {
         Ok(store) => std::sync::Arc::new(store),
         Err(error) => {

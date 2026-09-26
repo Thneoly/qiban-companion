@@ -184,19 +184,20 @@ fn external_writes_are_visible_to_the_running_child() {
     assert_eq!(stats["total"], 0);
 
     // A second writer (the HTTP daemon's role) commits while the MCP child
-    // stays alive; WAL mode must make it visible without restart.
+    // stays alive; WAL mode must make it visible without restart. Sequence
+    // allocation and the insert go through ONE immediate transaction — the
+    // protocol any third-party SQLite writer must follow.
     {
         let connection = rusqlite::Connection::open(&database).unwrap();
         connection
-            .execute(
-                "INSERT INTO memories(seq,type,project,title,content,importance,created_at,updated_at,tags,origin) \
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 INSERT INTO memories(seq,type,project,title,content,importance,created_at,updated_at,tags,origin) \
                  VALUES((SELECT next_seq FROM memory_meta), 'fact', NULL, '外部写入', '来自另一进程。', 3, \
-                 strftime('%Y-%m-%d %H:%M:%S','now'), strftime('%Y-%m-%d %H:%M:%S','now'), '', 'http')",
-                [],
+                 strftime('%Y-%m-%d %H:%M:%S','now'), strftime('%Y-%m-%d %H:%M:%S','now'), '', 'http');
+                 UPDATE memory_meta SET next_seq = next_seq + 1;
+                 COMMIT;",
             )
-            .unwrap();
-        connection
-            .execute("UPDATE memory_meta SET next_seq = next_seq + 1", [])
             .unwrap();
     }
 

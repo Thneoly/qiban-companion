@@ -144,6 +144,16 @@ pub struct Stats {
 pub struct MemoryStore(Mutex<Connection>, String);
 
 impl MemoryStore {
+    /// A caught panic rolls the in-flight transaction back during unwind
+    /// (rusqlite `Transaction::drop` issues ROLLBACK), so the connection is
+    /// consistent; recovering from a poisoned mutex keeps serving instead of
+    /// turning every later call into a panic loop.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Opens (and if needed migrates or creates) the archive at `path`.
     /// `origin` stamps every write made through this handle ("mcp"/"http").
     pub fn open(path: &Path, origin: &str) -> Result<Self, MemoryError> {
@@ -194,7 +204,7 @@ impl MemoryStore {
 
     pub fn remember(&self, draft: &NewMemory) -> Result<i64, MemoryError> {
         let draft = normalize_draft(draft)?;
-        let mut guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
         let tx = guard.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let seq = allocate_seq(&tx)?;
         let sql = format!(
@@ -245,7 +255,7 @@ impl MemoryStore {
         sql.push_str(&format!(
             " ORDER BY importance DESC, updated_at DESC, id ASC LIMIT {limit}"
         ));
-        let guard = self.0.lock().expect("memory store connection poisoned");
+        let guard = self.lock();
         let mut statement = guard.prepare(&sql)?;
         let rows = statement
             .query_map(rusqlite::params_from_iter(values), record_mapper)?
@@ -261,7 +271,7 @@ impl MemoryStore {
     ) -> Result<(i64, i64), MemoryError> {
         let title = normalize_title(title)?;
         let content = normalize_content(content)?;
-        let mut guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
         let tx = guard.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let old: Option<(Option<String>, Option<i64>, i64, String)> = tx
             .query_row(
@@ -302,7 +312,7 @@ impl MemoryStore {
     }
 
     pub fn forget(&self, id: i64) -> Result<bool, MemoryError> {
-        let mut guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
         let tx = guard.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let sql = format!(
             "SELECT (valid_until IS NULL OR valid_until < {SQL_NOW}) FROM memories WHERE id=?1"
@@ -331,7 +341,7 @@ impl MemoryStore {
 
     pub fn update(&self, id: i64, content: &str) -> Result<(), MemoryError> {
         let content = normalize_content(content)?;
-        let mut guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
         let tx = guard.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let seq = allocate_seq(&tx)?;
         let sql =
@@ -346,10 +356,14 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// All counters come from one read snapshot; in WAL mode separate
+    /// autocommit statements could straddle another process's commit and
+    /// produce e.g. active + superseded > total.
     pub fn stats(&self) -> Result<Stats, MemoryError> {
-        let guard = self.0.lock().expect("memory store connection poisoned");
-        let total: i64 = guard.query_row("SELECT count(*) FROM memories", [], |r| r.get(0))?;
-        let active: i64 = guard.query_row(
+        let mut guard = self.lock();
+        let tx = guard.transaction()?;
+        let total: i64 = tx.query_row("SELECT count(*) FROM memories", [], |r| r.get(0))?;
+        let active: i64 = tx.query_row(
             &format!(
                 "SELECT count(*) FROM memories WHERE superseded_by IS NULL \
                  AND (valid_until IS NULL OR valid_until > {SQL_NOW})"
@@ -357,26 +371,27 @@ impl MemoryStore {
             [],
             |r| r.get(0),
         )?;
-        let superseded: i64 = guard.query_row(
+        let superseded: i64 = tx.query_row(
             "SELECT count(*) FROM memories WHERE superseded_by IS NOT NULL",
             [],
             |r| r.get(0),
         )?;
         let by_type = pair_list(
-            &guard,
+            &tx,
             &format!(
                 "SELECT type, count(*) FROM memories WHERE superseded_by IS NULL \
                  AND (valid_until IS NULL OR valid_until > {SQL_NOW}) GROUP BY type ORDER BY type"
             ),
         )?;
         let by_project = pair_list(
-            &guard,
+            &tx,
             &format!(
                 "SELECT coalesce(project,'(global)'), count(*) FROM memories \
                  WHERE superseded_by IS NULL AND (valid_until IS NULL OR valid_until > {SQL_NOW}) \
                  GROUP BY project ORDER BY count(*) DESC, coalesce(project,'(global)') LIMIT 10"
             ),
         )?;
+        tx.commit()?;
         Ok(Stats {
             total,
             active,
@@ -387,48 +402,44 @@ impl MemoryStore {
     }
 
     pub fn get(&self, id: i64) -> Result<Option<MemoryRecord>, MemoryError> {
-        let guard = self.0.lock().expect("memory store connection poisoned");
+        let guard = self.lock();
         fetch_one(&guard, "WHERE id=?1", params![id])
+    }
+
+    /// Single-row fetch plus its full supersession line, from one snapshot so
+    /// the memory and its chain cannot disagree mid-supersede.
+    pub fn get_with_chain(
+        &self,
+        id: i64,
+    ) -> Result<Option<(MemoryRecord, Vec<MemoryRecord>)>, MemoryError> {
+        let mut guard = self.lock();
+        let tx = guard.transaction()?;
+        let Some(start) = fetch_one(&tx, "WHERE id=?1", params![id])? else {
+            return Ok(None);
+        };
+        let line = walk_chain(&tx, start.clone())?;
+        tx.commit()?;
+        Ok(Some((start, line)))
     }
 
     /// The full supersession line: oldest ancestor through every successor.
     pub fn chain(&self, id: i64) -> Result<Vec<MemoryRecord>, MemoryError> {
-        let guard = self.0.lock().expect("memory store connection poisoned");
-        let Some(start) = fetch_one(&guard, "WHERE id=?1", params![id])? else {
+        let mut guard = self.lock();
+        let tx = guard.transaction()?;
+        let Some(start) = fetch_one(&tx, "WHERE id=?1", params![id])? else {
             return Err(MemoryError::NotFound);
         };
-        // Walk up along "which row supersedes me" (min id wins if legacy
-        // Python data ever forked a chain).
-        let mut root = start;
-        for _ in 0..10_000 {
-            // Aggregate always yields one row; NULL means no predecessor.
-            let parent_id: Option<i64> = guard.query_row(
-                "SELECT min(id) FROM memories WHERE superseded_by=?1",
-                [root.id],
-                |r| r.get(0),
-            )?;
-            let Some(parent_id) = parent_id else {
-                break;
-            };
-            root = fetch_one(&guard, "WHERE id=?1", params![parent_id])?
-                .ok_or(MemoryError::Unavailable)?;
-        }
-        // Walk down along superseded_by until the lineage ends.
-        let mut line = vec![root.clone()];
-        let mut current = root;
-        for _ in 0..10_000 {
-            let Some(next_id) = current.superseded_by else {
-                break;
-            };
-            current = fetch_one(&guard, "WHERE id=?1", params![next_id])?
-                .ok_or(MemoryError::Unavailable)?;
-            line.push(current.clone());
-        }
+        let line = walk_chain(&tx, start)?;
+        tx.commit()?;
         Ok(line)
     }
 
-    /// Rows changed after `since`, plus the current maximum sequence. Soft
-    /// deletion means every change is visible as a row state; no tombstones.
+    /// Rows changed after `since`, plus the sync cursor to continue from.
+    /// Soft deletion means every change is visible as a row state; no
+    /// tombstones. The cursor is the highest seq inside the returned page
+    /// (the global max when the page is empty) read in the SAME snapshot:
+    /// advancing `since` to it can never skip a row, even when the page was
+    /// truncated by the limit or another process commits concurrently.
     pub fn changes_since(
         &self,
         since: i64,
@@ -438,27 +449,33 @@ impl MemoryStore {
             return Err(MemoryError::Validation("since 不能为负"));
         }
         let limit = limit.clamp(1, 1000);
-        let guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
+        let tx = guard.transaction()?;
         let sql = format!(
             "SELECT {SELECT_COLUMNS} FROM memories WHERE seq > ?1 ORDER BY seq ASC LIMIT {limit}"
         );
-        let mut statement = guard.prepare(&sql)?;
+        let mut statement = tx.prepare(&sql)?;
         let rows = statement
             .query_map(params![since], record_mapper)?
             .collect::<Result<Vec<_>, _>>()?;
-        let current: i64 =
-            guard.query_row("SELECT coalesce(max(seq),0) FROM memories", [], |r| {
+        drop(statement);
+        let cursor = match rows.last() {
+            Some(last) => last.seq,
+            None => tx.query_row("SELECT coalesce(max(seq),0) FROM memories", [], |r| {
                 r.get(0)
-            })?;
-        Ok((rows, current))
+            })?,
+        };
+        tx.commit()?;
+        Ok((rows, cursor))
     }
 
     /// Deterministic, non-generative summary: the top active entries of the
-    /// persona-bearing kinds, in a fixed order.
+    /// persona-bearing kinds, in a fixed order, from one read snapshot.
     pub fn personality_summary(
         &self,
     ) -> Result<Vec<(&'static str, Vec<MemoryRecord>)>, MemoryError> {
-        let guard = self.0.lock().expect("memory store connection poisoned");
+        let mut guard = self.lock();
+        let tx = guard.transaction()?;
         let mut sections = Vec::new();
         for kind in [
             MemoryKind::Preference,
@@ -470,18 +487,19 @@ impl MemoryStore {
                  WHERE superseded_by IS NULL AND (valid_until IS NULL OR valid_until > {SQL_NOW}) \
                  AND type=?1 ORDER BY importance DESC, updated_at DESC, id ASC LIMIT 3"
             );
-            let mut statement = guard.prepare(&sql)?;
+            let mut statement = tx.prepare(&sql)?;
             let rows = statement
                 .query_map(params![kind.as_str()], record_mapper)?
                 .collect::<Result<Vec<_>, _>>()?;
             sections.push((kind.as_str(), rows));
         }
+        tx.commit()?;
         Ok(sections)
     }
 
     /// Journal mode as stored on disk, for tests and diagnostics.
     pub fn journal_mode(&self) -> Result<String, MemoryError> {
-        let guard = self.0.lock().expect("memory store connection poisoned");
+        let guard = self.lock();
         Ok(guard.query_row("PRAGMA journal_mode", [], |r| r.get(0))?)
     }
 }
@@ -536,7 +554,7 @@ struct V1Row {
     project: Option<String>,
     title: String,
     content: String,
-    importance: Option<i64>,
+    importance: Option<f64>,
     created_at: Option<String>,
     updated_at: Option<String>,
     valid_until: Option<String>,
@@ -545,8 +563,43 @@ struct V1Row {
     tags: Option<String>,
 }
 
+/// Mirrors the schema-v2 GLOB exactly (`YYYY-MM-DD HH:MM:SS` with the loose
+/// digit classes the CHECK uses), so pre-validation never rejects a row the
+/// rebuild would accept.
+fn matches_timestamp_glob(value: &str) -> bool {
+    let bytes: Vec<char> = value.chars().collect();
+    if bytes.len() != 19 {
+        return false;
+    }
+    let digit = |c: char| c.is_ascii_digit();
+    let class = |c: char, low: char| digit(c) && c <= low;
+    digit(bytes[0])
+        && digit(bytes[1])
+        && digit(bytes[2])
+        && digit(bytes[3])
+        && bytes[4] == '-'
+        && class(bytes[5], '1')
+        && digit(bytes[6])
+        && bytes[7] == '-'
+        && class(bytes[8], '3')
+        && digit(bytes[9])
+        && bytes[10] == ' '
+        && class(bytes[11], '2')
+        && digit(bytes[12])
+        && bytes[13] == ':'
+        && class(bytes[14], '5')
+        && digit(bytes[15])
+        && bytes[16] == ':'
+        && class(bytes[17], '5')
+        && digit(bytes[18])
+}
+
 /// Reads and validates every v1 row before anything is dropped; a malformed
 /// table must fail closed with the file (and its directory) untouched.
+/// Validation covers the FULL v2 CHECK surface, because the Python service
+/// wrote without server-side validation: oversized titles/content, free-form
+/// `valid_until`, REAL importance or self-references would otherwise abort
+/// the rebuild after the backup was already created.
 fn read_and_validate_v1(tx: &rusqlite::Transaction<'_>) -> Result<Vec<V1Row>, MemoryError> {
     let mut statement = tx.prepare(
         "SELECT id,type,project,title,content,importance,created_at,updated_at,valid_until,superseded_by,contradicts,tags FROM memories ORDER BY id",
@@ -572,16 +625,37 @@ fn read_and_validate_v1(tx: &rusqlite::Transaction<'_>) -> Result<Vec<V1Row>, Me
     drop(statement);
     let ids: std::collections::HashSet<i64> = rows.iter().map(|r| r.id).collect();
     for row in &rows {
-        if !KINDS.contains(&row.kind.as_str()) || row.title.trim().is_empty() {
+        if !KINDS.contains(&row.kind.as_str()) {
             return Err(MemoryError::IncompatibleSchema);
         }
+        if !(1..=200).contains(&row.title.chars().count()) {
+            return Err(MemoryError::IncompatibleSchema);
+        }
+        if !(1..=20_000).contains(&row.content.chars().count()) {
+            return Err(MemoryError::IncompatibleSchema);
+        }
+        // JSON 4.5 stores as REAL in an INTEGER-affinity column; only
+        // integral values in range can be carried into v2.
         if let Some(importance) = row.importance {
-            if !(1..=5).contains(&importance) {
+            if importance.fract() != 0.0 || !(1.0..=5.0).contains(&importance) {
+                return Err(MemoryError::IncompatibleSchema);
+            }
+        }
+        for stamp in [row.created_at.as_deref(), row.updated_at.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if !matches_timestamp_glob(stamp) {
+                return Err(MemoryError::IncompatibleSchema);
+            }
+        }
+        if let Some(valid_until) = row.valid_until.as_deref() {
+            if !matches_timestamp_glob(valid_until) {
                 return Err(MemoryError::IncompatibleSchema);
             }
         }
         for id in [row.superseded_by, row.contradicts].into_iter().flatten() {
-            if !ids.contains(&id) {
+            if id == row.id || !ids.contains(&id) {
                 return Err(MemoryError::IncompatibleSchema);
             }
         }
@@ -590,6 +664,15 @@ fn read_and_validate_v1(tx: &rusqlite::Transaction<'_>) -> Result<Vec<V1Row>, Me
 }
 
 fn rebuild_v1(tx: &rusqlite::Transaction<'_>, rows: Vec<V1Row>) -> Result<(), MemoryError> {
+    // Read BEFORE the drop: DROP TABLE also deletes the sqlite_sequence row,
+    // and AUTOINCREMENT's never-reuse promise is defined by that bottom line.
+    let sequence_bottom = tx
+        .query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name='memories'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok();
     // Old rows may reference successors inserted later in this same batch;
     // immediate foreign keys would abort mid-transaction.
     tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
@@ -609,7 +692,7 @@ fn rebuild_v1(tx: &rusqlite::Transaction<'_>, rows: Vec<V1Row>) -> Result<(), Me
             row.project,
             row.title,
             row.content,
-            row.importance.unwrap_or(3),
+            row.importance.map(|value| value as i64).unwrap_or(3),
             row.created_at,
             row.updated_at,
             row.valid_until,
@@ -619,6 +702,18 @@ fn rebuild_v1(tx: &rusqlite::Transaction<'_>, rows: Vec<V1Row>) -> Result<(), Me
         ])?;
     }
     drop(statement);
+    // AUTOINCREMENT never reuses ids; restoring the pre-migration bottom
+    // line keeps that promise even when the highest rows were deleted from
+    // the v1 archive before migrating.
+    if let Some(bottom) = sequence_bottom {
+        let max_id = rows.last().map(|row| row.id).unwrap_or(0);
+        if bottom > max_id {
+            tx.execute(
+                "UPDATE sqlite_sequence SET seq=?1 WHERE name='memories'",
+                [bottom],
+            )?;
+        }
+    }
     let next = i64::try_from(rows.len()).expect("row count fits i64") + 1;
     if next > MAX_COUNTER {
         return Err(MemoryError::CounterOverflow);
@@ -722,10 +817,13 @@ fn normalize_draft(draft: &NewMemory) -> Result<NormalizedDraft, MemoryError> {
                 }
             }
         },
-        importance: match draft.importance {
-            0 => 3,
-            1..=5 => draft.importance,
-            _ => return Err(MemoryError::Validation("importance 须在 1～5 之间")),
+        importance: if (1..=5).contains(&draft.importance) {
+            draft.importance
+        } else {
+            // Out-of-range importance is a caller error (the Python service
+            // failed it via the schema CHECK); silently rewriting the value
+            // would fake success.
+            return Err(MemoryError::Validation("importance 须在 1～5 之间"));
         },
         tags: normalize_tags(&draft.tags)?,
     })
@@ -798,6 +896,39 @@ fn record_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
             .collect(),
         origin: row.get(13)?,
     })
+}
+
+/// Walks one supersession line inside an open read snapshot: up to the
+/// oldest ancestor (min id wins if legacy Python data ever forked a chain),
+/// then down through every successor.
+fn walk_chain(
+    tx: &rusqlite::Transaction<'_>,
+    start: MemoryRecord,
+) -> Result<Vec<MemoryRecord>, MemoryError> {
+    let mut root = start;
+    for _ in 0..10_000 {
+        // Aggregate always yields one row; NULL means no predecessor.
+        let parent_id: Option<i64> = tx.query_row(
+            "SELECT min(id) FROM memories WHERE superseded_by=?1",
+            [root.id],
+            |r| r.get(0),
+        )?;
+        let Some(parent_id) = parent_id else {
+            break;
+        };
+        root = fetch_one(tx, "WHERE id=?1", params![parent_id])?.ok_or(MemoryError::Unavailable)?;
+    }
+    let mut line = vec![root.clone()];
+    let mut current = root;
+    for _ in 0..10_000 {
+        let Some(next_id) = current.superseded_by else {
+            break;
+        };
+        current =
+            fetch_one(tx, "WHERE id=?1", params![next_id])?.ok_or(MemoryError::Unavailable)?;
+        line.push(current.clone());
+    }
+    Ok(line)
 }
 
 fn fetch_one(

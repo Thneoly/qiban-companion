@@ -37,7 +37,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/stats", get(stats))
         .route("/v1/personality/summary", get(personality))
         .route("/v1/sync", get(sync))
-        .layer(DefaultBodyLimit::max(131_072))
+        // 258 KiB covers the 20000-char content cap even when the client
+        // \u-escapes every astral character (up to 12 bytes each) plus the
+        // JSON envelope.
+        .layer(DefaultBodyLimit::max(264_192))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             response_boundary,
@@ -75,6 +78,17 @@ fn request_body<T>(
 ) -> Result<T, ApiError> {
     match body {
         Ok(Json(value)) => Ok(value),
+        Err(_) => Err(ApiError(StatusCode::BAD_REQUEST, "invalid_request")),
+    }
+}
+
+/// Bare `Path<i64>` rejections would render axum's plain-text 400, bypassing
+/// the error envelope; route them through the same shape.
+fn request_path(
+    path: Result<Path<i64>, axum::extract::rejection::PathRejection>,
+) -> Result<Path<i64>, ApiError> {
+    match path {
+        Ok(value) => Ok(value),
         Err(_) => Err(ApiError(StatusCode::BAD_REQUEST, "invalid_request")),
     }
 }
@@ -189,12 +203,11 @@ async fn create_memory(
 
 async fn get_memory(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    path: Result<Path<i64>, axum::extract::rejection::PathRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Path(id) = request_path(path)?;
     let (memory, chain) = storage(&state, move |store| {
-        let memory = store.get(id)?.ok_or(MemoryError::NotFound)?;
-        let chain = store.chain(id)?;
-        Ok::<_, MemoryError>((memory, chain))
+        store.get_with_chain(id)?.ok_or(MemoryError::NotFound)
     })
     .await?;
     Ok(Json(json!({
@@ -211,9 +224,10 @@ struct UpdateMemoryRequest {
 
 async fn update_memory(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    path: Result<Path<i64>, axum::extract::rejection::PathRejection>,
     body: Result<Json<UpdateMemoryRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Path(id) = request_path(path)?;
     let request = request_body(body)?;
     let content = request.content;
     storage(&state, move |store| store.update(id, &content)).await?;
@@ -229,18 +243,21 @@ struct SupersedeMemoryRequest {
 
 async fn supersede_memory(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    path: Result<Path<i64>, axum::extract::rejection::PathRejection>,
     body: Result<Json<SupersedeMemoryRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Path(id) = request_path(path)?;
     let request = request_body(body)?;
     let (title, content) = (request.title.clone(), request.content.clone());
     let (old_id, new_id) =
         storage(&state, move |store| store.supersede(id, &title, &content)).await?;
-    let old_title = storage(&state, move |store| {
-        Ok(store.get(old_id)?.map(|record| record.title))
-    })
-    .await?
-    .unwrap_or_default();
+    // The supersede is already committed; a failed cosmetic title fetch must
+    // not turn the response into a 5xx that invites a retry.
+    let old_title = storage(&state, move |store| Ok(store.get(old_id)?.map(|r| r.title)))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     Ok(Json(json!({
         "oldId": old_id, "newId": new_id,
         "oldTitle": old_title, "newTitle": request.title
@@ -249,8 +266,9 @@ async fn supersede_memory(
 
 async fn forget_memory(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    path: Result<Path<i64>, axum::extract::rejection::PathRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Path(id) = request_path(path)?;
     storage(&state, move |store| store.forget(id)).await?;
     Ok(Json(json!({"id": id, "forgotten": true})))
 }

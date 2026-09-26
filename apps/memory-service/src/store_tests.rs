@@ -23,19 +23,39 @@ fn remember_stamps_defaults_and_origin() {
             title: "  投 JAAMAS  ".to_string(),
             content: "论文投递决定。".to_string(),
             project: Some("  ".to_string()),
-            importance: 0,
+            importance: 4,
             tags: vec![" 论文 ".to_string()],
         })
         .unwrap();
     let record = store.get(id).unwrap().expect("row exists");
     assert_eq!(record.title, "投 JAAMAS");
     assert_eq!(record.project, None, "blank project normalizes to global");
-    assert_eq!(record.importance, 3);
+    assert_eq!(record.importance, 4);
     assert_eq!(record.tags, vec!["论文".to_string()]);
     assert_eq!(record.origin.as_deref(), Some("mcp"));
     assert_eq!(record.seq, 1);
     assert!(record.created_at.starts_with("20"));
     assert_eq!(record.created_at, record.updated_at);
+}
+
+#[test]
+fn out_of_range_importance_is_rejected_not_silently_rewritten() {
+    let store = memory_store("mcp");
+    for bad in [0, 6, -1] {
+        let outcome = store.remember(&NewMemory {
+            kind: MemoryKind::Fact,
+            title: "溢出".to_string(),
+            content: "x".to_string(),
+            project: None,
+            importance: bad,
+            tags: vec![],
+        });
+        assert!(
+            matches!(outcome, Err(MemoryError::Validation(_))),
+            "importance {bad} must be rejected"
+        );
+    }
+    assert_eq!(store.recall(&RecallFilter::default()).unwrap().len(), 0);
 }
 
 #[test]
@@ -594,4 +614,108 @@ fn origin_must_be_a_slug() {
         Err(MemoryError::Validation(_))
     ));
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn v1_rows_the_python_service_could_store_fail_closed_before_backup() {
+    for surgery in [
+        "UPDATE memories SET title = replace(hex(zeroblob(102)), '00', 'ab')", // 204-char title
+        "UPDATE memories SET valid_until = '2026-12-31'", // date-only timestamp
+        "UPDATE memories SET importance = 4.5",           // REAL importance
+        "UPDATE memories SET superseded_by = id",         // self-reference
+    ] {
+        let path = temp_db("v1-check-surface");
+        python_v1(&path, &[("fact", None, "正常标题", "正常内容", Some(3))]);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", "OFF")
+                .unwrap();
+            connection.execute(surgery, []).unwrap();
+            connection.close().unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let error = MemoryStore::open(&path, "mcp").unwrap_err();
+        assert!(
+            matches!(error, MemoryError::IncompatibleSchema),
+            "surgery {surgery} must fail closed as IncompatibleSchema, got {error:?}"
+        );
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(before, after, "surgery {surgery}: file must stay untouched");
+        assert!(
+            !path.with_extension("db.v1.bak").exists(),
+            "surgery {surgery}: no backup may be left behind"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn migration_restores_the_autoincrement_bottom_line() {
+    let path = temp_db("seq-bottom");
+    python_v1(
+        &path,
+        &[
+            ("fact", None, "一", "1", Some(3)),
+            ("fact", None, "二", "2", Some(3)),
+            ("fact", None, "三", "3", Some(3)),
+        ],
+    );
+    {
+        // The highest row was deleted manually; AUTOINCREMENT still holds 3.
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute("DELETE FROM memories WHERE id=3", [])
+            .unwrap();
+        let bottom: i64 = connection
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name='memories'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bottom, 3);
+        connection.close().unwrap();
+    }
+    let store = MemoryStore::open(&path, "mcp").unwrap();
+    let next = store
+        .remember(&draft(MemoryKind::Fact, "新增", "x"))
+        .unwrap();
+    assert_eq!(next, 4, "ids issued before migration are never reused");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("db.v1.bak"));
+}
+
+#[test]
+fn sync_cursor_is_the_page_maximum_so_paging_never_skips_rows() {
+    let store = memory_store("http");
+    let mut ids = Vec::new();
+    for index in 0..5 {
+        ids.push(
+            store
+                .remember(&draft(MemoryKind::Fact, &format!("m{index}"), "x"))
+                .unwrap(),
+        );
+    }
+    // First page of 2 stops inside the backlog: its cursor is the second
+    // row's seq, NOT the global max.
+    let (page, cursor) = store.changes_since(0, 2).unwrap();
+    assert_eq!(page.len(), 2);
+    let page_max = page.last().unwrap().seq;
+    assert_eq!(cursor, page_max);
+    assert!(cursor < 5);
+
+    // Walking pages via the cursor reaches every row exactly once.
+    let mut seen = Vec::new();
+    let mut since = 0;
+    loop {
+        let (rows, next) = store.changes_since(since, 2).unwrap();
+        if rows.is_empty() {
+            assert!(next >= since);
+            break;
+        }
+        seen.extend(rows.iter().map(|r| r.id));
+        since = next;
+    }
+    assert_eq!(seen, ids);
 }

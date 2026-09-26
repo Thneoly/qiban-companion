@@ -54,9 +54,20 @@ const TOOLS_JSON: &str = r#"[
 /// other diagnostic goes to stderr or nowhere.
 pub fn run(store: MemoryStore) {
     let stdin = io::stdin();
+    let mut input = stdin.lock();
     let mut output = io::BufWriter::new(io::stdout().lock());
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        // Read raw bytes and decode lossily, like the Python original
+        // (errors='replace'): one invalid UTF-8 byte must degrade to a
+        // skipped line, not kill the session.
+        match input.read_until(b'\n', &mut buffer) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        let line = String::from_utf8_lossy(&buffer);
         let line = line.trim();
         if line.is_empty() {
             continue;

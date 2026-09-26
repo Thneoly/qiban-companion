@@ -16,9 +16,13 @@
 | 行为 | Python 版 | 本版 | 理由 |
 |---|---|---|---|
 | `memory_update` 未知 id | 静默返回成功 | 报错 | 修复"静默失败"（R2R session 末尾实际发生过声称写入但未落库） |
-| recall 负数 limit | 语义为无限返回 | 钳制到 1 | 防整库倾倒 |
+| recall 负数/0 limit | 0 返回空、负数为无限返回 | 一律钳制到 1 | 防整库倾倒 |
+| recall 传入枚举外 `type` | 静默返回空列表 | 报 tool error | fail-fast，与 remember 的枚举校验一致 |
+| `importance` 传 0 或越界值 | 库 CHECK 约束报错 | 入参校验报错 | 均为报错；本版不再静默改写为默认值 |
+| stats 的 by_type/by_project | 含已过期行（仅排除已取代） | 仅统计活跃行 | 与 active 口径自洽 |
 | 重复取代已被取代的行 | 允许（产生链分叉） | 拒绝 | 保持取代链线性 |
 | 对通知消息回错误帧 | 偶发 | 永不响应 | 符合 JSON-RPC/MCP 规范 |
+| stdin 出现非法 UTF-8 字节 | 替换字符后跳过该行 | 同左（lossy 解码后跳过） | 保持一致，防整会话中断 |
 | 输出编码 | UTF-8 wrapper 修补 | 原生 UTF-8 | 移除 Windows GBK 适配层 |
 
 ## 验证（本机，2026-09-26）
@@ -27,23 +31,31 @@
 |---|---|---|
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | 静态 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 0 警告 |
-| 单元+集成 | `cargo test -p memory-service --locked` | 29 库测试 + 2 子进程集成测试全过 |
+| 单元+集成 | `cargo test -p memory-service --locked` | 33 库测试 + 2 子进程集成测试全过 |
 | 全工作区 | `cargo test --workspace --locked` | 全过（含既有 desktop/storage/core） |
 | 文档 | `npm run verify:docs` | 通过 |
-| 真实数据演练 | 副本迁移 + HTTP + MCP 走查 | 见下方增量记录 |
+| 真实数据演练 | 副本迁移 + HTTP + MCP 走查 | 见下方记录 |
 
-测试覆盖点：六工具往返与 Python 字段名逐一对齐；迁移保留 id/内容、首个新 id = 旧最大+1、备份只建一次、重开不重复迁移；malformed 旧库 fail-closed 且文件字节不变；同进程双连接交替写 seq 无重号；MCP 子进程存活期间外部连接提交的数据立即可见（跨进程 WAL）；HTTP CRUD/坏输入 400/缺行 404/sync 分页/429 饱和。
+测试覆盖点：六工具往返与 Python 字段名逐一对齐；迁移保留 id/内容、首个新 id = 旧最大+1、AUTOINCREMENT 底线恢复（迁移前删除过最高 id 也不复用）、备份只建一次、重开不重复迁移；malformed 旧库（含超长标题、空内容、非标准时间戳、REAL importance、悬空/自引用——均为 Python 可产出状态）fail-closed 且文件字节不变、不留备份；sync 游标为页内最大 seq（分页不跳行）；复合读（stats/personality/chain/get+chain）单读快照；同进程双连接交替写 seq 无重号；MCP 子进程存活期间外部连接提交的数据立即可见（跨进程 WAL）；HTTP CRUD/坏输入 400（含路径参数走统一错误封套）/缺行 404/sync 分页/429 饱和。
 
-## 真实数据切换记录（2026-09-26）
+### 审查修订（2026-09-26）
 
-- 演练：复制真实 `memory.db`（9 行，活跃 8）到临时副本，`QIBAN_MEMORY_DB` 指向副本分别跑 `serve` 与 `mcp`：`/v1/stats` total=9/active=8，`/v1/memories?limit=50` 9 行，`/v1/sync?since=0` 9 行 currentSeq=9，副本旁生成 `.v1.bak`，`user_version=2`、`journal_mode=wal`。
-- 正式切换：手工再留一份 `memory.db.manual-backup`；`cargo build --release`；拷贝 exe 至 `~/.personal-memory/memory-service.exe`；更新 `~/.claude.json` 的 `mcpServers.personal-memory` 指向新 exe（args `["mcp"]`）；新会话验证 `memory_recall` 命中。旧 `server.py` 保留在原处不再被引用。
+实现后对本 crate 做了多维度对抗审查（迁移数据安全/并发/MCP 兼容/HTTP 面/文档声明核对，确认项逐条修复、反驳项弃置），主要修订：v1 预校验补全到整个 v2 CHECK 面（否则 Python 可产出的越界行会在备份创建后于重建时永久卡死启动）；`changes_since` 游标改为同一读事务内的页内最大 seq（原全局最大值会跨快照跳行）；复合读统一走单读快照；MCP stdin 非 UTF-8 字节不再中断会话；锁中毒后可恢复；HTTP 路径参数拒绝走统一封套；请求体上限提高到覆盖 \u 转义最坏情形；serve 拒绝非回环绑定（Phase 2 前无鉴权不该暴露）。
+
+## 真实数据演练记录（2026-09-26，已完成）
+
+复制真实 `memory.db`（9 行，活跃 8）到临时副本，`QIBAN_MEMORY_DB` 指向副本分别跑 `serve` 与 `mcp`：`/v1/stats` total=9/active=8（分组与逐条内容核对无误），`/v1/memories?limit=50` 8 条活跃，`/v1/sync?since=0` 9 行 currentSeq=9，`/v1/memories/1` 含取代链；副本旁生成 `.v1.bak`（user_version=0、9 行原样），主库 `user_version=2`、`journal_mode=wal`；serve 运行期间经 MCP 子进程写入 id=10 成功且 HTTP 侧立即可见（双进程并发写验证）；演练副本与进程已清理。
+
+## 正式切换（待执行）
+
+以下步骤在用户确认时机后执行，完成前本节保持"待执行"：手工再留一份 `memory.db.manual-backup`；`cargo build --release`；拷贝 exe 至 `~/.personal-memory/memory-service.exe`；更新 `~/.claude.json` 的 `mcpServers.personal-memory` 指向新 exe（args `["mcp"]`）；新会话验证 `memory_recall` 命中 9 条。旧 `server.py` 保留在原处不再被引用。
 
 ## 产品与准出边界
 
 - 本轮只交付服务本体；栖伴桌面/手机接入 HTTP API 属下一增量，未实现。
-- HTTP 仅回环、无鉴权；Phase 2（局域网）再叠加认证中间件（`src/http.rs` 中已标注插入位置）。
-- `POST /sync/push` 未实现：当前没有第二台设备可验证多写者冲突合并，按"不建设无法验证的能力"纪律延后；`seq` 基础已就绪。
+- HTTP 无鉴权，serve 拒绝非回环绑定（`QIBAN_MEMORY_ADDR` 传非回环地址会直接退出）；Phase 2（局域网）再叠加认证中间件（`src/http.rs` 中已标注插入位置）并放开绑定。
+- 打开旧库做迁移期间持有写锁：若另一个进程恰好在此窗口启动，可能在 `busy_timeout(5s)` 后失败退出，重试即恢复；本机 9 行数据迁移为毫秒级，不构成实际问题，大库迁移需预留窗口。
+- `POST /sync/push` 未实现：当前没有第二台设备可验证多写者冲突合并，按"不建设无法验证的能力"纪律延后；`seq` 与分页游标基础已就绪。
 - 检索仍是 SQL `LIKE`（`%`/`_` 不转义，与 Python 一致）；FTS5/trigram 语义检索是记录在案的升级路径。
 - `contradicts` 列保留但无工具使用（R2R 矛盾标记的占位）。
 - 非Windows路径矩阵、干净设备验收未执行；本记录为本机工程验证，不宣称外部 CI 或产品门通过。

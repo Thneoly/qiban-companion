@@ -16,9 +16,9 @@ cargo run -p memory-service --locked -- serve   # HTTP 守护进程，默认 htt
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `QIBAN_MEMORY_DB` | `%USERPROFILE%\.personal-memory\memory.db`（无则 `$HOME`） | 数据库路径；目录不存在会创建 |
-| `QIBAN_MEMORY_ADDR` | `127.0.0.1:4322` | HTTP 监听地址（端口族：协调服务 4318、手机网页 4320） |
+| `QIBAN_MEMORY_ADDR` | `127.0.0.1:4322` | HTTP 监听地址；v1 只接受回环地址，传其他值直接退出（见"演进路径"） |
 
-无密钥、无配置文件；`serve` 只绑定回环，不做鉴权（见"演进路径"）。
+无密钥、无配置文件；v1 无鉴权，所以不暴露到回环之外。
 
 ## 首次打开旧库时会发生什么
 
@@ -26,7 +26,7 @@ Python 旧库（`user_version=0`、12 列 `memories` 表）在第一次被本服
 
 ## HTTP API（v1）
 
-所有响应带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`；错误统一为 `{"error":{"code":"..."}}`。请求体上限 128 KiB，并发上限 16（超发 429 `busy`）。
+`/v1/*` 响应带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`（`/healthz` 在门外，不带这些头）；错误统一为 `{"error":{"code":"..."}}`（含路径参数解析失败等提取器拒绝）。请求体上限 258 KiB（覆盖 20000 字内容在 `\u` 转义下的最坏情形），并发上限 16（超发 429 `busy`）。
 
 | 方法与路径 | 用途 | 备注 |
 |---|---|---|
@@ -39,7 +39,7 @@ Python 旧库（`user_version=0`、12 列 `memories` 表）在第一次被本服
 | POST `/v1/memories/{id}/forget` | 软过期 | 幂等 |
 | GET `/v1/stats` | 统计 | |
 | GET `/v1/personality/summary` | 人格摘要 | 确定性聚合 preference/insight/person 各前 3 条，非生成式 |
-| GET `/v1/sync?since=&limit=` | 增量变更 | 返回 seq 大于 since 的行当前状态 + `currentSeq`；limit 默认 200 上限 1000 |
+| GET `/v1/sync?since=&limit=` | 增量变更 | 返回 seq 大于 since 的行当前状态 + `currentSeq`（页内最大 seq，作为下次 `since` 的游标；分页拉取直到空页，不会跳行）；limit 默认 200 上限 1000 |
 
 示例：
 
