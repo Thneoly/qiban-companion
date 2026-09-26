@@ -20,6 +20,8 @@
     "check": "npm run typecheck && npm test && npm run build",
     "rust:check": "cargo check --workspace --locked",
     "rust:test": "cargo test --workspace --locked",
+    "memory:mcp": "cargo run -p memory-service --locked -- mcp",
+    "memory:serve": "cargo run -p memory-service --locked -- serve",
     "test:browser": "npm run test:browser --workspace @companion/desktop",
     "verify:docs": "node scripts/verification/verify-docs.cjs && node scripts/verification/verify-plan.cjs",
     "verify:prototype": "node scripts/verification/verify-prototype.cjs",
