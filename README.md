@@ -24,6 +24,8 @@ npm run dev         # 浏览器预览：http://127.0.0.1:1420
 npm run desktop     # 自动启动Vite并编译/打开Tauri客户端
 ```
 
+个人记忆服务独立于桌面应用：`npm run memory:serve` 启动回环 HTTP，`mcp` 子命令供 Claude Code 拉起，详见[个人记忆服务指南](docs/development/personal-memory.md)。
+
 ### 体验桌面角色
 
 构建后可直接运行：
@@ -61,6 +63,7 @@ apps/desktop/                  桌面应用及应用专属配置
   assets/brand/                应用图标源文件
   tests/browser/               桌面Web界面的端到端检查
   playwright.config.ts         应用专属测试配置
+apps/memory-service/           个人记忆独立服务（MCP stdio与HTTP双协议）
 packages/contracts/            TypeScript共享协议及边界测试
 crates/companion-core/          不依赖UI的Rust领域核心
 crates/companion-storage/       SQLite存储与迁移

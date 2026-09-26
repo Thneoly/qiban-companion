@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/companion-core", "crates/companion-storage", "apps/desktop/src-tauri"]
+members = [
+    "crates/companion-core",
+    "crates/companion-storage",
+    "apps/desktop/src-tauri",
+    "apps/memory-service",
+]
 resolver = "2"
 
 [workspace.package]
