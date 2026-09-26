@@ -16,7 +16,7 @@ export function TaskPanel({ tasks, busy, ready, onCreate, onCancel }: Props) {
       <input id="task-title" value={title} onChange={e => setTitle(e.target.value)} placeholder="比如：整理今天冒出来的三个想法…" disabled={!ready || busy} />
       <button className="primary" disabled={!ready || busy || !title.trim()}>{busy ? '保存中…' : '记下来'} <span aria-hidden="true">↗</span></button>
     </form>
-    <p className="helper">这里只记录待办。AI 执行器尚未接入，不会自动读取文件或完成任务。</p>
+    <p className="helper">本地待办 · 留在这台设备，不自动上传或合并到账号。这里只记录待办，不会自动读取文件或完成任务。</p>
     <div className="task-list" aria-live="polite">
       {!tasks.length && <div className="empty-state"><span aria-hidden="true">✎</span><div><strong>留一点空间，给下一个好想法</strong><p>添加第一条待办，试试我们的协作起点。</p></div></div>}
       {tasks.map(task => <article className={`task-row ${task.status === 'cancelled' ? 'cancelled' : ''}`} key={task.id}>

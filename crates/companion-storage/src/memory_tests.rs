@@ -7,6 +7,8 @@ fn store() -> HistoryStore {
     let tx = db.transaction().unwrap();
     tx.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL);").unwrap();
     tx.execute_batch(include_str!("memory-schema.sql")).unwrap();
+    tx.execute_batch(include_str!("memory-schema-v3.sql"))
+        .unwrap();
     tx.commit().unwrap();
     HistoryStore(db)
 }
@@ -367,4 +369,195 @@ fn epoch_memory_and_policy_revision_overflow_are_atomic() {
     assert_eq!(s.context_epoch().unwrap(), 1);
     assert_eq!(chats(&s), 2);
     validate_schema(&s.0).unwrap();
+}
+
+#[test]
+fn personal_policy_set_mirrors_app_policy_semantics() {
+    let mut store = store();
+    let scope = MemoryScope {
+        base_url: "https://api.test".into(),
+        model: "m1".into(),
+    };
+    let change = |revision: i64, epoch: i64, enabled: bool, ids: Vec<i64>, restart: bool| {
+        PersonalMemoryChange {
+            expected_scope: scope.clone(),
+            expected_revision: revision,
+            expected_epoch: epoch,
+            enabled,
+            selected_ids: ids,
+            restart_conversation: restart,
+        }
+    };
+
+    // Fresh scope defaults to disabled/0/empty.
+    assert_eq!(
+        store.personal_memory_policy(&scope).unwrap(),
+        PersonalMemoryPolicy::default()
+    );
+
+    // Wrong scope is rejected before anything else.
+    let mut foreign = change(0, 0, true, vec![1], false);
+    foreign.expected_scope = MemoryScope {
+        base_url: "https://other".into(),
+        model: "x".into(),
+    };
+    assert!(matches!(
+        store
+            .personal_memory_policy_set(&scope, &foreign)
+            .unwrap_err(),
+        StorageError::Memory(MemoryError::ContextChanged)
+    ));
+
+    // Structural validation: duplicates, non-positive ids, >5.
+    for bad in [vec![1, 1], vec![0], vec![-3], vec![1, 2, 3, 4, 5, 6]] {
+        assert!(matches!(
+            store
+                .personal_memory_policy_set(&scope, &change(0, 0, true, bad, false))
+                .unwrap_err(),
+            StorageError::Memory(_)
+        ));
+    }
+
+    // Stale epoch and stale revision both refuse.
+    assert!(matches!(
+        store
+            .personal_memory_policy_set(&scope, &change(0, 7, true, vec![1, 2], false))
+            .unwrap_err(),
+        StorageError::Memory(MemoryError::ContextChanged)
+    ));
+    assert!(matches!(
+        store
+            .personal_memory_policy_set(&scope, &change(5, 0, true, vec![1, 2], false))
+            .unwrap_err(),
+        StorageError::Memory(MemoryError::Conflict)
+    ));
+
+    // Enabling with selections bumps epoch, keeps chats.
+    store
+        .append(
+            &scope.base_url,
+            &scope.model,
+            &ChatTurn {
+                user: "你好".into(),
+                assistant: "在".into(),
+            },
+        )
+        .unwrap();
+    let commit = store
+        .personal_memory_policy_set(&scope, &change(0, 0, true, vec![9, 4], false))
+        .unwrap();
+    assert_eq!(commit.value.selected_ids, vec![9, 4]);
+    assert_eq!(commit.context_epoch, 1);
+    assert!(!commit.chat_cleared);
+    assert_eq!(
+        store.personal_memory_policy(&scope).unwrap().selected_ids,
+        vec![9, 4]
+    );
+
+    // No-op write short-circuits without bumping the epoch.
+    let again = store
+        .personal_memory_policy_set(&scope, &change(1, 1, true, vec![9, 4], false))
+        .unwrap();
+    assert_eq!(again.context_epoch, 1);
+
+    // Adding to the selection also keeps chats.
+    store
+        .append(
+            &scope.base_url,
+            &scope.model,
+            &ChatTurn {
+                user: "二".into(),
+                assistant: "轮".into(),
+            },
+        )
+        .unwrap();
+    let commit = store
+        .personal_memory_policy_set(&scope, &change(1, 1, true, vec![9, 4, 7], false))
+        .unwrap();
+    assert!(!commit.chat_cleared);
+    assert_eq!(commit.context_epoch, 2);
+
+    // Removing requires the confirmation flag and then clears ALL scopes' chats.
+    assert!(matches!(
+        store
+            .personal_memory_policy_set(&scope, &change(2, 2, true, vec![9], false))
+            .unwrap_err(),
+        StorageError::Memory(MemoryError::ConfirmationRequired)
+    ));
+    let other = MemoryScope {
+        base_url: "https://api.test".into(),
+        model: "m2".into(),
+    };
+    store
+        .append(
+            &other.base_url,
+            &other.model,
+            &ChatTurn {
+                user: "别".into(),
+                assistant: "家".into(),
+            },
+        )
+        .unwrap();
+    let commit = store
+        .personal_memory_policy_set(&scope, &change(2, 2, true, vec![9], true))
+        .unwrap();
+    assert!(commit.chat_cleared);
+    assert_eq!(commit.context_epoch, 3);
+    assert!(store
+        .load(&scope.base_url, &scope.model)
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .load(&other.base_url, &other.model)
+        .unwrap()
+        .is_empty());
+
+    // Disabling requires an empty selection (mirror of app policy).
+    assert!(matches!(
+        store
+            .personal_memory_policy_set(&scope, &change(3, 3, false, vec![9], true))
+            .unwrap_err(),
+        StorageError::Memory(MemoryError::InvalidInput)
+    ));
+    let commit = store
+        .personal_memory_policy_set(&scope, &change(3, 3, false, vec![], true))
+        .unwrap();
+    assert_eq!(
+        commit.value,
+        PersonalMemoryPolicy {
+            enabled: false,
+            revision: 4,
+            selected_ids: vec![]
+        }
+    );
+    assert_eq!(commit.context_epoch, 4);
+    validate_schema(&store.0).unwrap();
+}
+
+#[test]
+fn personal_policy_schema_corruption_is_rejected() {
+    let mut store = store();
+    let scope = MemoryScope {
+        base_url: "https://api.test".into(),
+        model: "m1".into(),
+    };
+    store
+        .personal_memory_policy_set(
+            &scope,
+            &PersonalMemoryChange {
+                expected_scope: scope.clone(),
+                expected_revision: 0,
+                expected_epoch: 0,
+                enabled: true,
+                selected_ids: vec![5],
+                restart_conversation: false,
+            },
+        )
+        .unwrap();
+    // Enabled policy with a dangling (removed) selection row breaks the invariant.
+    store
+        .0
+        .execute("DELETE FROM personal_memory_selection", [])
+        .unwrap();
+    assert!(validate_schema(&store.0).is_err());
 }

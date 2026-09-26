@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remote-document-sync"
+description = "Enables the remote_document_sync command without any pre-configured scope."
+commands.allow = ["remote_document_sync"]
+
+[[permission]]
+identifier = "deny-remote-document-sync"
+description = "Denies the remote_document_sync command without any pre-configured scope."
+commands.deny = ["remote_document_sync"]

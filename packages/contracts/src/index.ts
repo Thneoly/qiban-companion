@@ -1,8 +1,11 @@
 import { decodeMemoryUsage, type MemoryUsage } from './memory-context';
 export * from './memory-context';
-/** IPC v2. Mirror of companion-core; decode all native responses at the boundary. */
-export const PROTOCOL_VERSION = 2;
+/** IPC v3. Mirror of companion-core; decode all native responses at the boundary. */
+export const PROTOCOL_VERSION = 3;
 export * from './memory';
+export * from './execution';
+export * from './account';
+export * from './personal-memory';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
 export interface Task {
@@ -18,6 +21,7 @@ export interface RuntimeInfo {
   appVersion: string;
   runtime: 'desktop' | 'preview';
   persistence: 'sqlite' | 'memory';
+  /** At least one explicit executor exists; this never authorizes automatic inbox execution. */
   executorAvailable: boolean;
 }
 export interface CompanionClient {
@@ -107,3 +111,7 @@ export function decodeChatHistory(value:unknown):ChatTurn[] {
   if(!Array.isArray(value)||value.length>6)throw Error('会话记录协议不兼容');
   return value.map(item=>{const v=record(item);if(typeof v.user!=='string'||typeof v.assistant!=='string')throw Error('会话记录协议不兼容');return {user:v.user,assistant:v.assistant};});
 }
+
+export * from "./pairing";
+
+export * from "./remote-documents";
