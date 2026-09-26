@@ -38,7 +38,7 @@ export function PersonalMemoryPanel() {
   const [kind, setKind] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const alive = useRef(true), serial = useRef(0);
+  const alive = useRef(true), serial = useRef(0), acting = useRef(false);
 
   const refreshOverview = useCallback(async () => {
     const id = ++serial.current;
@@ -55,8 +55,8 @@ export function PersonalMemoryPanel() {
   }, []);
 
   const search = useCallback(async (terms: { query: string; project: string; kind: string }) => {
-    if (!nativeDesktop || busy) return;
-    setBusy(true); setError('');
+    if (!nativeDesktop || acting.current) return;
+    acting.current = true; setBusy(true); setError('');
     const id = ++serial.current;
     try {
       const next = decodePersonalMemoryList(await invoke('personal_memory_recall', {
@@ -68,23 +68,26 @@ export function PersonalMemoryPanel() {
       if (alive.current && serial.current === id) {
         // The service may have gone down between overview and search.
         if (e && typeof e === 'object' && (e as { code?: unknown }).code === 'service_offline') {
-          setOverview({ online: false, stats: null, serviceUrl: overview?.serviceUrl ?? 'http://127.0.0.1:4322' });
+          setOverview({ online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' });
           setResults(null);
         } else setError(personalMemoryErrorMessage(e));
       }
     } finally {
+      acting.current = false;
       if (alive.current) setBusy(false);
     }
-  }, [busy, overview?.serviceUrl]);
+  }, []);
 
   const loadDetail = useCallback(async (id: number) => {
-    setBusy(true); setError('');
+    if (acting.current) return;
+    acting.current = true; setBusy(true); setError('');
     try {
       const next = decodePersonalMemoryDetail(await invoke('personal_memory_detail', { id }));
       if (alive.current) setDetail(next);
     } catch (e) {
       if (alive.current) setError(personalMemoryErrorMessage(e));
     } finally {
+      acting.current = false;
       if (alive.current) setBusy(false);
     }
   }, []);
@@ -92,10 +95,10 @@ export function PersonalMemoryPanel() {
   useEffect(() => {
     alive.current = true;
     if (nativeDesktop) void refreshOverview();
-    const focus = () => { if (nativeDesktop && !busy) void refreshOverview(); };
+    const focus = () => { if (nativeDesktop && !acting.current) void refreshOverview(); };
     window.addEventListener('focus', focus);
     return () => { alive.current = false; serial.current++; window.removeEventListener('focus', focus); };
-  }, [refreshOverview, busy]);
+  }, [refreshOverview]);
 
   function submit(event: FormEvent) {
     event.preventDefault();

@@ -22,6 +22,7 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'chat_context_epoch') return w.memoryEpoch;
         if (cmd === 'guide_status') return true;
         if (cmd === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }
         if (cmd === 'chat_clear') { if (w.failDelete) throw '删除本机对话失败，原记录仍保留'; history.length = 0; return; }

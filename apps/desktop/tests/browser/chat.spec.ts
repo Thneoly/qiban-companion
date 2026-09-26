@@ -20,6 +20,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
         if(cmd==='chat_context_preview')return {...usage,items:[],policy:{enabled:false,revision:0,selectedIds:[]}};
         if(cmd==='guide_status')return true;
         if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if(cmd==='personal_memory_overview')return{online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if(cmd==='chat_config')return {configured:true,model:'glm-test-fixture',maxOutputTokens:1024};
         if(cmd==='chat_history')return history;
         if(cmd==='chat_clear'){history=[];return;}
