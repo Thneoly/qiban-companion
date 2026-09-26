@@ -10,5 +10,5 @@ pub mod http;
 pub mod mcp;
 pub mod store;
 
-pub use http::router;
+pub use http::{app_state, router};
 pub use store::{MemoryKind, MemoryStore};
