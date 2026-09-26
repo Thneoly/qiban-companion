@@ -46,12 +46,12 @@
 
 复制真实 `memory.db`（9 行，活跃 8）到临时副本，`QIBAN_MEMORY_DB` 指向副本分别跑 `serve` 与 `mcp`：`/v1/stats` total=9/active=8（分组与逐条内容核对无误），`/v1/memories?limit=50` 8 条活跃，`/v1/sync?since=0` 9 行 currentSeq=9，`/v1/memories/1` 含取代链；副本旁生成 `.v1.bak`（user_version=0、9 行原样），主库 `user_version=2`、`journal_mode=wal`；serve 运行期间经 MCP 子进程写入 id=10 成功且 HTTP 侧立即可见（双进程并发写验证）；演练副本与进程已清理。
 
-## 正式切换（2026-09-26 已执行）
+## 正式切换（2026-09-26 已执行并验证）
 
-- 手工备份 `memory.db.manual-backup`（v1 原样，9 行）已创建。
+- 手工备份 `memory.db.manual-backup`（v1 原样）已创建。
 - `cargo build --release` 后 exe 已部署为 `~/.personal-memory/memory-service.exe`；部署副本在真实数据副本上再次验证（stats 9/8、recall 命中）。
 - `~/.claude.json` 的 `mcpServers.personal-memory` 已指向新 exe（args `["mcp"]`）。
-- 真实库的 v1→v2 迁移将在**下一个新会话首次调用记忆工具时**由新服务自动执行（迁移逻辑已在副本上验证；届时核对 `.v1.bak` 生成与 9 条数据完整）。旧 `server.py` 保留在原处不再被引用。
+- **真实库迁移已触发并核实**：经部署 exe 的 `memory_stats` 调用执行，主库 `user_version=2`、`journal_mode=wal`、10 行（含迁移前最后一笔 Python 写入）、`max_seq=10`；自动备份 `memory.db.v1.bak` 为 10 行原始 v1。旧 `server.py` 保留在原处不再被引用。
 
 ## 产品与准出边界
 
