@@ -9,6 +9,7 @@ fn main() {
         "personal_memory_overview",
         "personal_memory_recall",
         "personal_memory_detail",
+        "personal_memory_policy_set",
         "guide_status",
         "guide_complete",
         "voice_probe",

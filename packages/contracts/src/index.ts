@@ -1,7 +1,7 @@
 import { decodeMemoryUsage, type MemoryUsage } from './memory-context';
 export * from './memory-context';
 /** IPC v2. Mirror of companion-core; decode all native responses at the boundary. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export * from './memory';
 export * from './personal-memory';
 export const taskStatuses = ['queued', 'waiting_authorization', 'running', 'verifying', 'completed', 'cancel_requested', 'cancelled', 'failed', 'unknown'] as const;

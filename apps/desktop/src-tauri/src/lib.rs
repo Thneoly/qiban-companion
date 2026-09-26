@@ -7,6 +7,7 @@ mod memory_context;
 mod memory_export;
 mod model_settings;
 mod personal_memory;
+mod personal_memory_context;
 mod pet;
 mod placement;
 mod tray;
@@ -94,6 +95,7 @@ pub fn run() {
             personal_memory::personal_memory_overview,
             personal_memory::personal_memory_recall,
             personal_memory::personal_memory_detail,
+            personal_memory_context::personal_memory_policy_set,
             placement::guide_status,
             placement::guide_complete,
             voice::voice_probe,
