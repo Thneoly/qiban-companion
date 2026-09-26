@@ -9,6 +9,8 @@ mod memory;
 mod memory_context;
 mod memory_export;
 mod model_settings;
+mod personal_memory;
+mod personal_memory_context;
 mod pet;
 mod placement;
 mod remote_documents;
@@ -116,6 +118,10 @@ pub fn run() {
             memory::memory_mutate,
             memory::chat_context_epoch,
             memory_export::memory_export,
+            personal_memory::personal_memory_overview,
+            personal_memory::personal_memory_recall,
+            personal_memory::personal_memory_detail,
+            personal_memory_context::personal_memory_policy_set,
             placement::guide_status,
             placement::guide_complete,
             voice::voice_probe,

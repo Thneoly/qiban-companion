@@ -41,6 +41,7 @@ npm run coordinator
 原生桌面从角色的「任务面板」→「账号与共享待办」登录，步骤见[桌面接续指南](docs/development/desktop-account.md)。
 
 服务启动后，也可另开终端运行 `npm run coordinator:login`，按提示输入受邀邮箱和验证码，即可显示账号与伙伴ID。命令自动完成验证码请求、nonce生成和身份查询，令牌不打印或保存。
+个人记忆服务及受控聊天注入已接入，整体进展见[进展总览](docs/status/development-progress.md)。个人记忆服务独立于桌面应用：`npm run memory:serve` 启动回环 HTTP，`mcp` 子命令供 Claude Code 拉起，详见[个人记忆服务指南](docs/development/personal-memory.md)。任务面板的"个人记忆"区块可只读查看该服务（需先手动启动服务，离线时明确提示）。
 
 ### 体验桌面角色
 
@@ -82,6 +83,7 @@ apps/desktop/                  桌面应用及应用专属配置
   playwright.config.ts         应用专属测试配置
 apps/coordinator/              独立Rust协调服务、认证适配和服务专属测试
 apps/mobile-web/               手机/电脑共享网页、同源网关及HTTPS联调脚本
+apps/memory-service/           个人记忆独立服务（MCP stdio与HTTP双协议）
 packages/contracts/            TypeScript共享协议及边界测试
 crates/companion-core/          不依赖UI的Rust领域核心
 crates/companion-storage/       SQLite存储与迁移

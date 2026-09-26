@@ -65,7 +65,7 @@ test("native account UI separates local data, deduplicates retry and clears late
         invoke: async (cmd: string, args: any) => {
           if (cmd === "get_runtime_info")
             return {
-              protocolVersion: 2,
+              protocolVersion: 3,
               appVersion: "test",
               runtime: "desktop",
               persistence: "sqlite",

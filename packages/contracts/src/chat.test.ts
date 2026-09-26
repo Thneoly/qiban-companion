@@ -1,6 +1,6 @@
 import {expect,test} from 'vitest';
 import {decodeChatConfig,decodeChatDelta,decodeChatResult,decodeChatHistory,decodeModelSettings} from './index';
-const memoryUsage={scope:{baseUrl:'https://fixture.test',model:'m'},contextEpoch:0,memories:[],bodyChars:0,contextChars:0};
+const memoryUsage={scope:{baseUrl:'https://fixture.test',model:'m'},contextEpoch:0,memories:[],bodyChars:0,contextChars:0,personal:{status:'sent',memories:[],bodyChars:0,contextChars:0}};
 test('chat boundary rejects malformed events and preserves unknown usage',()=>{
   expect(decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,historySaved:true,usage:null}).usage).toBeNull();
   expect(decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,usage:null}).historySaved).toBe(false);
