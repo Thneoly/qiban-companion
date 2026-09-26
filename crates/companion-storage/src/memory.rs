@@ -137,6 +137,36 @@ pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
         }
         validate_selection(&ids, &active)?;
     }
+    let mut personal_policies =
+        db.prepare("SELECT base_url,model,enabled,revision FROM personal_memory_policy")?;
+    for row in personal_policies.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    })? {
+        let (base, model, enabled, revision) = row?;
+        let mut selections = db.prepare(
+            "SELECT personal_memory_id FROM personal_memory_selection \
+             WHERE base_url=?1 AND model=?2 ORDER BY position",
+        )?;
+        let ids = selections
+            .query_map(params![base, model], |r| r.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        // Service-side existence/activity is validated at send time by the
+        // (id, seq) admission; here only local structure must hold.
+        if base.is_empty()
+            || model.is_empty()
+            || !(0..=MAX_COUNTER).contains(&revision)
+            || ![0, 1].contains(&enabled)
+            || (enabled == 1) == ids.is_empty()
+            || validate_personal_selection(&ids).is_err()
+        {
+            return Err(StorageError::Unavailable);
+        }
+    }
     if db.prepare("PRAGMA foreign_key_check")?.exists([])? {
         return Err(StorageError::Unavailable);
     }
@@ -222,6 +252,118 @@ impl HistoryStore {
 
     pub fn context_epoch(&self) -> Result<i64, StorageError> {
         epoch(&self.0)
+    }
+
+    fn read_personal_policy(
+        db: &Connection,
+        scope: &MemoryScope,
+    ) -> Result<PersonalMemoryPolicy, StorageError> {
+        let row = db
+            .query_row(
+                "SELECT enabled,revision FROM personal_memory_policy WHERE base_url=?1 AND model=?2",
+                params![scope.base_url, scope.model],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let mut policy = match row {
+            Some((enabled, revision)) => PersonalMemoryPolicy {
+                enabled: enabled == 1,
+                revision,
+                selected_ids: Vec::new(),
+            },
+            None => PersonalMemoryPolicy::default(),
+        };
+        let mut statement = db.prepare(
+            "SELECT personal_memory_id FROM personal_memory_selection \
+             WHERE base_url=?1 AND model=?2 ORDER BY position",
+        )?;
+        policy.selected_ids = statement
+            .query_map(params![scope.base_url, scope.model], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_personal_selection(&policy.selected_ids)?;
+        if policy.enabled && policy.selected_ids.is_empty() {
+            return Err(StorageError::Unavailable);
+        }
+        Ok(policy)
+    }
+
+    pub fn personal_memory_policy(
+        &self,
+        scope: &MemoryScope,
+    ) -> Result<PersonalMemoryPolicy, StorageError> {
+        Self::read_personal_policy(&self.0, scope)
+    }
+
+    /// Mirrors memory_policy_set: existence/activity/budget of the selected
+    /// service-side rows is the host's job (fetched before this transaction);
+    /// this layer owns scope/epoch/revision consistency and chat clearing.
+    pub fn personal_memory_policy_set(
+        &mut self,
+        scope: &MemoryScope,
+        change: &PersonalMemoryChange,
+    ) -> Result<MemoryCommit<PersonalMemoryPolicy>, StorageError> {
+        if scope != &change.expected_scope || scope.base_url.is_empty() || scope.model.is_empty() {
+            return Err(MemoryError::ContextChanged.into());
+        }
+        validate_personal_selection(&change.selected_ids)?;
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if epoch(&tx)? != change.expected_epoch {
+            return Err(MemoryError::ContextChanged.into());
+        }
+        let old = Self::read_personal_policy(&tx, scope)?;
+        if old.revision != change.expected_revision {
+            return Err(MemoryError::Conflict.into());
+        }
+        if !change.enabled && !change.selected_ids.is_empty() {
+            return Err(MemoryError::InvalidInput.into());
+        }
+        let enabled = change.enabled && !change.selected_ids.is_empty();
+        let clear = old
+            .selected_ids
+            .iter()
+            .any(|id| !change.selected_ids.contains(id));
+        if clear && !change.restart_conversation {
+            return Err(MemoryError::ConfirmationRequired.into());
+        }
+        if enabled == old.enabled && change.selected_ids == old.selected_ids {
+            return Ok(MemoryCommit {
+                value: old,
+                context_epoch: change.expected_epoch,
+                chat_cleared: false,
+            });
+        }
+        let policy = PersonalMemoryPolicy {
+            enabled,
+            revision: next_counter(old.revision)?,
+            selected_ids: change.selected_ids.clone(),
+        };
+        let context_epoch = advance(&tx, change.expected_epoch)?;
+        tx.execute(
+            "INSERT INTO personal_memory_policy(base_url,model,enabled,revision) VALUES(?1,?2,?3,?4) \
+             ON CONFLICT(base_url,model) DO UPDATE SET enabled=excluded.enabled,revision=excluded.revision",
+            params![scope.base_url, scope.model, policy.enabled, policy.revision],
+        )?;
+        tx.execute(
+            "DELETE FROM personal_memory_selection WHERE base_url=?1 AND model=?2",
+            params![scope.base_url, scope.model],
+        )?;
+        for (position, id) in policy.selected_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO personal_memory_selection(base_url,model,personal_memory_id,position) VALUES(?1,?2,?3,?4)",
+                params![scope.base_url, scope.model, id, position as i64],
+            )?;
+        }
+        if clear {
+            tx.execute("DELETE FROM chat_turns", [])?;
+        }
+        tx.commit()?;
+        Ok(MemoryCommit {
+            value: policy,
+            context_epoch,
+            chat_cleared: clear,
+        })
     }
     pub fn memory_list(&self) -> Result<Vec<Memory>, StorageError> {
         read_active(&self.0)

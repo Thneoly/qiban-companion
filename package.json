@@ -5,7 +5,8 @@
   "type": "module",
   "workspaces": [
     "apps/desktop",
-    "packages/contracts"
+    "packages/contracts",
+    "apps/mobile-web"
   ],
   "engines": {
     "node": ">=22.12.0"
@@ -17,9 +18,11 @@
     "build:desktop": "npm run tauri --workspace @companion/desktop -- build --no-bundle",
     "typecheck": "tsc --noEmit -p apps/desktop/tsconfig.json",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm test && npm run build && npm run test:mobile",
     "rust:check": "cargo check --workspace --locked",
     "rust:test": "cargo test --workspace --locked",
+    "memory:mcp": "cargo run -p memory-service --locked -- mcp",
+    "memory:serve": "cargo run -p memory-service --locked -- serve",
     "test:browser": "npm run test:browser --workspace @companion/desktop",
     "verify:docs": "node scripts/verification/verify-docs.cjs && node scripts/verification/verify-plan.cjs",
     "verify:prototype": "node scripts/verification/verify-prototype.cjs",
@@ -31,7 +34,13 @@
     "coordinator:configure:qq": "npm run coordinator -- -Configure -Provider qq",
     "coordinator:configure:163": "npm run coordinator -- -Configure -Provider 163",
     "coordinator:login": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/login.ps1",
-    "test:coordinator-login": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/test-login.ps1 && node --test apps/coordinator/scripts/test-login-http.mjs"
+    "test:coordinator-login": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/coordinator/scripts/test-login.ps1 && node --test apps/coordinator/scripts/test-login-http.mjs",
+    "build:mobile": "npm run build --workspace @companion/mobile-web",
+    "mobile": "npm run build:mobile && npm run start --workspace @companion/mobile-web",
+    "mobile:https": "npm run build:mobile && npm run https --workspace @companion/mobile-web",
+    "test:mobile": "npm run build:mobile && npm test --workspace @companion/mobile-web",
+    "test:mobile:integration": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/mobile-web/scripts/test-integration.ps1",
+    "test:desktop-account": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/desktop/scripts/test-account.ps1"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

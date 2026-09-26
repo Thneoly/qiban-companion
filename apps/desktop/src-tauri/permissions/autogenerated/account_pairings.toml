@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-pairings"
+description = "Enables the account_pairings command without any pre-configured scope."
+commands.allow = ["account_pairings"]
+
+[[permission]]
+identifier = "deny-account-pairings"
+description = "Denies the account_pairings command without any pre-configured scope."
+commands.deny = ["account_pairings"]

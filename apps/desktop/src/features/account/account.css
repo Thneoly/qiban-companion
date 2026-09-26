@@ -1,0 +1,125 @@
+.account-panel {
+  background: var(--surface, #fffdf7);
+  border: 1px solid var(--line, #e4e8dc);
+  border-radius: 22px;
+  padding: 28px;
+  margin: 24px 0;
+  color: #354237;
+}
+.account-panel > p {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.account-panel button {
+  padding: 9px 14px;
+  min-height: 40px;
+  border: 1px solid #d6dfce;
+  border-radius: 10px;
+  cursor: pointer;
+  background: #f4f7ef;
+  color: #344b36;
+}
+.account-panel button.primary {
+  background: #49674b;
+  color: white;
+}
+.account-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.account-panel input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d6dfce;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  min-width: 0;
+}
+.account-panel label {
+  display: block;
+  font-size: 13px;
+  margin: 14px 0 8px;
+}
+.account-panel fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  max-width: 600px;
+}
+.account-compose {
+  display: flex;
+  gap: 12px;
+}
+.account-compose button {
+  white-space: nowrap;
+}
+.account-notice {
+  background: #edf2e7;
+  padding: 12px 16px;
+  border-radius: 12px;
+}
+.account-identity {
+  padding: 12px 0;
+}
+.account-identity dl {
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 75px 1fr;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.account-identity dd {
+  margin: 0;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+.account-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+.account-tasks {
+  list-style: none;
+  padding: 0;
+}
+.account-tasks li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #e9eddf;
+  padding: 16px 0;
+}
+.account-tasks strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.account-tasks small {
+  display: block;
+  color: #78886d;
+  margin-top: 5px;
+}
+.account-panel details {
+  margin: 20px 0;
+}
+.account-panel summary {
+  cursor: pointer;
+}
+.account-panel details input {
+  max-width: 180px;
+  margin-right: 12px;
+}
+.account-panel .helper {
+  color: #78816f;
+  font-size: 12px;
+}
+
+.pairing-panel { border-block: 1px solid #d6dfce; padding-block: 16px; margin-block: 16px; }
+.pairing-code { display:block; font-size:18px; overflow-wrap:anywhere; user-select:all; }
+
+.remote-documents {border-block:1px solid #d6dfce;margin-block:16px;padding-block:16px;}
+.remote-documents pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;}
+.remote-documents select{max-width:100%;padding:10px;}
+.remote-documents button{margin:8px 8px 8px 0;}

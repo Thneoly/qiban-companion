@@ -7,6 +7,7 @@ use companion_core::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{path::Path, sync::Mutex, time::Duration};
+mod authorization;
 mod native_auth;
 pub use native_auth::{NativeLogin, NATIVE_ISSUER};
 
@@ -26,7 +27,7 @@ impl AccountStore {
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", true)?;
         let version: u32 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 2 {
+        if version > 4 {
             return Err(StorageError::NewerSchema);
         }
         // Fail closed on another store's schema rather than adopting local data.
@@ -66,6 +67,12 @@ impl AccountStore {
         }
         if version < 2 {
             native_auth::migrate(&mut c)?;
+        }
+        if version < 3 {
+            authorization::migrate(&mut c)?;
+        }
+        if version < 4 {
+            authorization::migrate_documents(&mut c)?;
         }
         Ok(Self {
             connection: Mutex::new(c),
@@ -447,7 +454,7 @@ mod tests {
     #[test]
     fn refuses_newer_or_unrelated_database_without_migrating_local_data() {
         let c = Connection::open_in_memory().unwrap();
-        c.pragma_update(None, "user_version", 3).unwrap();
+        c.pragma_update(None, "user_version", 5).unwrap();
         assert!(matches!(
             AccountStore::from_connection(c),
             Err(StorageError::NewerSchema)

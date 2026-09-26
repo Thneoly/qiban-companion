@@ -10,22 +10,24 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.addInitScript(()=>{
     Object.defineProperty(window,'isTauri',{value:true});
     let next=0;let cancel=()=>{};let count=0;let history:{user:string;assistant:string}[]=[];
-    const usage={scope:{baseUrl:'https://fixture.test',model:'glm-test-fixture'},contextEpoch:1,memories:[],bodyChars:0,contextChars:0};
+    const usage={scope:{baseUrl:'https://fixture.test',model:'glm-test-fixture'},contextEpoch:1,memories:[],bodyChars:0,contextChars:0,personal:{status:'sent',memories:[],bodyChars:0,contextChars:0}};
     const callbacks=new Map<number,(value:unknown)=>void>();
     Object.defineProperty(window,'__TAURI_EVENT_PLUGIN_INTERNALS__',{value:{unregisterListener:()=>{}}});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
       transformCallback:(cb:(value:unknown)=>void)=>{callbacks.set(++next,cb);return next;},
       unregisterCallback:(id:number)=>callbacks.delete(id),
       invoke:async(cmd:string,args:any)=>{
-        if(cmd==='chat_context_preview')return {...usage,items:[],policy:{enabled:false,revision:0,selectedIds:[]}};
+        if(cmd==='chat_context_preview')return {...usage,items:[],policy:{enabled:false,revision:0,selectedIds:[]},personal:{status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0}};
         if(cmd==='guide_status')return true;
-        if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if(cmd==='get_runtime_info')return {protocolVersion:3,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+        if(cmd==='personal_memory_overview')return{online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if(cmd==='chat_config')return {configured:true,model:'glm-test-fixture',maxOutputTokens:1024};
         if(cmd==='chat_history')return history;
         if(cmd==='chat_clear'){history=[];return;}
         if(cmd==='chat_cancel'){cancel();return;}
         if(cmd==='chat_generate'){
           count++;
+          (window as any).generateRequests?.push(structuredClone(args.request));
           const id=args.request.requestId;
           args.onDelta.onmessage({requestId:'another-request',memoryUsage:null,text:'错误请求'});
           if(count===1) {
@@ -64,4 +66,101 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.getByRole('button',{name:'清空对话',exact:true}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('想聊点什么？');
   await expect(page.getByText('最近 0 轮',{exact:true})).toBeVisible();
+});
+
+test('chat passes expectedPersonal and renders two-family preview and receipt', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'isTauri', { value: true });
+    const w = window as any;
+    w.generateRequests = [];
+    let next = 0; const callbacks = new Map<number, (value: unknown) => void>(); w.__callbacks = callbacks;
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: (cb: (value: unknown) => void) => { callbacks.set(++next, cb); return next; }, unregisterCallback: () => {},
+      invoke: async (cmd: string, args: any) => {
+        if (cmd === 'plugin:event|listen') { (window as any).memoryListener = args.handler; return ++next; }
+        if (cmd === 'chat_context_preview') return {
+          scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: 1,
+          policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], bodyChars: 0, contextChars: 0,
+          personal: { status: 'offline', policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], inactiveSelectedIds: [], bodyChars: 0, contextChars: 0 },
+        };
+        if (cmd === 'chat_config') return { configured: true, model: 'glm-test-fixture', maxOutputTokens: 1024 };
+        if (cmd === 'chat_history') return [];
+        if (cmd === 'chat_cancel') return;
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'guide_status') return true;
+        if (cmd === 'personal_memory_overview') return { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' };
+        if (cmd === 'chat_generate') {
+          w.generateRequests.push(structuredClone(args.request));
+          const id = args.request.requestId;
+          args.onDelta.onmessage({ requestId: id, text: '', memoryUsage: null });
+          args.onDelta.onmessage({ requestId: id, text: '好的', memoryUsage: null });
+          return { requestId: id, elapsedMs: 3, historySaved: true, usage: { total_tokens: 2 },
+            memoryUsage: { scope: args.request.expectedScope, contextEpoch: 1, memories: [], bodyChars: 0, contextChars: 0,
+              personal: { status: 'offline', memories: [], bodyChars: 0, contextChars: 0 } } };
+        }
+        return 1;
+      },
+    } });
+  });
+  await page.goto('/');await page.getByRole('button',{name:'和栖栖互动'}).click();
+  await page.getByRole('button',{name:'聊一聊',exact:true}).click();
+  const bubble = page.locator('.chat-bubble');
+  // Offline personal preview: the preview summary says 未连接 and send passes null.
+  await expect(bubble.locator('.chat-memory-preview')).toContainText('个人未启用');
+  await page.getByLabel('和栖栖说句话').fill('你好');
+  await page.getByRole('button',{name:'发送',exact:true}).click();
+  await expect(bubble.locator('.chat-memory-receipt')).toContainText('个人未含（服务未连接）');
+  const first = await page.evaluate(() => (window as any).generateRequests.at(-1));
+  expect(first.expectedPersonal).toBeNull();
+
+  // Flip the personal family online with one item: the preview summary
+  // counts it, send passes the ordered (id, seq) pair, and the receipt
+  // cross-references by seq.
+  await page.evaluate(() => {
+    const inner = (window as any).__TAURI_INTERNALS__;
+    const baseInvoke = inner.invoke;
+    inner.invoke = async (cmd: string, args: any) => {
+      if (cmd === 'chat_context_preview') {
+        return {
+          scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: 1,
+          policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], bodyChars: 0, contextChars: 0,
+          personal: {
+            status: 'online', policy: { enabled: true, revision: 1, selectedIds: [9] },
+            items: [{ id: 9, seq: 4, type: 'insight', project: null, title: '洞察', content: '内容正文', importance: 3,
+              createdAt: '2026-09-25 02:10:12', updatedAt: '2026-09-25 02:10:12', validUntil: null,
+              supersededBy: null, contradicts: null, tags: [], origin: 'mcp' }],
+            inactiveSelectedIds: [], bodyChars: 4, contextChars: 120,
+          },
+        };
+      }
+      if (cmd === 'chat_generate') {
+        (window as any).generateRequests.push(structuredClone(args.request));
+        const id = args.request.requestId;
+        args.onDelta.onmessage({ requestId: id, text: '', memoryUsage: null });
+        args.onDelta.onmessage({ requestId: id, text: '再来', memoryUsage: null });
+        return { requestId: id, elapsedMs: 2, historySaved: true, usage: { total_tokens: 3 },
+          memoryUsage: { scope: args.request.expectedScope, contextEpoch: 1, memories: [], bodyChars: 0, contextChars: 0,
+            personal: { status: 'sent', memories: [{ id: 9, seq: 4 }], bodyChars: 4, contextChars: 120 } } };
+      }
+      return baseInvoke(cmd, args);
+    };
+  });
+  await page.evaluate(() => {
+    const w = window as any;
+    const handler = w.memoryListener as number | undefined;
+    const callbacks = w.__callbacks as Map<number, (payload: unknown) => void>;
+    // Bumped epoch forces reconcileMemory -> invalidate -> bracketed reload,
+    // exactly what a personal policy save does in production.
+    callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 2 } });
+  });
+  const previewDetails = bubble.locator('details.chat-memory-preview:not(.chat-memory-receipt)');
+  await expect(previewDetails).toContainText('个人1条');
+  await expect(previewDetails).toContainText('洞察');
+  await page.getByLabel('和栖栖说句话').fill('再聊');
+  await page.getByRole('button',{name:'发送',exact:true}).click();
+  await expect(bubble.locator('.chat-memory-receipt')).toContainText('个人1条');
+  await expect(bubble.locator('.chat-memory-receipt')).toContainText('seq 4');
+  const second = await page.evaluate(() => (window as any).generateRequests.at(-1));
+  expect(second.expectedPersonal).toEqual([{ id: 9, seq: 4 }]);
 });
