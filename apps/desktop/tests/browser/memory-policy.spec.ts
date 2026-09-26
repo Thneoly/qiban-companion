@@ -8,10 +8,11 @@ test.beforeEach(async({page})=>{
     Object.defineProperty(window,'__TAURI_EVENT_PLUGIN_INTERNALS__',{value:{unregisterListener:()=>{}}});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:(cb:any)=>{callbacks.set(++seq,cb);return seq;},unregisterCallback:()=>{},invoke:async(cmd:string,args:any)=>{
       if(cmd==='plugin:event|listen'){events.set(args.event,callbacks.get(args.handler));return ++seq;}
-      if(cmd==='get_runtime_info')return {protocolVersion:2,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
+      if(cmd==='get_runtime_info')return {protocolVersion:3,appVersion:'test',runtime:'desktop',persistence:'sqlite',executorAvailable:false};
       if(cmd==='list_tasks')return [];
+      if(cmd==='personal_memory_overview')return{online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
       if(cmd==='memory_list')return {items:w.items,contextEpoch:w.epoch};
-      if(cmd==='chat_context_preview'){const items=w.policy.selectedIds.map((id:string)=>w.items.find((m:any)=>m.id===id));return {scope:structuredClone(w.scope),contextEpoch:w.epoch,policy:structuredClone(w.policy),items,bodyChars:items.length*200,contextChars:items.length*500};}
+      if(cmd==='chat_context_preview'){const items=w.policy.selectedIds.map((id:string)=>w.items.find((m:any)=>m.id===id));return {scope:structuredClone(w.scope),contextEpoch:w.epoch,policy:structuredClone(w.policy),items,bodyChars:items.length*200,contextChars:items.length*500,personal:{status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0}};}
       if(cmd==='memory_policy_set'){
         const r=args.request;w.writes.push(r);
         if(r.expectedScope.model!==w.scope.model||r.expectedEpoch!==w.epoch)throw {code:'context_changed'};

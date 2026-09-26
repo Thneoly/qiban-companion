@@ -1,4 +1,4 @@
-//! Identity boundary for a future trusted authentication adapter.
+//! Identity boundary for trusted authentication adapters.
 //! No token parsing or network authentication takes place in this module.
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +14,15 @@ pub enum IdentityError {
     Conflict,
     #[error("当前账号的待办已达 100 条")]
     Capacity,
+    #[error("验证码无效或已失效")]
+    InvalidCode,
+    #[error("请求过于频繁，请稍后重试")]
+    RateLimited,
 }
 
-/// Construct ONLY after a trusted provider validates signature/introspection,
-/// issuer, audience and session state. Never deserialize client claims into this
+/// Construct ONLY after a trusted authenticator validates the token and current
+/// session state. External token adapters must also validate signature or
+/// introspection, issuer and audience. Never deserialize client claims into this
 /// type. `authenticated_at` is the original login time, NOT token refresh time.
 /// `session_id` must remain stable across refreshes and change on a new login.
 /// No access/refresh tokens or email addresses are retained here.
@@ -63,6 +68,9 @@ impl VerifiedIdentity {
             return Err(IdentityError::SessionEnded);
         }
         Ok(())
+    }
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
     }
     pub fn issuer(&self) -> &str {
         &self.issuer

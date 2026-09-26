@@ -6,6 +6,8 @@
 
 - 根目录只放README、AGENTS、工作区清单/锁文件及跨工作区配置，不新增专题报告、演示HTML或一次性脚本。
 - apps/desktop拥有桌面界面、Tauri宿主、应用资源、应用专属构建/测试配置和端到端测试。浏览器预览仍属于该应用。
+- apps/coordinator拥有独立协调HTTP服务、账号/邮件适配、服务配置和服务专属测试；不依赖Tauri或桌面UI。
+- apps/memory-service拥有个人记忆独立服务（MCP stdio与HTTP双协议、旧库迁移）及其专属测试；自包含不依赖companion crates，不与栖伴应用数据库互写。
 - packages放可跨前端复用的TypeScript包；当前contracts提供IPC契约。共享包不能反向依赖apps。
 - crates放不依赖桌面UI的Rust模块。companion-core保持纯领域逻辑；companion-storage依赖core；Tauri宿主负责组装，核心层不能反向依赖Tauri。
 - docs按product、planning、architecture、quality、research、status、development分类。新增或迁移文档后同步docs/README.md，并使用可迁移的相对链接。
