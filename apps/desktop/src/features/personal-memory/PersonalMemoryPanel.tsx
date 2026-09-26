@@ -142,7 +142,24 @@ export function PersonalMemoryPanel() {
   }, []);
 
   useEffect(() => {
+    alive.current = true;
     if (nativeDesktop) void refreshInjection();
+    // The injection policy shares the global context epoch: any memory-changed
+    // event or window focus can make the cached scope/epoch/revision stale,
+    // and a stale save fails with "请刷新" — so refresh alongside overview.
+    const focus = () => { if (nativeDesktop && !injectionActing.current) void refreshInjection(); };
+    window.addEventListener('focus', focus);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    if (nativeDesktop) void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen('memory-changed', () => { if (!injectionActing.current) void refreshInjection(); })
+    ).then(remove => { if (disposed) remove?.(); else unlisten = remove; }).catch(() => {});
+    return () => {
+      disposed = true;
+      injectionSerial.current++;
+      unlisten?.();
+      window.removeEventListener('focus', focus);
+    };
   }, [refreshInjection]);
 
   function toggleId(id: number) {
@@ -260,9 +277,9 @@ export function PersonalMemoryPanel() {
     </ul>}
     {nativeDesktop && injection && <div className="personal-memory-injection">
       <h3>让交流用上这些个人记忆</h3>
-      <p className="personal-memory-help">为当前模型勾选发送时携带的个人记忆；按勾选顺序注入，与应用记忆分开计数（各 5 条 / 800 字）。发送前可在聊天气泡预览，发送后回执如实记录。服务未连接时仍可取消勾选或关闭。</p>
+      <p className="personal-memory-help">为当前模型勾选发送时携带的个人记忆；按勾选顺序注入，与应用记忆分开计数（各 5 条 / 800 字）。发送前可在聊天气泡预览，发送后回执如实记录。</p>
       <p>当前服务：{preview!.scope.baseUrl} · 模型：{preview!.scope.model} · 已保存状态：{injection.policy.enabled ? `启用 · ${injection.policy.selectedIds.length}条` : '关闭'}</p>
-      {injection.status === 'offline' && <p role="status" className="personal-memory-notice">个人记忆服务未连接：无法新增勾选（需核对面板预算），但可以移除勾选或关闭注入。</p>}
+      {!online && <p role="status" className="personal-memory-notice">个人记忆服务未连接：无法新增或保留勾选（需核对内容与预算）；可移除全部勾选或关闭注入，保存时会如实提示。</p>}
       <fieldset disabled={injectionBusy} className="personal-memory-choice-set">
         <label className="personal-memory-choice">
           <input type="checkbox" checked={enabled} onChange={e => { setEnabled(e.target.checked); if (!e.target.checked) setIds([]); }}/>
@@ -271,17 +288,17 @@ export function PersonalMemoryPanel() {
         {injection.policy.selectedIds.length > 0 && <div className="personal-memory-choice-list">
           {injection.policy.selectedIds.map(id => <label key={id} className="personal-memory-choice">
             <input type="checkbox" checked={ids.includes(id)} disabled={!enabled} onChange={() => toggleId(id)}/>
-            <span>#{id}{resultsById.get(id) ? ` ${resultsById.get(id)!.title}` : injection.status === 'online' ? '' : '（离线中，仅显编号）'}</span>
+            <span>#{id}{resultsById.get(id) ? ` ${resultsById.get(id)!.title}` : online ? '' : '（离线中，仅显编号）'}</span>
           </label>)}
         </div>}
-        {injection.status === 'online' && results && results.count > 0 && <div className="personal-memory-choice-list">
+        {online && results && results.count > 0 && <div className="personal-memory-choice-list">
           {results.memories.filter(m => !injection.policy.selectedIds.includes(m.id)).map(m => <label key={m.id} className="personal-memory-choice">
             <input type="checkbox" checked={ids.includes(m.id)} disabled={!enabled} onChange={() => toggleId(m.id)}/>
             <span>#{m.id} {m.title}（{kindLabels[m.type] ?? m.type} · {m.project ?? '全局'}）</span>
           </label>)}
         </div>}
       </fieldset>
-      <p className="personal-memory-help">{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送</p>
+      <p className="personal-memory-help">{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送{online ? '' : ' · 离线时字数为已显示内容的下限'}</p>
       {injectionError && <p role="alert" className="personal-memory-error">{injectionError}</p>}
       {confirming && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
         <h4 id="personal-injection-confirm-title">确认收回个人记忆使用</h4>
@@ -289,7 +306,8 @@ export function PersonalMemoryPanel() {
         <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并清空聊天</button>
         <button disabled={injectionBusy} onClick={() => setConfirming(false)}>返回，不修改</button>
       </div>}
-      <button disabled={injectionBusy || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirming(true); else void saveInjection(false); }}>保存选择</button>
+      <button disabled={injectionBusy || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirming(true); else void saveInjection(false); }}>保存选择</button>
+      {!online && <p className="personal-memory-help">服务未连接时保存不可用；如需临时停用注入，请启动服务后操作。</p>}
     </div>}
   </section>;
 }

@@ -182,11 +182,33 @@ pub struct ChatRequest {
     prompt: String,
     expected_scope: MemoryScope,
     expected_context_epoch: i64,
-    /// Three states: null = the approved preview was offline (omit the
-    /// personal block, receipt reports offline); [] = online with an empty
-    /// active set; pairs = ordered exact (id, seq) match against the fresh
+    /// Three states via the double-Option trick: a MISSING key stays None at
+    /// the outer layer (serde never calls the deserializer for absent Option
+    /// fields) = protocol violation; an explicit null reaches the
+    /// deserializer and maps to Some(None) = the approved preview was
+    /// offline (omit the personal block, receipt reports offline); [] or
+    /// pairs = online, ordered exact (id, seq) match against the fresh
     /// ACTIVE-filtered fetch.
-    expected_personal: Option<Vec<PersonalSeqReference>>,
+    #[serde(deserialize_with = "double_option")]
+    expected_personal: Option<Option<Vec<PersonalSeqReference>>>,
+}
+
+/// The classic double-option: present-null → Some(None), so it stays
+/// distinguishable from an absent field (None).
+fn double_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Vec<PersonalSeqReference>>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
+impl ChatRequest {
+    /// Normalized three-state view; None = protocol violation (missing field).
+    fn personal_expectation(&self) -> Option<&Option<Vec<PersonalSeqReference>>> {
+        self.expected_personal.as_ref()
+    }
 }
 
 struct ActiveGuard<'a>(&'a ChatState, String);
@@ -270,9 +292,14 @@ pub async fn chat_generate(
     // consented to what the approved preview showed: expected_personal=null
     // (offline preview) sends without the personal block and records that
     // honestly; anything else must match the fresh ACTIVE-filtered fetch.
-    let (personal_items, personal_receipt) = match &request.expected_personal {
-        None => (Vec::new(), personal_usage_offline()),
-        Some(expected) => {
+    let (personal_items, personal_receipt) = match request.personal_expectation() {
+        // Missing field (outer None) is a protocol violation — a v2 sender
+        // must not be silently treated as having approved an offline preview.
+        None => {
+            return Err("发送协议缺少个人记忆快照字段，请更新客户端后重试".into());
+        }
+        Some(None) => (Vec::new(), personal_usage_offline()),
+        Some(Some(expected)) => {
             if personal_policy.selected_ids.is_empty() && expected.is_empty() {
                 (Vec::new(), personal_usage_sent(&[]))
             } else {
@@ -609,36 +636,34 @@ mod tests {
     }
     #[test]
     fn v3_requires_snapshot_and_reference_text_never_becomes_a_system_message() {
-        // v2 payloads (no expectedPersonal) must fail: the field is required.
-        assert!(
-            serde_json::from_value::<ChatRequest>(json!({"requestId":"old","prompt":"hi"}))
-                .is_err()
-        );
         let base = json!({
             "requestId":"r-1","prompt":"hi",
             "expectedScope":{"baseUrl":"https://a","model":"m"},
             "expectedContextEpoch":0
         });
-        // All three states parse.
-        assert!(serde_json::from_value::<ChatRequest>(
-            serde_json::from_value::<Value>(base.clone()).unwrap()
-        )
-        .map(|r| r.expected_personal.is_none())
-        .is_ok_and(|none| none));
+        // A v2 payload (expectedPersonal key absent) fails to deserialize —
+        // deserialize_with removes Option's implicit default, so the double
+        // option's outer None can only mean "explicitly null".
+        assert!(
+            serde_json::from_value::<ChatRequest>(base.clone()).is_err(),
+            "v2 request without expectedPersonal must be rejected at parse time"
+        );
+        // explicit null = the approved-offline state.
         let with_null = {
             let mut v = base.clone();
             v["expectedPersonal"] = Value::Null;
             v
         };
-        assert!(serde_json::from_value::<ChatRequest>(with_null).is_ok());
+        let request = serde_json::from_value::<ChatRequest>(with_null).unwrap();
+        assert_eq!(request.personal_expectation(), Some(&None));
+        // [] = online with an empty active set.
         let with_empty = {
             let mut v = base.clone();
             v["expectedPersonal"] = json!([]);
             v
         };
-        assert!(serde_json::from_value::<ChatRequest>(with_empty)
-            .map(|r| r.expected_personal == Some(vec![]))
-            .unwrap());
+        let request = serde_json::from_value::<ChatRequest>(with_empty).unwrap();
+        assert_eq!(request.personal_expectation(), Some(&Some(vec![])));
         let item = companion_core::memory::Memory {
             id: uuid::Uuid::new_v4().to_string(),
             kind: companion_core::memory::MemoryKind::Preference,

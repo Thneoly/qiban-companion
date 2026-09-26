@@ -200,7 +200,7 @@ test('missed memory notification is reconciled before another request can be sen
 
 test('preview is visible before send and receipt describes the submitted snapshot',async({page})=>{
   await page.evaluate(()=>{const w=window as any;w.previewItems=[{id:'00000000-0000-4000-8000-000000000001',kind:'experience',body:'合成经历：一起徒步',eventDate:'2024-02-29',sourceKind:'user_manual',sourceLabel:'用户在记忆面板填写',createdAt:1,confirmedAt:1,updatedAt:1,revision:1}];w.changeMemory();});
-  await page.getByText('下次发送的记忆 · 应用1条 · 个人未连接').click();await expect(page.locator('.chat-memory-preview')).toContainText('2024-02-29');
+  await page.getByText('下次发送的记忆 · 应用1条 · 个人未启用').click();await expect(page.locator('.chat-memory-preview')).toContainText('2024-02-29');
   await expect(page.locator('.chat-memory-preview')).toContainText('用户在记忆面板填写');
   await page.getByLabel('和栖栖说句话').fill('继续聊');await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect(page.locator('.chat-memory-receipt')).toContainText('本轮已提交 · 应用1条');

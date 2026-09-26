@@ -201,19 +201,21 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span></div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
       : <div className="chat-output" aria-label="栖栖的回复" aria-live="polite">{reply || '想聊点什么？'}</div>}
-    {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · 应用{preview.items.length}条 · 个人{preview.personal.status === 'online' ? preview.personal.items.length + '条' : '未连接'}</summary><div>
+    {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · 应用{preview.items.length}条 · 个人{!preview.personal.policy.enabled ? '未启用' : preview.personal.status === 'online' ? preview.personal.items.length + '条' : '服务未连接'}</summary><div>
       <p>{preview.scope.baseUrl} · {preview.scope.model}</p>
       {preview.items.length ? preview.items.map(item=><p key={item.id}>{item.body}<br/><small>{item.sourceLabel} · 经历日期：{item.eventDate ?? '未指定'} · 确认：{new Date(item.confirmedAt).toLocaleString()}</small></p>) : <p>当前模型未选用应用记忆。</p>}
       <p className="chat-memory-family">个人记忆（独立服务）</p>
-      {preview.personal.status === 'offline'
-        ? <p>个人记忆服务未连接，本次发送不含个人记忆；可在任务面板管理选择。</p>
-        : preview.personal.items.length
-          ? preview.personal.items.map(item=><p key={item.id}>{item.title}：{item.content}<br/><small>#{item.id} · {item.project ?? '全局'} · 更新于 {item.updatedAt}</small></p>)
-          : <p>当前模型未选用个人记忆。</p>}
+      {!preview.personal.policy.enabled
+        ? <p>个人记忆注入未启用；可在任务面板的“个人记忆”里为当前模型勾选。</p>
+        : preview.personal.status === 'offline'
+          ? <p>个人记忆服务未连接，本次发送不含个人记忆；可在任务面板管理选择。</p>
+          : preview.personal.items.length
+            ? preview.personal.items.map(item=><p key={item.id}>{item.title}：{item.content}<br/><small>#{item.id} · {item.project ?? '全局'} · 更新于 {item.updatedAt}</small></p>)
+            : <p>当前模型未选用个人记忆。</p>}
       {preview.personal.status === 'online' && preview.personal.inactiveSelectedIds.length > 0 && <p>已选的 {preview.personal.inactiveSelectedIds.length} 条个人记忆已失效（被取代或过期），本次不携带。</p>}
       <small>正文：应用{preview.bodyChars}字 · 个人{preview.personal.bodyChars}字；字符数不是tokens。</small>
     </div></details>}
-    {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 · 应用{memoryUsage.memories.length}条 · 个人{memoryUsage.personal.status === 'offline' ? '未含（服务未连接）' : memoryUsage.personal.memories.length + '条'}</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}{memoryUsage.personal.status === 'sent' && memoryUsage.personal.memories.map(item=><p key={item.id}>{preview?.personal.items.find(m=>m.id===item.id&&m.seq===item.seq)?.title ?? '条目已变化，请刷新预览'}<br/>seq {item.seq}</p>)}<small>附加字符：应用{memoryUsage.contextChars} · 个人{memoryUsage.personal.status === 'sent' ? memoryUsage.personal.contextChars : 0}；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
+    {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 · 应用{memoryUsage.memories.length}条 · 个人{memoryUsage.personal.status === 'offline' ? '未含（服务未连接）' : memoryUsage.personal.memories.length + '条'}</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}{memoryUsage.personal.status === 'sent' && memoryUsage.personal.memories.map(item=><p key={item.id}>{preview?.personal.items.find(m=>m.id===item.id&&m.seq===item.seq)?.title ?? '条目已变化或服务暂不可查，请刷新预览'}<br/>seq {item.seq}</p>)}<small>附加字符：应用{memoryUsage.contextChars} · 个人{memoryUsage.personal.status === 'sent' ? memoryUsage.personal.contextChars : 0}；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
       <input id="chat-draft" maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder="和我说说…" disabled={busy}/>

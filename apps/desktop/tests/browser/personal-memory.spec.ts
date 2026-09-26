@@ -107,7 +107,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
       policy: { enabled: false, revision: 0, selectedIds: [] },
       items: [], bodyChars: 0, contextChars: 0,
       personal: {
-        status: 'online',
+        status: w.policyState.selectedIds.length ? 'online' : 'offline',
         policy: { ...w.policyState },
         items: w.policyState.selectedIds.map((id: number) => records.find((r: any) => r.id === id)).filter(Boolean),
         inactiveSelectedIds: [],

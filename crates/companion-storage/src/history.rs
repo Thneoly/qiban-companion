@@ -130,6 +130,10 @@ impl HistoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use companion_core::memory::{
+        MemoryDraft, MemoryKind, MemoryPolicyChange, MemoryScope, PersonalMemoryChange,
+        PersonalMemoryPolicy,
+    };
     fn turn(n: usize) -> ChatTurn {
         ChatTurn {
             user: format!("问题{n}"),
@@ -328,6 +332,112 @@ mod tests {
             Err(StorageError::NewerSchema)
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn migrates_real_v2_file_preserving_chats_and_both_policy_families() {
+        // Build a genuine v2 archive the way a v2 binary would have left it:
+        // chats, an app policy with selections, then stamp user_version=2.
+        let path = std::env::temp_dir().join(format!("history-v2-{}.db", uuid::Uuid::new_v4()));
+        let scope = MemoryScope {
+            base_url: "https://a".into(),
+            model: "m".into(),
+        };
+        let turns: Vec<_> = (0..3)
+            .map(|n| ChatTurn {
+                user: format!("问题{n}"),
+                assistant: "答复".into(),
+            })
+            .collect();
+        let mut memories = Vec::new();
+        {
+            let mut store = HistoryStore::open(&path).unwrap();
+            for t in &turns {
+                store.append("https://a", "m", t).unwrap();
+            }
+            for n in 0..2 {
+                memories.push(
+                    store
+                        .memory_create(
+                            &MemoryDraft {
+                                kind: MemoryKind::Preference,
+                                body: format!("记忆{n}"),
+                                event_date: None,
+                            },
+                            n,
+                        )
+                        .unwrap()
+                        .value,
+                );
+            }
+            store
+                .memory_policy_set(
+                    &scope,
+                    &MemoryPolicyChange {
+                        expected_scope: scope.clone(),
+                        expected_revision: 0,
+                        expected_epoch: 2,
+                        enabled: true,
+                        selected_ids: memories.iter().map(|m| m.id.clone()).collect(),
+                        restart_conversation: false,
+                    },
+                )
+                .unwrap();
+            drop(store);
+            // Rewind the file to a true v2 archive: drop the additive v3 tables
+            // and stamp user_version=2, exactly what a v2 binary would leave.
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+            "DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              PRAGMA user_version=2;",
+        )
+        .unwrap();
+            let v3_tables: i64 = db.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name IN ('personal_memory_policy','personal_memory_selection')",
+            [], |r| r.get(0),
+        ).unwrap();
+            assert_eq!(v3_tables, 0);
+            db.close().unwrap();
+        }
+        {
+            let mut store = HistoryStore::open(&path).unwrap();
+            assert_eq!(
+                store
+                    .0
+                    .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                    .unwrap(),
+                3
+            );
+            assert_eq!(store.load("https://a", "m").unwrap(), turns);
+            assert_eq!(store.memory_list().unwrap().len(), 2);
+            assert_eq!(
+                store.memory_policy(&scope).unwrap().selected_ids,
+                memories.iter().map(|m| m.id.clone()).collect::<Vec<_>>()
+            );
+            // Personal family starts empty and writable post-migration.
+            assert_eq!(
+                store.personal_memory_policy(&scope).unwrap(),
+                PersonalMemoryPolicy::default()
+            );
+            store
+                .personal_memory_policy_set(
+                    &scope,
+                    &PersonalMemoryChange {
+                        expected_scope: scope.clone(),
+                        expected_revision: 0,
+                        expected_epoch: 3,
+                        enabled: true,
+                        selected_ids: vec![7, 8],
+                        restart_conversation: false,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                store.personal_memory_policy(&scope).unwrap().selected_ids,
+                vec![7, 8]
+            );
+            crate::memory::validate_schema(&store.0).unwrap();
+        }
         std::fs::remove_file(path).unwrap();
     }
 }

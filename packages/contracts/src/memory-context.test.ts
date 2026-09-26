@@ -27,7 +27,7 @@ it('personal family accepts ordered subsets and rejects silent shrinkage',()=>{
   expect(()=>decodeContextPreview({...preview,personal:{...online,items:[] , inactiveSelectedIds:[7]}})).toThrow();
   expect(()=>decodeContextPreview({...preview,personal:{...online,bodyChars:801}})).toThrow();
   expect(()=>decodeContextPreview({...preview,personal:{...online,status:'offline'}})).toThrow();
-  expect(()=>decodeContextPreview({...preview,personal:{...online,policy:{...online.policy,enabled:false}}}));
+  expect(()=>decodeContextPreview({...preview,personal:{...online,policy:{...online.policy,enabled:false}}})).toThrow();
 });
 it('usage receipt separates app and personal families',()=>{
   const usage={scope,contextEpoch:1,memories:[{id:fixture.id,revision:2}],bodyChars:10,contextChars:500,personal:{status:'sent',memories:[{id:9,seq:9}],bodyChars:10,contextChars:300}};

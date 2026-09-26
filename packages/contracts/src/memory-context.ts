@@ -43,7 +43,8 @@ function decodePersonalFamily(value: unknown): PersonalContextFamily {
   const items = v.status === 'online' ? (Array.isArray(v.items) ? v.items.map(decodePersonalMemoryRecord) : bad()) : [];
   const inactiveSelectedIds = idList(v.inactiveSelectedIds, 5);
   // items must be an ORDERED SUBSET of selectedIds (active filter can drop
-  // entries; offline drops all).
+  // entries; offline drops all), and online the active+inactive ids must
+  // partition the selection exactly.
   if (v.status === 'offline' && (items.length !== 0 || inactiveSelectedIds.length !== 0)) return bad();
   let cursor = 0;
   for (const item of items) {
@@ -52,9 +53,15 @@ function decodePersonalFamily(value: unknown): PersonalContextFamily {
     cursor += 1;
   }
   if (items.some(item => inactiveSelectedIds.includes(item.id))) return bad();
+  if (inactiveSelectedIds.some(id => !selectedIds.includes(id))) return bad();
+  if (v.status === 'online' && items.length + inactiveSelectedIds.length !== selectedIds.length) return bad();
   const bodyChars = items.reduce((sum, m) => sum + [...m.content].length, 0);
   const contextChars = integer(v.contextChars);
-  if (bodyChars > 800 || bodyChars !== v.bodyChars || contextChars < bodyChars || contextChars > 4000 || (!items.length && contextChars !== 0)) return bad();
+  // The PREVIEW is a status report and must stay decodable even when
+  // service-side content growth pushed the sum past the send budget (the
+  // send path rejects that; the usage receipt keeps the strict ≤800 cap).
+  // Caps here are sanity bounds: 5 records × the 20000-char content limit.
+  if (bodyChars > 100000 || bodyChars !== v.bodyChars || contextChars < bodyChars || contextChars > 200000 || (!items.length && contextChars !== 0)) return bad();
   return { status: v.status, policy: { enabled: p.enabled, revision, selectedIds }, items, inactiveSelectedIds, bodyChars, contextChars };
 }
 export function decodeContextPreview(value: unknown): ContextPreview {

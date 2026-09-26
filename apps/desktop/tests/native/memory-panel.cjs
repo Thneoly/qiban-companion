@@ -21,7 +21,7 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,2);db.close();
+  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);db.close();
   await invoke(pet,'pet_action',{action:'open_memory'});
   await panel.getByRole('region',{name:'我们的记忆'}).getByRole('button',{name:'保存记忆',exact:true}).waitFor();
 }

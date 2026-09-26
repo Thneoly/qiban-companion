@@ -1,6 +1,6 @@
 import { decodeMemoryUsage, type MemoryUsage } from './memory-context';
 export * from './memory-context';
-/** IPC v2. Mirror of companion-core; decode all native responses at the boundary. */
+/** IPC v3. Mirror of companion-core; decode all native responses at the boundary. */
 export const PROTOCOL_VERSION = 3;
 export * from './memory';
 export * from './personal-memory';
