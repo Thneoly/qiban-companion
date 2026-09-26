@@ -10,7 +10,7 @@ test('output budget is validated, saved, and reloaded without changing provider 
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
         if (cmd === 'guide_status') return true;
-        if (cmd === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'model_settings_get') return config;

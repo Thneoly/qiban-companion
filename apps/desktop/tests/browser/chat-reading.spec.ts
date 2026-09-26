@@ -8,8 +8,8 @@ test.beforeEach(async ({ page }) => {
     let serial = 0; const callbacks = new Map(); const listeners = new Map(); w.memoryEpoch=1;
     w.changeMemory = (notify = true) => { history.length=0; w.memoryEpoch++; if(notify) listeners.get("memory-changed")?.({payload:{contextEpoch:w.memoryEpoch,chatCleared:true}}); };
     w.scope={baseUrl:'https://fixture.test',model:'reading-fixture'};w.previewItems=[];
-    w.context=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,items:w.previewItems,policy:{enabled:!!w.previewItems.length,revision:0,selectedIds:w.previewItems.map((m:any)=>m.id)},bodyChars:w.previewItems.reduce((n:number,m:any)=>n+[...m.body].length,0),contextChars:w.previewItems.length?500:0});
-    w.usage=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,memories:w.previewItems.map((m:any)=>({id:m.id,revision:m.revision})),bodyChars:w.context().bodyChars,contextChars:w.context().contextChars});
+    w.context=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,items:w.previewItems,policy:{enabled:!!w.previewItems.length,revision:0,selectedIds:w.previewItems.map((m:any)=>m.id)},bodyChars:w.previewItems.reduce((n:number,m:any)=>n+[...m.body].length,0),contextChars:w.previewItems.length?500:0,personal:{status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0}});
+    w.usage=()=>({scope:w.scope,contextEpoch:w.memoryEpoch,memories:w.previewItems.map((m:any)=>({id:m.id,revision:m.revision})),bodyChars:w.context().bodyChars,contextChars:w.context().contextChars,personal:{status:'sent',memories:[],bodyChars:0,contextChars:0}});
     w.requestCount = 0;
     w.failHistoryOnce = false;
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'chat_context_preview') return structuredClone(w.context());
         if (cmd === 'chat_context_epoch') return w.memoryEpoch;
         if (cmd === 'guide_status') return true;
-        if (cmd === 'get_runtime_info') return { protocolVersion: 2, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'chat_config') return { configured: true, model: 'reading-fixture', maxOutputTokens: 1024 };
         if (cmd === 'chat_history') { if (w.failHistoryOnce) { w.failHistoryOnce = false; throw Error('fixture history read failed'); } return history; }
@@ -200,10 +200,10 @@ test('missed memory notification is reconciled before another request can be sen
 
 test('preview is visible before send and receipt describes the submitted snapshot',async({page})=>{
   await page.evaluate(()=>{const w=window as any;w.previewItems=[{id:'00000000-0000-4000-8000-000000000001',kind:'experience',body:'合成经历：一起徒步',eventDate:'2024-02-29',sourceKind:'user_manual',sourceLabel:'用户在记忆面板填写',createdAt:1,confirmedAt:1,updatedAt:1,revision:1}];w.changeMemory();});
-  await page.getByText('下次发送的记忆 · 1条').click();await expect(page.locator('.chat-memory-preview')).toContainText('2024-02-29');
+  await page.getByText('下次发送的记忆 · 应用1条 · 个人未连接').click();await expect(page.locator('.chat-memory-preview')).toContainText('2024-02-29');
   await expect(page.locator('.chat-memory-preview')).toContainText('用户在记忆面板填写');
   await page.getByLabel('和栖栖说句话').fill('继续聊');await page.getByRole('button',{name:'发送',exact:true}).click();
-  await expect(page.locator('.chat-memory-receipt')).toContainText('本轮已提交 1 条');
+  await expect(page.locator('.chat-memory-receipt')).toContainText('本轮已提交 · 应用1条');
   await page.locator('.chat-memory-receipt summary').click();await expect(page.locator('.chat-memory-receipt')).toContainText('第1版');
   const request=await page.evaluate(()=>(window as any).lastRequest);expect(request.expectedContextEpoch).toBe(2);expect(request.expectedScope.model).toBe('reading-fixture');expect(request).not.toHaveProperty('memories');
   await page.evaluate(()=>{const w=window as any;w.previewItems=[];w.changeMemory();});
