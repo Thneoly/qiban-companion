@@ -425,6 +425,23 @@ impl AccountClient {
         )
         .map_err(|_| AccountError::new("unavailable"))
     }
+    /// Presence lease beat, best-effort by design: the caller ignores errors
+    /// (a 404 from an older coordinator lands in "unavailable" and is fine).
+    pub async fn heartbeat(&self, capabilities: &[String]) -> Result<bool> {
+        let secret = self.active_secret()?;
+        let value = self
+            .request(
+                Method::POST,
+                "/v1/devices/heartbeat",
+                Some(&secret.token),
+                Some(json!({"capabilities":capabilities})),
+            )
+            .await?;
+        Ok(value
+            .get("updated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false))
+    }
     pub async fn pairing_revoke(&self, id: String, revision: u32) -> Result<()> {
         if uuid::Uuid::parse_str(&id).is_err() {
             return Err(AccountError::new("invalid_request"));

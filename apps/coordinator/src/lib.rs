@@ -1,4 +1,5 @@
 pub mod auth;
+mod devices;
 mod documents;
 mod pairing;
 
@@ -47,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/v1/logout", post(sign_out))
+        .route("/v1/devices/heartbeat", post(devices::heartbeat))
         .route("/v1/pairings", get(pairing::list))
         .route("/v1/pairings/offer", post(pairing::offer))
         .route("/v1/pairings/preview", post(pairing::preview))

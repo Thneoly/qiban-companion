@@ -14,10 +14,22 @@ pub enum AuthorizationError {
     #[error("配对码核对失败次数过多，请五分钟后重试")]
     RateLimited,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionScope {
     DocumentExcerpt,
+}
+/// Every scope the desktop executor currently supports. The single source of
+/// truth for heartbeat capability slugs: the desktop reports from it, the
+/// coordinator validates against it, the phone maps labels over the same
+/// slugs.
+pub const ACTION_SCOPES: [ActionScope; 1] = [ActionScope::DocumentExcerpt];
+impl ActionScope {
+    pub fn slug(&self) -> &'static str {
+        match self {
+            ActionScope::DocumentExcerpt => "document_excerpt",
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +44,14 @@ pub struct Pairing {
     pub status: String,
     pub expires_at: u64,
     pub current_role: String,
+    /// Presence lease, display-only: never gates confirm→admit. Defaults
+    /// keep old payloads (and old coordinators) decodable.
+    #[serde(default)]
+    pub desktop_online: bool,
+    #[serde(default)]
+    pub desktop_last_heartbeat_at: Option<u64>,
+    #[serde(default)]
+    pub desktop_capabilities: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,4 +132,30 @@ pub struct DocumentAction {
     pub preview: String,
     pub artifact_hash: String,
     pub current_role: String,
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+    #[test]
+    fn legacy_pairing_payload_without_presence_fields_still_decodes() {
+        // Mixed-version evidence: an older coordinator's payload (no
+        // presence keys) must decode with the defaults, not fail.
+        let legacy = serde_json::json!({
+            "id":"00000000-0000-4000-8000-000000000001",
+            "desktopId":"00000000-0000-4000-8000-000000000002",
+            "desktopName":"旧电脑",
+            "controllerId":null,
+            "controllerName":null,
+            "scope":"document_excerpt",
+            "revision":1,
+            "status":"pending",
+            "expiresAt":1000,
+            "currentRole":"desktop"
+        });
+        let p: Pairing = serde_json::from_value(legacy).unwrap();
+        assert!(!p.desktop_online);
+        assert_eq!(p.desktop_last_heartbeat_at, None);
+        assert!(p.desktop_capabilities.is_empty());
+    }
 }

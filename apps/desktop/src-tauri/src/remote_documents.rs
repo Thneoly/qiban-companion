@@ -270,6 +270,29 @@ pub async fn remote_document_sync(
     remote.sync(&c).await
 }
 pub fn start(app: tauri::AppHandle) {
+    // Two independent loops. The heartbeat MUST NOT share a tick with sync:
+    // a slow sync (sequential document calls, each with a 12s timeout, plus
+    // local executor work) would push the next beat past the 15s lease and
+    // flap a healthy desktop to 电脑离线 on the phone. A separate loop also
+    // bounds each loop's lock hold to its own request, so a hung coordinator
+    // stalls UI commands for at most one call, not both.
+    let heartbeat_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            // Beat on every tick while signed in — independent of pending
+            // documents, so an idle desktop stays online (and its session no
+            // longer idle-expires). Best-effort: errors are ignored (401
+            // clears the vault token in request() and beating stops; 404 =
+            // an older coordinator).
+            let account = heartbeat_app.state::<AccountState>();
+            let c = account.lock().await;
+            if c.active_secret().is_ok() {
+                let _ = c.heartbeat(&capabilities()).await;
+            }
+            drop(c);
+        }
+    });
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -283,6 +306,16 @@ pub fn start(app: tauri::AppHandle) {
             {
                 let _ = app.state::<RemoteDocuments>().sync(&c).await;
             }
+            drop(c);
         }
     });
+}
+/// The executor's advertised capability slugs, generated from the same
+/// companion-core constant the coordinator validates against and the phone
+/// maps labels over — never a hand-written list.
+fn capabilities() -> Vec<String> {
+    companion_core::authorization::ACTION_SCOPES
+        .iter()
+        .map(|scope| scope.slug().to_string())
+        .collect()
 }

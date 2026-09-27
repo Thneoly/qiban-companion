@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  capabilityLabels,
   decodePairings,
   decodePairing,
   pairingStatus,
@@ -13,6 +14,7 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
     [name, setName] = useState("我的手机"),
     [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [unreachable, setUnreachable] = useState(false);
   const alive = useRef(false),
     acting = useRef(false),
     seq = useRef(0),
@@ -34,6 +36,7 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
     try {
       const rows = decodePairings(await api("/pairings"));
       if (alive.current && id === seq.current) {
+        setUnreachable(false);
         setPairs(rows);
         setPreview((p) =>
           p && rows.some((r) => r.id === p.id && r.status === "pending")
@@ -42,7 +45,15 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
         );
       }
     } catch (e) {
-      if (alive.current && id === seq.current) failed(e);
+      if (alive.current && id === seq.current) {
+        // 服务不可达 ≠ 电脑离线：保留最后一轮成功数据并明确提示状态未知。
+        if (e instanceof ApiError && (e.status === 0 || e.status === 503)) {
+          setUnreachable(true);
+        } else {
+          setUnreachable(false);
+          failed(e);
+        }
+      }
     }
   }
   useEffect(() => {
@@ -53,14 +64,19 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
         void refresh();
     };
     const timer = setInterval(tick, 10000);
+    const visible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
     window.addEventListener("online", tick);
     window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", visible);
     return () => {
       alive.current = false;
       seq.current++;
       clearInterval(timer);
       window.removeEventListener("online", tick);
       window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", visible);
     };
   }, []);
   async function run(work: () => Promise<void>) {
@@ -88,6 +104,11 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
         文档摘录协作 ·
         每次动作另行确认。支持确认电脑已分享的摘录；配对不授予任意文件、聊天或记忆访问。退出或会话过期后需重新配对。
       </p>
+      {unreachable && (
+        <p role="status" className="notice">
+          无法连接服务，电脑在线状态未知；显示的是最后一次成功读取的结果。
+        </p>
+      )}
       {note && <p role="status">{note}</p>}
       <form
         onSubmit={(e) => {
@@ -168,6 +189,14 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
                 {p.desktopName} → {p.controllerName || "等待手机"}
               </p>
               <small>{pairingStatus[p.status]}</small>
+              {p.desktopOnline !== null &&
+                ["pending", "active"].includes(p.status) && (
+                  <small className="presence">
+                    {p.desktopOnline
+                      ? `电脑在线 · 最后联系 ${relative(p.desktopLastHeartbeatAt)} · 可执行：${capabilities(p)}（每次动作仍需确认）`
+                      : `电脑离线 · 最后联系 ${relative(p.desktopLastHeartbeatAt) || "从未"}`}
+                  </small>
+                )}
             </div>
             {["pending", "active"].includes(p.status) && (
               <button
@@ -200,4 +229,18 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
       </ul>
     </section>
   );
+}
+
+function relative(at: number | null): string {
+  if (at === null) return "";
+  // Phone clock skew only affects this display text; the online boolean is
+  // decided by the server clock, never by this computation.
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  return seconds < 60 ? `${seconds} 秒前` : `${Math.round(seconds / 60)} 分钟前`;
+}
+function capabilities(p: Pairing): string {
+  if (p.desktopCapabilities.length === 0) return "无";
+  return p.desktopCapabilities
+    .map((slug) => capabilityLabels[slug] ?? slug)
+    .join("、");
 }

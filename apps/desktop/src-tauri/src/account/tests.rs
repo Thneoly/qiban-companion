@@ -569,3 +569,43 @@ async fn desktop_mobile_same_companion_integration() {
         .any(|p| p.id == pairing_id && p.status == "revoked"));
     assert_eq!(reopened.logout(true).await.unwrap().status, "signed_out");
 }
+
+#[tokio::test]
+async fn heartbeat_is_idempotent_presence_and_pairings_report_it() {
+    let f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let mut c = f.client(vault.clone());
+    c.request_code("alice@example.com".into()).await.unwrap();
+    c.login(f.code("alice@example.com")).await.unwrap();
+
+    // Logged in but no pairing yet: no device row → updated=false, no error.
+    assert!(!c
+        .heartbeat(&["document_excerpt".to_string()])
+        .await
+        .unwrap());
+
+    // After an offer the desktop session owns a device row → updated=true.
+    let offer = c.pairing_offer("心跳测试电脑".into()).await.unwrap();
+    assert_eq!(offer.pairing.current_role, "desktop");
+    assert!(!offer.pairing.desktop_online, "no beat yet");
+    assert!(c
+        .heartbeat(&["document_excerpt".to_string()])
+        .await
+        .unwrap());
+
+    // The pairing payload carries the presence family.
+    let listed = c.pairings().await.unwrap();
+    let mine = listed.iter().find(|p| p.id == offer.pairing.id).unwrap();
+    assert!(mine.desktop_online);
+    assert!(mine.desktop_last_heartbeat_at.is_some());
+    assert_eq!(mine.desktop_capabilities, vec!["document_excerpt"]);
+}
+
+#[tokio::test]
+async fn heartbeat_requires_an_active_session() {
+    let f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let c = f.client(vault);
+    // Never logged in: no secret → Err, and no network request is made.
+    assert!(c.heartbeat(&[]).await.is_err());
+}

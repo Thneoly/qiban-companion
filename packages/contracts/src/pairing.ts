@@ -9,6 +9,11 @@ export interface Pairing {
   status: "pending" | "active" | "revoked" | "expired";
   expiresAt: number;
   currentRole: "desktop" | "controller" | "observer";
+  /** Presence lease, display-only (never gates authorization). null = the
+   * coordinator predates presence (状态未知), not "offline". */
+  desktopOnline: boolean | null;
+  desktopLastHeartbeatAt: number | null;
+  desktopCapabilities: string[];
 }
 export interface PairingOffer {
   pairing: Pairing;
@@ -36,7 +41,24 @@ export function decodePairing(input: unknown): Pairing {
     !["pending", "active", "revoked", "expired"].includes(v.status as string) ||
     !["desktop", "controller", "observer"].includes(v.currentRole as string) ||
     (v.controllerId === null) !== (v.controllerName === null) ||
-    (v.status === "active" && v.controllerId === null)
+    (v.status === "active" && v.controllerId === null) ||
+    !("desktopOnline" in v ? typeof v.desktopOnline === "boolean" : true) ||
+    !(
+      "desktopLastHeartbeatAt" in v
+        ? v.desktopLastHeartbeatAt === null ||
+          (Number.isSafeInteger(v.desktopLastHeartbeatAt) &&
+            (v.desktopLastHeartbeatAt as number) >= 0)
+        : true
+    ) ||
+    !(
+      "desktopCapabilities" in v
+        ? Array.isArray(v.desktopCapabilities) &&
+          v.desktopCapabilities.length <= 8 &&
+          v.desktopCapabilities.every(
+            (slug) => typeof slug === "string" && /^[a-z][a-z0-9_]{0,31}$/.test(slug),
+          )
+        : true
+    )
   )
     throw new Error("配对响应不兼容，请更新客户端");
   return {
@@ -50,6 +72,10 @@ export function decodePairing(input: unknown): Pairing {
     status: v.status as Pairing["status"],
     expiresAt: v.expiresAt as number,
     currentRole: v.currentRole as Pairing["currentRole"],
+    desktopOnline: "desktopOnline" in v ? (v.desktopOnline as boolean) : null,
+    desktopLastHeartbeatAt:
+      "desktopLastHeartbeatAt" in v ? (v.desktopLastHeartbeatAt as number | null) : null,
+    desktopCapabilities: "desktopCapabilities" in v ? [...(v.desktopCapabilities as string[])] : [],
   };
 }
 export function decodePairings(v: unknown): Pairing[] {
@@ -71,4 +97,9 @@ export const pairingStatus = {
   active: "已配对",
   revoked: "已撤销",
   expired: "已失效，请重新配对",
+};
+/** Display labels for capability slugs. Open set: unknown future slugs fall
+ * back to the raw slug instead of failing the decode. */
+export const capabilityLabels: Record<string, string> = {
+  document_excerpt: "文档摘录",
 };
