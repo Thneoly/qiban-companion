@@ -786,3 +786,334 @@ async fn device_heartbeat_updates_own_row_and_pairings_report_presence() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+// Document endpoints previously had zero HTTP coverage. The storage-layer
+// tests stay authoritative for the state-machine semantics (including the
+// 5-minute expiry and same-account observer isolation — no HTTP clock or
+// third-session seam exists); this covers routes, status codes and payloads.
+// The controller session needs a second alice login, so the real 60-second
+// OTP mail cooldown is waited out once — same rationale as mobile-peer.mjs.
+#[tokio::test]
+async fn documents_http_enforce_roles_transitions_cancel_and_unknown() {
+    let f = Fixture::new();
+    let app = f.app();
+    let desktop = login(&f, &app, "alice@example.com").await;
+    tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+    let controller = login(&f, &app, "alice@example.com").await;
+    let (_, offer) = call(
+        &app,
+        "POST",
+        "/v1/pairings/offer",
+        Some(&desktop),
+        json!({"name":"客厅电脑"}),
+    )
+    .await;
+    let (status, pairing) = call(
+        &app,
+        "POST",
+        "/v1/pairings/accept",
+        Some(&controller),
+        json!({"code":offer["code"],"pairingId":offer["pairing"]["id"],"name":"手机"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pairing["status"], "active");
+    let share = |source: &str, preview: &str| {
+        json!({
+            "pairingId": pairing["id"],
+            "binding": {
+                "actionId": uuid::Uuid::new_v4().to_string(),
+                "resourceId": uuid::Uuid::new_v4().to_string(),
+                "resourceVersion": 1,
+                "parametersDigest": companion_core::authorization::document_digest(source, preview),
+                "pairRevision": pairing["revision"],
+                "scope": "document_excerpt"
+            },
+            "sourceName": source,
+            "preview": preview
+        })
+    };
+
+    // Happy chain: share → confirm → admit → receipt, with every role and
+    // idempotency boundary asserted at the HTTP layer.
+    let (status, doc) = call(
+        &app,
+        "POST",
+        "/v1/documents",
+        Some(&desktop),
+        share("转移.txt", "手机端六态回归的第一份摘录"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = doc["authorization"]["binding"]["actionId"]
+        .as_str()
+        .unwrap();
+    let binding = doc["authorization"]["binding"].clone();
+    let artifact_hash = doc["artifactHash"].as_str().unwrap().to_string();
+    assert_eq!(doc["authorization"]["state"], "awaiting_confirmation");
+    assert_eq!(doc["currentRole"], "desktop");
+    let path = format!("/v1/documents/{id}");
+    let (status, list) = call(&app, "GET", "/v1/documents", Some(&controller), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["authorization"]["state"], "awaiting_confirmation");
+    assert_eq!(list[0]["currentRole"], "controller");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/confirm"),
+            Some(&desktop),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/confirm"),
+            Some(&controller),
+            binding.clone()
+        )
+        .await
+        .1["authorization"]["state"],
+        "confirmed"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/confirm"),
+            Some(&controller),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/admit"),
+            Some(&controller),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/admit"),
+            Some(&desktop),
+            binding.clone()
+        )
+        .await
+        .1["authorization"]["state"],
+        "admitted"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/admit"),
+            Some(&desktop),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&controller),
+            json!({"binding":binding,"state":"completed","artifactHash":artifact_hash})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            json!({"binding":binding,"state":"completed","artifactHash":"c".repeat(64)})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let receipt = json!({"binding":binding,"state":"completed","artifactHash":artifact_hash});
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            receipt.clone()
+        )
+        .await
+        .1["authorization"]["state"],
+        "completed"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            receipt.clone()
+        )
+        .await
+        .1["authorization"]["state"],
+        "completed"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            json!({"binding":receipt["binding"],"state":"failed","artifactHash":artifact_hash})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+
+    // A cancelled-before-admission task never reaches the desktop executor.
+    let (_, cancelled) = call(
+        &app,
+        "POST",
+        "/v1/documents",
+        Some(&desktop),
+        share("取消.txt", "确认前取消的摘录"),
+    )
+    .await;
+    let cancelled_id = cancelled["authorization"]["binding"]["actionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/documents/{cancelled_id}/cancel"),
+            Some(&controller),
+            json!({})
+        )
+        .await
+        .1["authorization"]["state"],
+        "cancelled"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/documents/{cancelled_id}/admit"),
+            Some(&desktop),
+            cancelled["authorization"]["binding"].clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+
+    // An admitted task can be stopped by request, report unknown, and still
+    // resolve to a verified outcome afterwards.
+    let (_, doc) = call(
+        &app,
+        "POST",
+        "/v1/documents",
+        Some(&desktop),
+        share("未知.txt", "先未知后补齐的摘录"),
+    )
+    .await;
+    let id = doc["authorization"]["binding"]["actionId"]
+        .as_str()
+        .unwrap();
+    let binding = doc["authorization"]["binding"].clone();
+    let artifact_hash = doc["artifactHash"].as_str().unwrap().to_string();
+    let path = format!("/v1/documents/{id}");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/confirm"),
+            Some(&controller),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/admit"),
+            Some(&desktop),
+            binding.clone()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/cancel"),
+            Some(&controller),
+            json!({})
+        )
+        .await
+        .1["authorization"]["state"],
+        "cancel_requested"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            json!({"binding":binding.clone(),"state":"unknown","artifactHash":artifact_hash})
+        )
+        .await
+        .1["authorization"]["state"],
+        "unknown"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/receipt"),
+            Some(&desktop),
+            json!({"binding":binding,"state":"completed","artifactHash":artifact_hash})
+        )
+        .await
+        .1["authorization"]["state"],
+        "completed"
+    );
+
+    // Cross-account sessions never see another account's tasks (same-account
+    // observer isolation is asserted at the storage layer).
+    let bob = login(&f, &app, "bob@example.com").await;
+    assert_eq!(
+        call(&app, "GET", "/v1/documents", Some(&bob), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+}
