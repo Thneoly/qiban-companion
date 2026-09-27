@@ -8,6 +8,20 @@ mod pairing_codes;
 pub(super) use pairing_codes::migrate_short_codes;
 use pairing_codes::{guarded_preview, new_code};
 
+/// v6 presence lease: additive columns on paired_devices. The v3 CREATE
+/// TABLE stays untouched — the ALTER path applies to freshly built v3
+/// databases climbing the full ladder as well as existing v5 archives.
+pub(super) fn migrate_presence(c: &mut Connection) -> Result<(), StorageError> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "ALTER TABLE paired_devices ADD COLUMN last_heartbeat INTEGER;
+         ALTER TABLE paired_devices ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]';
+         PRAGMA user_version=6;",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub(super) fn migrate(c: &mut Connection) -> Result<(), StorageError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute_batch(
@@ -66,7 +80,7 @@ fn device(
     }
     let id = uuid::Uuid::new_v4().to_string();
     tx.execute(
-        "INSERT INTO paired_devices VALUES(?1,?2,?3,?4,?5)",
+        "INSERT INTO paired_devices(account_id,id,session_id,name,expires_at) VALUES(?1,?2,?3,?4,?5)",
         params![
             account,
             id,
@@ -80,6 +94,15 @@ fn device(
 fn live(tx: &Transaction<'_>, account: &str, id: &str, now: u64) -> Result<bool, StorageError> {
     Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM paired_devices d JOIN account_sessions s ON s.account_id=d.account_id AND s.session_id=d.session_id WHERE d.account_id=?1 AND d.id=?2 AND d.expires_at>?3 AND s.revoked=0 AND (EXISTS(SELECT 1 FROM accounts a WHERE a.id=d.account_id AND a.issuer<>'qiban:self-hosted:v1') OR EXISTS(SELECT 1 FROM native_tokens t WHERE t.account_id=d.account_id AND t.session_id=d.session_id AND t.expires_at>?3 AND t.last_seen<=?3 AND t.last_seen>?3-1800000)))",params![account,id,now as i64],|r|r.get(0))?)
 }
+/// Presence lease window: three missed 5-second beats. Strictly shorter than
+/// the 30-minute session idle window and layered OVER live(), never relaxing
+/// it — a device is online only while its session/device liveness also holds.
+const HEARTBEAT_TIMEOUT_MS: u64 = 15_000;
+
+/// Raw row shape for pair(): the pairing fields live in the struct; the
+/// trailing tuple carries session ids, the lease stamp and capabilities.
+type PairRow = (Pairing, String, Option<String>, Option<i64>, String);
+
 fn pair(
     tx: &Transaction<'_>,
     account: &str,
@@ -87,10 +110,12 @@ fn pair(
     identity: &VerifiedIdentity,
     now: u64,
 ) -> Result<Pairing, StorageError> {
-    let row: Option<(Pairing,String,Option<String>)> = tx.query_row("SELECT p.id,p.desktop_id,d.name,p.controller_id,c.name,p.revision,p.status,p.offer_expires,d.session_id,c.session_id FROM device_pairings p JOIN paired_devices d ON d.account_id=p.account_id AND d.id=p.desktop_id LEFT JOIN paired_devices c ON c.account_id=p.account_id AND c.id=p.controller_id WHERE p.account_id=?1 AND p.id=?2",params![account,id],|r| Ok((Pairing {
-        id:r.get(0)?,desktop_id:r.get(1)?,desktop_name:r.get(2)?,controller_id:r.get(3)?,controller_name:r.get(4)?,scope:ActionScope::DocumentExcerpt,revision:r.get(5)?,status:r.get(6)?,expires_at:r.get::<_,i64>(7)? as u64,current_role:String::new()
-    },r.get(8)?,r.get(9)?))).optional()?;
-    let (mut p, desktop, controller) = row.ok_or(Error::Denied)?;
+    let row: Option<PairRow> = tx.query_row("SELECT p.id,p.desktop_id,d.name,p.controller_id,c.name,p.revision,p.status,p.offer_expires,d.session_id,c.session_id,d.last_heartbeat,d.capabilities FROM device_pairings p JOIN paired_devices d ON d.account_id=p.account_id AND d.id=p.desktop_id LEFT JOIN paired_devices c ON c.account_id=p.account_id AND c.id=p.controller_id WHERE p.account_id=?1 AND p.id=?2",params![account,id],|r| Ok((Pairing {
+        id:r.get(0)?,desktop_id:r.get(1)?,desktop_name:r.get(2)?,controller_id:r.get(3)?,controller_name:r.get(4)?,scope:ActionScope::DocumentExcerpt,revision:r.get(5)?,status:r.get(6)?,expires_at:r.get::<_,i64>(7)? as u64,current_role:String::new(),
+        desktop_online:false,desktop_last_heartbeat_at:r.get::<_,Option<i64>>(10)?.filter(|v| *v>=0).map(|v| v as u64),
+        desktop_capabilities:Vec::new()
+    },r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?))).optional()?;
+    let (mut p, desktop, controller, heartbeat, capabilities) = row.ok_or(Error::Denied)?;
     p.current_role = if desktop == identity.session_id() {
         "desktop"
     } else if controller.as_deref() == Some(identity.session_id()) {
@@ -99,8 +124,17 @@ fn pair(
         "observer"
     }
     .into();
+    // Desktop liveness computed once: it feeds both expiry and the presence
+    // lease (online = live AND a fresh heartbeat; future stamps count as
+    // offline, mirroring the last_seen defense).
+    let desktop_live = live(tx, account, &p.desktop_id, now)?;
+    p.desktop_online = desktop_live
+        && heartbeat
+            .is_some_and(|t| t >= 0 && t as u64 <= now && now - t as u64 <= HEARTBEAT_TIMEOUT_MS);
+    // A malformed capabilities blob on one row must not break the whole list.
+    p.desktop_capabilities = serde_json::from_str(&capabilities).unwrap_or_default();
     if p.status != "revoked"
-        && ((!live(tx, account, &p.desktop_id, now)?)
+        && ((!desktop_live)
             || (p.status == "pending" && now >= p.expires_at)
             || (p.status == "active"
                 && !live(
@@ -178,6 +212,32 @@ impl AccountStore {
             ids.iter()
                 .map(|id| pair(tx, &a.account_id, id, identity, now))
                 .collect()
+        })
+    }
+    /// Presence lease write: refreshes ONLY the paired_devices row bound to
+    /// this session (UNIQUE(account_id, session_id)). Never creates a row,
+    /// never touches pairing status, action authorizations, resource rows or
+    /// any expiry — display liveness only. Returns whether a row matched.
+    pub fn heartbeat(
+        &self,
+        identity: &VerifiedIdentity,
+        capabilities: &[ActionScope],
+    ) -> Result<bool, StorageError> {
+        // Canonical form first: slugs, sorted, deduped, capped.
+        let mut slugs: Vec<&'static str> = capabilities.iter().map(|s| s.slug()).collect();
+        slugs.sort_unstable();
+        slugs.dedup();
+        if slugs.len() > 8 {
+            return Err(Error::Invalid.into());
+        }
+        let body = serde_json::to_string(&slugs)?;
+        self.access(identity, |tx, a, now| {
+            let changed = tx.execute(
+                "UPDATE paired_devices SET last_heartbeat=?1, capabilities=?2 \
+                 WHERE account_id=?3 AND session_id=?4",
+                params![now as i64, body, a.account_id, identity.session_id()],
+            )?;
+            Ok(changed == 1)
         })
     }
     pub fn revoke_pairing(

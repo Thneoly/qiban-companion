@@ -19,6 +19,18 @@ pub enum AuthorizationError {
 pub enum ActionScope {
     DocumentExcerpt,
 }
+/// Every scope the desktop executor currently supports. The single source of
+/// truth for heartbeat capability slugs: the desktop reports from it, the
+/// coordinator validates against it, the phone maps labels over the same
+/// slugs.
+pub const ACTION_SCOPES: [ActionScope; 1] = [ActionScope::DocumentExcerpt];
+impl ActionScope {
+    pub fn slug(&self) -> &'static str {
+        match self {
+            ActionScope::DocumentExcerpt => "document_excerpt",
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pairing {
@@ -32,6 +44,14 @@ pub struct Pairing {
     pub status: String,
     pub expires_at: u64,
     pub current_role: String,
+    /// Presence lease, display-only: never gates confirm→admit. Defaults
+    /// keep old payloads (and old coordinators) decodable.
+    #[serde(default)]
+    pub desktop_online: bool,
+    #[serde(default)]
+    pub desktop_last_heartbeat_at: Option<u64>,
+    #[serde(default)]
+    pub desktop_capabilities: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

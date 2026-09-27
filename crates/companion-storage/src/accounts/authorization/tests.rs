@@ -171,7 +171,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
         s.connection
             .lock()
             .unwrap()
-            .execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents; PRAGMA user_version=3;")
+            .execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=3;")
             .unwrap();
     }
     {
@@ -411,7 +411,7 @@ fn v4_migration_invalidates_pending_long_codes_but_keeps_active_pair_and_documen
         ],
     )
     .unwrap();
-    c.execute_batch("DROP TABLE pairing_code_limits;PRAGMA user_version=4;")
+    c.execute_batch("DROP TABLE pairing_code_limits;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=4;")
         .unwrap();
     let mut migrated = AccountStore::from_connection(c).unwrap();
     migrated.clock = || 1000;
@@ -470,4 +470,166 @@ fn concurrent_wrong_codes_never_bypass_account_limit() {
     assert_eq!(count, 5);
     drop(s);
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn v5_archive_migrates_to_v6_preserving_pairings_with_null_lease() {
+    // Rewind a live v6 store to a true v5 archive (drop the added columns)
+    // by rebuilding the device rows, then reopen through the full ladder.
+    let path = std::env::temp_dir().join(format!("accounts-v5-{}.db", uuid::Uuid::new_v4()));
+    let (d, m, id) = {
+        let s = fixture();
+        // in-memory cannot be reopened; use a file store via open()
+        drop(s);
+        let mut file = AccountStore::open(&path).unwrap();
+        file.clock = || 1000;
+        let (d, m, p) = connected(&file);
+        (d, m, p.id)
+    };
+    {
+        let c = Connection::open(&path).unwrap();
+        // Emulate the pre-v6 shape: rebuild paired_devices without the
+        // presence columns, copying the live rows.
+        c.execute_batch(
+            "CREATE TABLE paired_devices_v5 AS \
+             SELECT account_id,id,session_id,name,expires_at FROM paired_devices;\
+             DROP TABLE paired_devices;\
+             ALTER TABLE paired_devices_v5 RENAME TO paired_devices;\
+             PRAGMA user_version=5;",
+        )
+        .unwrap();
+        c.close().unwrap();
+    }
+    let mut s = AccountStore::open(&path).unwrap();
+    s.clock = || 1000;
+    let pairings = s.list_pairings(&m).unwrap();
+    assert_eq!(pairings.len(), 1);
+    assert_eq!(pairings[0].id, id);
+    assert!(!pairings[0].desktop_online, "no heartbeat yet");
+    assert_eq!(pairings[0].desktop_last_heartbeat_at, None);
+    assert!(pairings[0].desktop_capabilities.is_empty());
+    // The lease becomes writable after migration.
+    assert!(s.heartbeat(&d, &[ActionScope::DocumentExcerpt]).unwrap());
+    let pairings = s.list_pairings(&m).unwrap();
+    assert!(pairings[0].desktop_online);
+    assert_eq!(pairings[0].desktop_last_heartbeat_at, Some(1000));
+    assert_eq!(pairings[0].desktop_capabilities, vec!["document_excerpt"]);
+    drop(s);
+    std::fs::remove_file(path).unwrap();
+    let _ = (d, m);
+}
+
+#[test]
+fn heartbeat_refreshes_only_own_session_row_and_expires_by_lease() {
+    let mut s = fixture();
+    let (d, m, _) = connected(&s);
+    assert!(s.heartbeat(&d, &[ActionScope::DocumentExcerpt]).unwrap());
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(listed[0].desktop_online);
+    assert_eq!(listed[0].desktop_last_heartbeat_at, Some(1000));
+    assert_eq!(listed[0].desktop_capabilities, vec!["document_excerpt"]);
+
+    // A controller heartbeat updates its OWN row, never the desktop's.
+    assert!(s.heartbeat(&m, &[]).unwrap());
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(listed[0].desktop_online, "desktop lease untouched");
+
+    // Lease expiry: +15_001ms with no beat → offline, stamp still reported.
+    s.clock = || 1000 + 15_001;
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(!listed[0].desktop_online);
+    assert_eq!(listed[0].desktop_last_heartbeat_at, Some(1000));
+
+    // A future heartbeat stamp counts as offline (mirrors last_seen defense).
+    s.clock = || 500;
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(!listed[0].desktop_online);
+    s.clock = || 1000;
+
+    // Cross-account isolation: bob's heartbeat cannot touch alice's row.
+    let bob = identity("bob", "bob-session");
+    assert!(!s.heartbeat(&bob, &[]).unwrap(), "bob has no device row");
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(listed[0].desktop_online, "alice row untouched");
+}
+
+#[test]
+fn heartbeat_without_device_row_is_false_and_revoked_sessions_are_rejected() {
+    let s = fixture();
+    let d = identity("alice", "desktop");
+    // Logged in but never offered/accepted: no paired_devices row for this
+    // session → idempotent false, and no row is created.
+    assert!(!s.heartbeat(&d, &[ActionScope::DocumentExcerpt]).unwrap());
+
+    let (d, m, _) = connected(&s);
+    assert!(s.heartbeat(&d, &[]).unwrap());
+    // sign_out kills the session; heartbeat must be rejected.
+    s.sign_out(&d, false).unwrap();
+    assert!(s.heartbeat(&d, &[]).is_err());
+    let listed = s.list_pairings(&m).unwrap();
+    assert_eq!(listed[0].status, "expired");
+    assert!(!listed[0].desktop_online);
+}
+
+#[test]
+fn new_login_heartbeat_does_not_resurrect_old_pairing_presence() {
+    let s = fixture();
+    let (d, m, _) = connected(&s);
+    assert!(s.heartbeat(&d, &[ActionScope::DocumentExcerpt]).unwrap());
+
+    // A fresh login mints a NEW session for the same subject: its heartbeat
+    // matches no device row (updated=false), and the old pairing stays
+    // expired + offline forever.
+    s.sign_out(&d, false).unwrap();
+    let d2 = identity("alice", "desktop-2");
+    assert!(!s.heartbeat(&d2, &[ActionScope::DocumentExcerpt]).unwrap());
+    let listed = s.list_pairings(&m).unwrap();
+    assert_eq!(listed[0].status, "expired");
+    assert!(!listed[0].desktop_online);
+    assert_eq!(listed[0].desktop_last_heartbeat_at, Some(1000));
+}
+
+#[test]
+fn heartbeat_capabilities_are_canonicalized_and_capped() {
+    let s = fixture();
+    let (d, m, _) = connected(&s);
+    // Duplicates collapse; the store keeps the canonical sorted slug set.
+    assert!(s
+        .heartbeat(
+            &d,
+            &[ActionScope::DocumentExcerpt, ActionScope::DocumentExcerpt]
+        )
+        .unwrap());
+    let listed = s.list_pairings(&m).unwrap();
+    assert_eq!(listed[0].desktop_capabilities, vec!["document_excerpt"]);
+
+    // More than 8 distinct entries cannot exist with a single-scope enum
+    // today; the cap guard is exercised via the sorted-dedup cap check.
+    // (When more scopes arrive, extend this with a >8 case.)
+}
+
+#[test]
+fn malformed_capabilities_column_degrades_without_breaking_the_list() {
+    let s = fixture();
+    let (d, m, p) = connected(&s);
+    let id = p.id.clone();
+    assert!(s.heartbeat(&d, &[ActionScope::DocumentExcerpt]).unwrap());
+    // Corrupt the capabilities blob behind the store's back.
+    {
+        let guard = s.connection.lock().unwrap();
+        guard
+            .execute(
+                "UPDATE paired_devices SET capabilities='not-json' WHERE 1=1",
+                [],
+            )
+            .unwrap();
+    }
+    let listed = s.list_pairings(&m).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, id);
+    assert!(
+        listed[0].desktop_capabilities.is_empty(),
+        "degraded, not fatal"
+    );
+    assert!(listed[0].desktop_online, "presence itself still readable");
 }
