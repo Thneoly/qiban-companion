@@ -1,5 +1,6 @@
 // Invoked ONLY by the Rust #[cfg(test)] fixture. No real SMTP or local account DB.
 import { chromium, expect } from "@playwright/test";
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
@@ -142,12 +143,17 @@ try {
       body: JSON.stringify({
         challengeId: receipt.challengeId,
         code,
-        nonce: crypto.randomUUID(),
+        // The coordinator requires a 43-char base64url nonce (32 bytes).
+        nonce: randomBytes(32).toString("base64url"),
       }),
     });
     const grant = await verify.json();
     return grant.accessToken;
   }
+  // The per-email OTP cooldown is 60s between consecutive sends; the
+  // phone's re-login above consumed the latest one. Wait out the remainder
+  // before requesting a third code for alice.
+  await new Promise((resolve) => setTimeout(resolve, 61000));
   const desktopToken = await directLogin("alice@example.com");
   const offerResponse = await fetch(`${upstream}/v1/pairings/offer`, {
     method: "POST",
