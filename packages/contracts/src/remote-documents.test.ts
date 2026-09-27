@@ -17,7 +17,7 @@ const example = () => ({
       resourceVersion: 1,
       parametersDigest: "a".repeat(64),
       pairRevision: 2,
-      scope: "document_excerpt",
+      scope: "document_excerpt" as const,
     },
     expiresAt: 1000,
     state: "awaiting_confirmation",
@@ -54,7 +54,10 @@ describe("remote document boundary", () => {
 
 const NOW = 10_000_000;
 const EXPIRES = NOW + 120_000;
-function doc(state: string, currentRole = "controller"): DocumentAction {
+function doc(
+  state: string,
+  currentRole: DocumentAction["currentRole"] = "controller",
+): DocumentAction {
   return {
     ...example(),
     authorization: {
@@ -63,7 +66,7 @@ function doc(state: string, currentRole = "controller"): DocumentAction {
       expiresAt: EXPIRES,
       state,
     },
-    currentRole: currentRole as DocumentAction["currentRole"],
+    currentRole,
   };
 }
 function pairing(online: boolean | null): Pairing {
