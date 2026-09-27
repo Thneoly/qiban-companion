@@ -68,4 +68,14 @@
 
 本地 `remote-jobs.db` 保存不变的准备数据和分享/准入阶段；`executions.db` 复用执行尝试与产物台账。手机记录必须与本地保存的配对、绑定、文件名、预览、产物哈希全部一致。没有本地意图记录的服务端任务不会执行。轮询通过账号互斥锁与退出串行化；关闭面板仍可处理已分享的任务。
 
-准入响应丢失时，服务器已准入而本地未开始的任务会保守取消并报告失败；不能根据查询到 admitted 就重新开始保存。已发布产物通过重开执行台账与文件核对补回执，每个动作只对应一个固定新文件。当前使用 HTTP 轮询，尚无 WebSocket、设备心跳和恢复备份后的跨服务执行锁。
+准入响应丢失时，服务器已准入而本地未开始的任务会保守取消并报告失败；不能根据查询到 admitted 就重新开始保存。已发布产物通过重开执行台账与文件核对补回执，每个动作只对应一个固定新文件。当前使用 HTTP 轮询（含设备心跳，见下节），尚无 WebSocket 和恢复备份后的跨服务执行锁。
+
+## 设备心跳与在线状态（2026-09-27）
+
+- **路由**：`POST /v1/devices/heartbeat`（gated：认证 + 16 并发 + 16KB body 上限）。请求体 `{capabilities: string[]}`（原始列表 ≤8 项，每项必须匹配 `ActionScope::slug()`，未知 slug/超限/未知字段 → 400）。返回 `{"updated": bool}`——已登录但从未配对的会话没有设备行，幂等返回 false。
+- **租约模型**：`paired_devices` 新增 `last_heartbeat`（可空）与 `capabilities`（canonical slug JSON，排序去重 ≤8）。**读取时推导** `desktop_online = live() && now-last_heartbeat ≤ 15_000`（未来时间戳按不在线处理，镜像 last_seen 防御）；`last_heartbeat` 即使过期也如实返回供"最后联系"显示。
+- **约定超时**：桌面 5s 心跳（复用 remote-documents 循环 tick，登录即发、与 pending 无关）+ 租约 15s（3 次漏拍）+ 手机 10s 轮询 ⇒ **判离线最坏 25s、恢复在线最坏 15s**。被杀/断电/断网/优雅退出统一由租约到期覆盖（无 /offline 主动下线路由——`RunEvent::Exit` 中 block_on HTTP 是已知脆弱点；logout 由会话撤销兜住）。
+- **不延长清单**：心跳只写 `paired_devices` 两列——不写 `paired_devices.expires_at`、不写 `device_pairings`、不写 `action_authorizations`、不动令牌绝对有效期。**display-only**：`desktopOnline` 永不参与 confirm→admit 或任何授权决策。
+- **行为变化（有意）**：心跳经 `auth.verify()` 必然刷新 `native_tokens.last_seen` ⇒ 登录且运行中的桌面不再 30 分钟闲置过期（只剩 24h SESSION_TTL）——这正是"在线"的正确语义。
+- **既有约束**：`paired_devices.expires_at` 在行创建时冻结（≈min(24h, 创建+30min)），在线展示窗口受配对 ≤30 分钟绝对有效期约束；长期设备身份/配对续期仍在 T21 积压。
+- **混跑表现**：Rust `Pairing` 新字段全部 `#[serde(default)]`、TS 解码缺字段降级为 null/null/[]（旧协调器 → 手机显示"状态未知"而非报错）；旧桌面不发心跳 → 恒显示离线。`ACTION_SCOPES`/`slug()` 是能力 slug 的单一事实源（桌面发送、协调器校验、手机标签三处引用）。
