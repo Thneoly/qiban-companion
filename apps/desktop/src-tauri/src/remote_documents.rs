@@ -270,19 +270,34 @@ pub async fn remote_document_sync(
     remote.sync(&c).await
 }
 pub fn start(app: tauri::AppHandle) {
+    // Two independent loops. The heartbeat MUST NOT share a tick with sync:
+    // a slow sync (sequential document calls, each with a 12s timeout, plus
+    // local executor work) would push the next beat past the 15s lease and
+    // flap a healthy desktop to 电脑离线 on the phone. A separate loop also
+    // bounds each loop's lock hold to its own request, so a hung coordinator
+    // stalls UI commands for at most one call, not both.
+    let heartbeat_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            // Beat on every tick while signed in — independent of pending
+            // documents, so an idle desktop stays online (and its session no
+            // longer idle-expires). Best-effort: errors are ignored (401
+            // clears the vault token in request() and beating stops; 404 =
+            // an older coordinator).
+            let account = heartbeat_app.state::<AccountState>();
+            let c = account.lock().await;
+            if c.active_secret().is_ok() {
+                let _ = c.heartbeat(&capabilities()).await;
+            }
+            drop(c);
+        }
+    });
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let account = app.state::<AccountState>();
             let c = account.lock().await;
-            // The heartbeat runs on every tick while signed in — independent
-            // of pending documents, so an idle desktop stays "online" on the
-            // phone (and its session no longer idle-expires). Best-effort:
-            // errors are ignored (401 clears the vault token in request()
-            // and the next tick stops beating; 404 = an older coordinator).
-            if c.active_secret().is_ok() {
-                let _ = c.heartbeat(&capabilities()).await;
-            }
             if app
                 .state::<RemoteDocuments>()
                 .pending
@@ -291,6 +306,7 @@ pub fn start(app: tauri::AppHandle) {
             {
                 let _ = app.state::<RemoteDocuments>().sync(&c).await;
             }
+            drop(c);
         }
     });
 }
