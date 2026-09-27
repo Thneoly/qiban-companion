@@ -124,6 +124,85 @@ try {
   );
   await pc.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(pc.locator(".cancelled")).toHaveCount(1);
+  // --- Device presence: a third alice session plays the desktop sender ---
+  async function directLogin(email) {
+    const request = await fetch(`${upstream}/v1/auth/request-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const receipt = await request.json();
+    const codeResponse = await fetch(
+      `${upstream}/__test/code/${encodeURIComponent(email)}`,
+    );
+    const { code } = await codeResponse.json();
+    const verify = await fetch(`${upstream}/v1/auth/verify-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challengeId: receipt.challengeId,
+        code,
+        nonce: crypto.randomUUID(),
+      }),
+    });
+    const grant = await verify.json();
+    return grant.accessToken;
+  }
+  const desktopToken = await directLogin("alice@example.com");
+  const offerResponse = await fetch(`${upstream}/v1/pairings/offer`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${desktopToken}`,
+    },
+    body: JSON.stringify({ name: "客厅电脑" }),
+  });
+  assert.equal(offerResponse.status, 200);
+  const offer = await offerResponse.json();
+  const beat = async () => {
+    const response = await fetch(`${upstream}/v1/devices/heartbeat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${desktopToken}`,
+      },
+      body: JSON.stringify({ capabilities: ["document_excerpt"] }),
+    });
+    assert.equal(response.status, 200);
+  };
+  await beat();
+  await phone.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(phone.locator(".pairing .presence")).toContainText("电脑在线");
+  await expect(phone.locator(".pairing .presence")).toContainText(
+    "可执行：文档摘录",
+  );
+  await expect(phone.locator(".pairing .presence")).toContainText(
+    "每次动作仍需确认",
+  );
+  // Stop beating and outlive the 15s lease: the phone must show offline with
+  // the last-contact stamp (the agreed timeout is lease + poll).
+  await new Promise((resolve) => setTimeout(resolve, 15500));
+  await phone.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(phone.locator(".pairing .presence")).toContainText("电脑离线");
+  await expect(phone.locator(".pairing .presence")).toContainText(
+    "最后联系",
+  );
+  // Recovery: one beat flips it back online — and a revoked old session can
+  // never beat again (its token died with the phone logout at the end).
+  await beat();
+  await phone.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(phone.locator(".pairing .presence")).toContainText("电脑在线");
+  // Service unreachable ≠ offline: the banner says status unknown and keeps
+  // the last successful rows.
+  await mobile.setOffline(true);
+  await phone.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(phone.locator(".pairing p[role=status]")).toContainText(
+    "无法连接服务，电脑在线状态未知",
+  );
+  await expect(phone.locator(".pairing .task-list li")).not.toHaveCount(0);
+  await mobile.setOffline(false);
+  await phone.getByRole("button", { name: "刷新配对", exact: true }).click();
+  await expect(phone.locator(".pairing p[role=status]")).toHaveCount(0);
   // A late pre-logout task response must not restore the old account's UI.
   let release;
   const held = new Promise((resolve) => {
@@ -177,7 +256,7 @@ try {
   await bob.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(bob.getByRole("heading", { name: /我们的待办/ })).toBeVisible();
   console.log(
-    "PASS: two device logins share companion and tasks; account isolation, cookie recovery, lost-response dedup, reconnect, cancellation, stale response protection and logout verified.",
+    "PASS: two device logins share companion and tasks; account isolation, cookie recovery, lost-response dedup, reconnect, cancellation, device presence lease, stale response protection and logout verified.",
   );
 } finally {
   await browser.close();
