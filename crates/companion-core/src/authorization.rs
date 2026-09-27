@@ -14,7 +14,7 @@ pub enum AuthorizationError {
     #[error("配对码核对失败次数过多，请五分钟后重试")]
     RateLimited,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionScope {
     DocumentExcerpt,

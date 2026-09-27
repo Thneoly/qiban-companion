@@ -675,3 +675,114 @@ async fn short_pairing_code_http_limit_is_durable_and_has_distinct_error() {
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn device_heartbeat_updates_own_row_and_pairings_report_presence() {
+    let f = Fixture::new();
+    let app = f.app();
+    let alice = login(&f, &app, "alice@example.com").await;
+
+    // No bearer → 401.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        None,
+        json!({"capabilities":["document_excerpt"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Logged in but never offered/accepted: no device row → idempotent false.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":["document_excerpt"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["updated"], false);
+
+    // Offer from the desktop session creates its device row.
+    let (status, offer) = call(
+        &app,
+        "POST",
+        "/v1/pairings/offer",
+        Some(&alice),
+        json!({"name":"我的电脑"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":["document_excerpt"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["updated"], true);
+
+    // The pairing payload now carries the presence family.
+    let (status, pairings) = call(&app, "GET", "/v1/pairings", Some(&alice), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let row = &pairings[0];
+    assert_eq!(row["id"], offer["pairing"]["id"]);
+    assert_eq!(row["desktopOnline"], true);
+    assert!(row["desktopLastHeartbeatAt"].is_u64());
+    assert_eq!(row["desktopCapabilities"], json!(["document_excerpt"]));
+
+    // Validation: unknown slug, over-cap list, unknown field all 400.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":["teleport"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":["document_excerpt","document_excerpt","document_excerpt",
+                               "document_excerpt","document_excerpt","document_excerpt",
+                               "document_excerpt","document_excerpt","document_excerpt"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":[],"extra":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Revoked session (logout) → 401: an old session can never report online.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/logout",
+        Some(&alice),
+        json!({"allSessions":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/devices/heartbeat",
+        Some(&alice),
+        json!({"capabilities":[]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
