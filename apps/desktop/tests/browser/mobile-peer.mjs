@@ -59,9 +59,12 @@ try {
     "来自原生桌面的共享待办",
   );
   const pairing = page.locator(".pairing");
-  await pairing
-    .getByLabel("电脑配对码", { exact: true })
-    .fill(process.env.QIBAN_TEST_PAIRING_CODE);
+  const pairingCode = process.env.QIBAN_TEST_PAIRING_CODE;
+  assert.match(pairingCode, /^[0-9]{6}$/);
+  const codeInput = pairing.getByLabel("电脑配对码", { exact: true });
+  await expect(codeInput).toHaveAttribute("inputmode", "numeric");
+  await codeInput.fill(`${pairingCode.slice(0, 3)} ${pairingCode.slice(3)}`);
+  await expect(codeInput).toHaveValue(pairingCode);
   await pairing
     .getByRole("button", { name: "核对电脑与权限", exact: true })
     .click();

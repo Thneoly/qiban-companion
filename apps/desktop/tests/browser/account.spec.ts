@@ -157,7 +157,7 @@ test("native account UI separates local data, deduplicates retry and clears late
               currentRole: "desktop",
             };
             pairings.push(p);
-            return { pairing: structuredClone(p), code: "a".repeat(32) };
+            return { pairing: structuredClone(p), code: "012345" };
           }
           if (cmd === "account_pairing_revoke") {
             pairings[0].status = "revoked";
@@ -257,7 +257,7 @@ test("native account UI separates local data, deduplicates retry and clears late
   await pairing
     .getByRole("button", { name: "生成五分钟配对码", exact: true })
     .click();
-  await expect(pairing.getByTestId("pairing-code")).toHaveText("a".repeat(32));
+  await expect(pairing.getByTestId("pairing-code")).toHaveText("012345");
   await expect(pairing).toContainText("等待手机确认");
   await page.evaluate(() => (window as any).connectPair());
   await pairing.getByRole("button", { name: "刷新配对", exact: true }).click();

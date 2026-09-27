@@ -4,6 +4,9 @@ use companion_core::authorization::{
     PairingOffer,
 };
 use sha2::{Digest, Sha256};
+mod pairing_codes;
+pub(super) use pairing_codes::migrate_short_codes;
+use pairing_codes::{guarded_preview, new_code};
 
 pub(super) fn migrate(c: &mut Connection) -> Result<(), StorageError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -40,11 +43,7 @@ fn name(value: &str) -> Result<&str, StorageError> {
     Ok(value)
 }
 fn hash(code: &str) -> Result<String, StorageError> {
-    if code.len() != 32
-        || !code
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Error::Denied.into());
     }
     Ok(format!("{:x}", Sha256::digest(code.as_bytes())))
@@ -132,10 +131,10 @@ impl AccountStore {
             let count:u32=tx.query_row("SELECT COUNT(*) FROM device_pairings WHERE account_id=?1",[&a.account_id],|r|r.get(0))?;
             if count >= 100 { return Err(Error::Capacity.into()); }
             let desktop = device(tx,&a.account_id,identity,label)?;
+            let code = new_code(tx, &a.account_id)?;
             // Regeneration invalidates all earlier codes from this session.
             tx.execute("UPDATE device_pairings SET status='revoked',code_hash=NULL,revision=revision+1 WHERE account_id=?1 AND desktop_id=?2 AND status='pending'",params![a.account_id,desktop])?;
             let id=uuid::Uuid::new_v4().to_string();
-            let code=uuid::Uuid::new_v4().simple().to_string();
             tx.execute("INSERT INTO device_pairings VALUES(?1,?2,?3,NULL,?4,?5,1,'pending')",params![a.account_id,id,desktop,hash(&code)?,(now+300_000).min(identity.expires_at()) as i64])?;
             Ok(PairingOffer { pairing:pair(tx,&a.account_id,&id,identity,now)?,code })
         })
@@ -146,8 +145,8 @@ impl AccountStore {
         code: &str,
     ) -> Result<Pairing, StorageError> {
         self.access(identity, |tx, a, now| {
-            preview(tx, &a.account_id, identity, code, now)
-        })
+            guarded_preview(tx, &a.account_id, identity, code, None, now)
+        })?
     }
     pub fn accept_pairing(
         &self,
@@ -157,14 +156,17 @@ impl AccountStore {
         label: &str,
     ) -> Result<Pairing, StorageError> {
         name(label)?;
-        self.access(identity,|tx,a,now| {
-            let p=preview(tx,&a.account_id,identity,code,now)?;
-            if p.id!=expected_id { return Err(Error::Conflict.into()); }
-            let controller=device(tx,&a.account_id,identity,label)?;
-            tx.execute("UPDATE device_pairings SET controller_id=?1,status='active',revision=revision+1,code_hash=NULL WHERE account_id=?2 AND id=?3",params![controller,a.account_id,p.id])?;
-            pair(tx,&a.account_id,&p.id,identity,now)
-        })
+        self.access(identity, |tx, a, now| {
+            let p = match guarded_preview(tx, &a.account_id, identity, code, Some(expected_id), now)? {
+                Ok(p) => p,
+                Err(e) => return Ok(Err(e)),
+            };
+            let controller = device(tx, &a.account_id, identity, label)?;
+            tx.execute("UPDATE device_pairings SET controller_id=?1,status='active',revision=revision+1,code_hash=NULL WHERE account_id=?2 AND id=?3", params![controller, a.account_id, p.id])?;
+            Ok(Ok(pair(tx, &a.account_id, &p.id, identity, now)?))
+        })?
     }
+
     pub fn list_pairings(&self, identity: &VerifiedIdentity) -> Result<Vec<Pairing>, StorageError> {
         self.access(identity, |tx, a, now| {
             let mut q = tx.prepare(

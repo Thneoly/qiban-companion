@@ -63,7 +63,7 @@ fn expiration_logout_and_new_login_never_restore_old_pairing() {
     let o = s.offer_pairing(&d, "电脑").unwrap();
     s.clock = || 301000;
     assert!(s.preview_pairing(&m, &o.code).is_err());
-    s.clock = || 1000;
+    let s = fixture();
     let (d, m, p) = connected(&s);
     s.sign_out(&d, false).unwrap();
     assert_eq!(s.list_pairings(&m).unwrap()[0].status, "expired");
@@ -156,7 +156,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
             },
         )
         .unwrap();
-        s.connection.lock().unwrap().execute_batch("DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
+        s.connection.lock().unwrap().execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
     }
     {
         let mut s = AccountStore::open(&path).unwrap();
@@ -171,7 +171,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
         s.connection
             .lock()
             .unwrap()
-            .execute_batch("DROP TABLE shared_documents; PRAGMA user_version=3;")
+            .execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents; PRAGMA user_version=3;")
             .unwrap();
     }
     {
@@ -314,4 +314,160 @@ fn shared_document_rejects_changed_preview_and_rolls_back_partial_writes() {
     request.preview = "other".into();
     request.binding.parameters_digest = document_digest("demo.txt", "other");
     assert!(s.share_document(&d, &request).is_err());
+}
+
+#[test]
+fn short_code_failures_are_shared_durable_and_not_reset_by_regeneration() {
+    let path = std::env::temp_dir().join(format!("qiban-pair-limit-{}.db", uuid::Uuid::new_v4()));
+    let d = identity("alice", "desktop");
+    let m = identity("alice", "phone");
+    let offer;
+    {
+        let mut s = AccountStore::open(&path).unwrap();
+        s.clock = || 1000;
+        offer = s.offer_pairing(&d, "电脑").unwrap();
+        assert_eq!(offer.code.len(), 6);
+        assert!(offer.code.bytes().all(|b| b.is_ascii_digit()));
+        let wrong = if offer.code == "000000" {
+            "000001"
+        } else {
+            "000000"
+        };
+        for _ in 0..3 {
+            assert!(s.preview_pairing(&m, wrong).is_err());
+        }
+        // Confirm endpoint shares the budget, including mismatched preview identity.
+        assert!(s
+            .accept_pairing(&m, &offer.code, "wrong-id", "手机")
+            .is_err());
+        assert!(s.preview_pairing(&m, &offer.code).is_ok()); // success does not reset failures
+    }
+    {
+        let mut s = AccountStore::open(&path).unwrap();
+        s.clock = || 1000;
+        let fresh = identity("alice", "new-phone-session");
+        assert!(matches!(
+            s.preview_pairing(&fresh, "invalid"),
+            Err(StorageError::Authorization(Error::RateLimited))
+        ));
+        let regenerated = s.offer_pairing(&d, "电脑").unwrap();
+        assert_ne!(offer.code, regenerated.code);
+        assert!(matches!(
+            s.preview_pairing(&m, &regenerated.code),
+            Err(StorageError::Authorization(Error::RateLimited))
+        ));
+        assert!(matches!(
+            s.accept_pairing(&fresh, &regenerated.code, &regenerated.pairing.id, "手机"),
+            Err(StorageError::Authorization(Error::RateLimited))
+        ));
+        let bob = s
+            .offer_pairing(&identity("bob", "desktop"), "另一台电脑")
+            .unwrap();
+        s.accept_pairing(
+            &identity("bob", "phone"),
+            &bob.code,
+            &bob.pairing.id,
+            "手机",
+        )
+        .unwrap();
+        // Monotonic time is required; rolling the clock back cannot reopen the budget.
+        s.clock = || 999;
+        assert!(matches!(
+            s.preview_pairing(&m, &regenerated.code),
+            Err(StorageError::Authorization(Error::RateLimited))
+        ));
+        s.clock = || 301000;
+        let next = s.offer_pairing(&d, "电脑").unwrap();
+        s.accept_pairing(&m, &next.code, &next.pairing.id, "手机")
+            .unwrap();
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn v4_migration_invalidates_pending_long_codes_but_keeps_active_pair_and_document() {
+    use companion_core::authorization::{document_digest, ShareDocument};
+    let s = fixture();
+    let (d, m, active) = connected(&s);
+    let mut b = binding(&active);
+    b.parameters_digest = document_digest("test.txt", "preview");
+    s.share_document(
+        &d,
+        &ShareDocument {
+            pairing_id: active.id.clone(),
+            binding: b.clone(),
+            source_name: "test.txt".into(),
+            preview: "preview".into(),
+        },
+    )
+    .unwrap();
+    let pending = s.offer_pairing(&d, "电脑").unwrap();
+    let c = s.connection.into_inner().unwrap();
+    c.execute(
+        "UPDATE device_pairings SET code_hash=?1 WHERE id=?2",
+        params![
+            format!("{:x}", Sha256::digest("a".repeat(32).as_bytes())),
+            pending.pairing.id
+        ],
+    )
+    .unwrap();
+    c.execute_batch("DROP TABLE pairing_code_limits;PRAGMA user_version=4;")
+        .unwrap();
+    let mut migrated = AccountStore::from_connection(c).unwrap();
+    migrated.clock = || 1000;
+    let pairs = migrated.list_pairings(&m).unwrap();
+    assert_eq!(
+        pairs.iter().find(|p| p.id == active.id).unwrap().status,
+        "active"
+    );
+    let old = pairs.iter().find(|p| p.id == pending.pairing.id).unwrap();
+    assert_eq!(old.status, "revoked");
+    assert_eq!(old.revision, pending.pairing.revision + 1);
+    assert!(migrated.preview_pairing(&m, &"a".repeat(32)).is_err());
+    migrated.confirm_action(&m, &b).unwrap();
+    migrated.admit_action(&d, &b).unwrap();
+    assert_eq!(
+        migrated.document_action(&d, &b.action_id).unwrap().preview,
+        "preview"
+    );
+}
+
+#[test]
+fn concurrent_wrong_codes_never_bypass_account_limit() {
+    let path = std::env::temp_dir().join(format!("qiban-pair-race-{}.db", uuid::Uuid::new_v4()));
+    let mut s = AccountStore::open(&path).unwrap();
+    s.clock = || 1000;
+    let d = identity("alice", "desktop");
+    let m = identity("alice", "phone");
+    let offer = s.offer_pairing(&d, "电脑").unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let workers: Vec<_> = (0..8)
+        .map(|n| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut s = AccountStore::open(&path).unwrap();
+                s.clock = || 1000;
+                barrier.wait();
+                s.preview_pairing(&identity("alice", &format!("phone-{n}")), "invalid")
+                    .is_err()
+            })
+        })
+        .collect();
+    for worker in workers {
+        assert!(worker.join().unwrap());
+    }
+    assert!(matches!(
+        s.preview_pairing(&m, &offer.code),
+        Err(StorageError::Authorization(Error::RateLimited))
+    ));
+    let count: u32 = s
+        .connection
+        .lock()
+        .unwrap()
+        .query_row("SELECT failures FROM pairing_code_limits", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 5);
+    drop(s);
+    std::fs::remove_file(path).unwrap();
 }

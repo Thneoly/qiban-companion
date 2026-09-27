@@ -61,7 +61,7 @@ export function decodePairingOffer(v: unknown): PairingOffer {
   if (
     !input ||
     typeof input.code !== "string" ||
-    !/^[0-9a-f]{32}$/.test(input.code)
+    !/^[0-9]{6}$/.test(input.code)
   )
     throw new Error("配对码无效");
   return { pairing: decodePairing(input.pairing), code: input.code };

@@ -118,6 +118,7 @@ impl From<StorageError> for ApiError {
                 use companion_core::authorization::AuthorizationError::*;
                 match error {
                     Denied => Self(StatusCode::FORBIDDEN, "pairing_denied"),
+                    RateLimited => Self(StatusCode::TOO_MANY_REQUESTS, "pairing_rate_limited"),
                     Conflict => Self(StatusCode::CONFLICT, "pairing_conflict"),
                     Invalid => Self(StatusCode::BAD_REQUEST, "invalid_request"),
                     Capacity => Self(StatusCode::CONFLICT, "pairing_capacity"),

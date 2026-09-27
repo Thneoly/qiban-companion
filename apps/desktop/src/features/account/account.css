@@ -117,7 +117,7 @@
 }
 
 .pairing-panel { border-block: 1px solid #d6dfce; padding-block: 16px; margin-block: 16px; }
-.pairing-code { display:block; font-size:18px; overflow-wrap:anywhere; user-select:all; }
+.pairing-code { display:block; font-size:30px; font-weight:700; letter-spacing:.18em; font-variant-numeric:tabular-nums; user-select:all; }
 
 .remote-documents {border-block:1px solid #d6dfce;margin-block:16px;padding-block:16px;}
 .remote-documents pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;}

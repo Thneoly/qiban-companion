@@ -127,7 +127,7 @@ export function PairingPanel({
       </form>
       {offer && (
         <div className="account-notice">
-          <p>在手机的「连接电脑」输入此码，再核对设备并确认。</p>
+          <p>在手机的「连接电脑」输入这六位数字，再核对设备并确认。</p>
           <code className="pairing-code" data-testid="pairing-code">
             {offer.code}
           </code>
