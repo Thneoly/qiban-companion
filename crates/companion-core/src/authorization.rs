@@ -11,6 +11,8 @@ pub enum AuthorizationError {
     Invalid,
     #[error("配对或动作记录已达上限")]
     Capacity,
+    #[error("配对码核对失败次数过多，请五分钟后重试")]
+    RateLimited,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

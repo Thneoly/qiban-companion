@@ -289,3 +289,19 @@ test("document gateway permits confirmation and cancellation but denies submissi
       404,
     );
 });
+
+test("pairing lockout stays distinct from email cooldown and does not clear login", async (t) => {
+  const call = await fixture(t, async () =>
+    Response.json({ error: { code: "pairing_rate_limited" } }, { status: 429 }),
+  );
+  const response = await call("/api/pairings/preview", {
+    method: "POST",
+    headers: { Cookie: `__Host-qiban_session=${token}` },
+    body: JSON.stringify({ code: "012345" }),
+  });
+  assert.equal(response.status, 429);
+  assert.deepEqual(JSON.parse(response.text), {
+    error: { code: "pairing_rate_limited" },
+  });
+  assert.equal(response.headers["set-cookie"], undefined);
+});

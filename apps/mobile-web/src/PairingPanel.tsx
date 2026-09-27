@@ -20,6 +20,13 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
   expired.current = onExpired;
   function failed(e: unknown) {
     if (e instanceof ApiError && e.status === 401) expired.current();
+    if (
+      e instanceof ApiError &&
+      ["pairing_denied", "pairing_conflict", "pairing_rate_limited"].includes(
+        e.code,
+      )
+    )
+      setPreview(null);
     setNote(message(e));
   }
   async function refresh() {
@@ -75,7 +82,7 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
     <section className="card pairing" aria-labelledby="mobile-pair-title">
       <h2 id="mobile-pair-title">连接电脑</h2>
       <p className="hint">
-        先在电脑的「账号与共享待办」生成配对码。只接受同账号的另一登录会话。
+        先在电脑的「账号与共享待办」生成六位数字配对码。只接受同账号的另一登录会话。
       </p>
       <p className="hint">
         文档摘录协作 ·
@@ -97,14 +104,17 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
           value={code}
           disabled={busy}
           required
-          maxLength={32}
-          pattern="[0-9a-f]{32}"
+          maxLength={12}
+          inputMode="numeric"
+          pattern="[0-9]{6}"
+          placeholder="输入六位数字"
           autoComplete="off"
           onChange={(e) => {
-            setCode(e.target.value.trim().toLowerCase());
+            setCode(e.target.value.replace(/\s/g, "").slice(0, 6));
             setPreview(null);
           }}
         />
+        <p className="hint">五分钟有效。累计输错五次后需等待五分钟再试。</p>
         <label htmlFor="phone-name">这台手机的名称</label>
         <input
           id="phone-name"

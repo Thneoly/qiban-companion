@@ -617,3 +617,61 @@ async fn pairing_http_rejects_owner_injection_self_pairing_and_cross_account() {
         StatusCode::CONFLICT
     );
 }
+
+#[tokio::test]
+async fn short_pairing_code_http_limit_is_durable_and_has_distinct_error() {
+    let f = Fixture::new();
+    let app = f.app();
+    let token = login(&f, &app, "alice@example.com").await;
+    let (status, offer) = call(
+        &app,
+        "POST",
+        "/v1/pairings/offer",
+        Some(&token),
+        json!({"name":"电脑"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let code = offer["code"].as_str().unwrap();
+    assert_eq!(code.len(), 6);
+    assert!(code.bytes().all(|b| b.is_ascii_digit()));
+    for n in 1..=5 {
+        let (status, body) = call(
+            &app,
+            "POST",
+            "/v1/pairings/preview",
+            Some(&token),
+            json!({"code":"invalid"}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            if n == 5 {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+        if n == 5 {
+            assert_eq!(body["error"]["code"], "pairing_rate_limited");
+        }
+    }
+    drop(app);
+    let reopened = f.app();
+    let (status, body) = call(
+        &reopened,
+        "POST",
+        "/v1/pairings/accept",
+        Some(&token),
+        json!({"code":code,"pairingId":offer["pairing"]["id"],"name":"手机"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"]["code"], "pairing_rate_limited");
+    assert_eq!(
+        call(&reopened, "GET", "/v1/me", Some(&token), Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}

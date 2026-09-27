@@ -22,6 +22,7 @@ impl AccountError {
         let message = match code {
             "document_storage" => "文档预览或本地执行台账不可用，请检查文档格式、容量和数据目录。",
             "document_capacity" => "共享文档或动作记录已达上限，当前版本尚未提供清理入口。",
+            "pairing_rate_limited" => "配对码核对失败次数过多，请五分钟后重新生成配对码再试。",
             "pairing_denied" => "配对信息已失效，或当前会话没有此权限。",
             "pairing_conflict" => "配对状态已变化，请刷新后重新核对。",
             "pairing_capacity" => "配对记录已达上限。",
@@ -211,6 +212,7 @@ impl AccountClient {
                 (403, Some("pairing_denied")) => "pairing_denied",
                 (409, Some("pairing_conflict")) => "pairing_conflict",
                 (409, Some("pairing_capacity")) => "pairing_capacity",
+                (429, Some("pairing_rate_limited")) => "pairing_rate_limited",
                 (429, _) => "rate_limited",
                 (409, Some("capacity")) => "capacity",
                 (409, _) => "conflict",

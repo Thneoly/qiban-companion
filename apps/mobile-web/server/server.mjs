@@ -28,6 +28,7 @@ const knownErrors = new Set([
   "storage_unavailable",
   "not_found",
   "pairing_denied",
+  "pairing_rate_limited",
   "pairing_conflict",
   "pairing_capacity",
 ]);

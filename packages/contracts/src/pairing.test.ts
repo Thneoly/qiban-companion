@@ -19,5 +19,17 @@ it("rejects privilege escalation and projects only public pairing metadata", () 
   expect(() => decodePairing({ ...p, scope: "shell" })).toThrow();
   expect(() => decodePairing({ ...p, status: "active" })).toThrow();
   expect(() => decodePairing({ ...p, revision: 0 })).toThrow();
-  expect(() => decodePairingOffer({ pairing: p, code: "too-short" })).toThrow();
+  expect(decodePairingOffer({ pairing: p, code: "012345" }).code).toBe(
+    "012345",
+  );
+  for (const code of [
+    "too-short",
+    "a".repeat(32),
+    "12345",
+    "1234567",
+    "１２３４５６",
+    123456,
+  ]) {
+    expect(() => decodePairingOffer({ pairing: p, code })).toThrow();
+  }
 });

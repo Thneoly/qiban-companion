@@ -56,6 +56,7 @@ export function nonce() {
 }
 export function message(error: unknown) {
   const messages: Record<string, string> = {
+    pairing_rate_limited: "配对码核对失败次数过多，请五分钟后重新生成配对码再试。",
     pairing_denied: "配对码已失效，或当前登录没有此权限。请使用同账号的另一会话重新配对。",
     pairing_conflict: "配对状态已变化，请刷新后重新核对。",
     pairing_capacity: "配对记录已达上限。",
