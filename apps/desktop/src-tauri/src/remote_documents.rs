@@ -275,6 +275,14 @@ pub fn start(app: tauri::AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let account = app.state::<AccountState>();
             let c = account.lock().await;
+            // The heartbeat runs on every tick while signed in — independent
+            // of pending documents, so an idle desktop stays "online" on the
+            // phone (and its session no longer idle-expires). Best-effort:
+            // errors are ignored (401 clears the vault token in request()
+            // and the next tick stops beating; 404 = an older coordinator).
+            if c.active_secret().is_ok() {
+                let _ = c.heartbeat(&capabilities()).await;
+            }
             if app
                 .state::<RemoteDocuments>()
                 .pending
@@ -285,4 +293,13 @@ pub fn start(app: tauri::AppHandle) {
             }
         }
     });
+}
+/// The executor's advertised capability slugs, generated from the same
+/// companion-core constant the coordinator validates against and the phone
+/// maps labels over — never a hand-written list.
+fn capabilities() -> Vec<String> {
+    companion_core::authorization::ACTION_SCOPES
+        .iter()
+        .map(|scope| scope.slug().to_string())
+        .collect()
 }

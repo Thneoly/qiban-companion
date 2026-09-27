@@ -133,3 +133,29 @@ pub struct DocumentAction {
     pub artifact_hash: String,
     pub current_role: String,
 }
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+    #[test]
+    fn legacy_pairing_payload_without_presence_fields_still_decodes() {
+        // Mixed-version evidence: an older coordinator's payload (no
+        // presence keys) must decode with the defaults, not fail.
+        let legacy = serde_json::json!({
+            "id":"00000000-0000-4000-8000-000000000001",
+            "desktopId":"00000000-0000-4000-8000-000000000002",
+            "desktopName":"旧电脑",
+            "controllerId":null,
+            "controllerName":null,
+            "scope":"document_excerpt",
+            "revision":1,
+            "status":"pending",
+            "expiresAt":1000,
+            "currentRole":"desktop"
+        });
+        let p: Pairing = serde_json::from_value(legacy).unwrap();
+        assert!(!p.desktop_online);
+        assert_eq!(p.desktop_last_heartbeat_at, None);
+        assert!(p.desktop_capabilities.is_empty());
+    }
+}
