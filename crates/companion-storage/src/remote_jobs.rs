@@ -64,4 +64,73 @@ impl RemoteJobStore {
         }
         Ok(())
     }
+    /// Ids whose phase PROVES the server once listed the record (the sync
+    /// loop only reaches claiming/admitted after observing it). Used by the
+    /// reverse sweep: absence from the current server list then means the
+    /// record was deleted. `sharing` is deliberately excluded — it is set
+    /// before the share POST, so "sharing + absent" is indistinguishable
+    /// from "the POST never arrived" and must stay retryable.
+    pub fn claiming_or_admitted(&self) -> Result<Vec<String>, StorageError> {
+        let mut q = self
+            .0
+            .prepare("SELECT id FROM remote_jobs WHERE phase IN ('claiming','admitted')")?;
+        let ids = q
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn store() -> RemoteJobStore {
+        RemoteJobStore::open(std::path::Path::new(":memory:")).unwrap()
+    }
+    fn prepared() -> Prepared {
+        let document = companion_core::execution::prepare_document(
+            &uuid::Uuid::new_v4().to_string(),
+            "demo.txt",
+            &format!("demo line\n{}", uuid::Uuid::new_v4()),
+        )
+        .unwrap();
+        let task = companion_core::execution::ExecutionTask::new(document);
+        Prepared {
+            share: ShareDocument {
+                pairing_id: uuid::Uuid::new_v4().to_string(),
+                binding: companion_core::authorization::ActionBinding {
+                    action_id: task.action_id.clone(),
+                    resource_id: task.id.clone(),
+                    resource_version: 1,
+                    parameters_digest: "a".repeat(64),
+                    pair_revision: 1,
+                    scope: companion_core::authorization::ActionScope::DocumentExcerpt,
+                },
+                source_name: task.source_name.clone(),
+                preview: task.preview.clone(),
+            },
+            task,
+        }
+    }
+    #[test]
+    fn claiming_or_admitted_lists_only_proof_phases() {
+        let s = store();
+        let mut expected = Vec::new();
+        for phase in ["local", "sharing", "claiming", "admitted", "reported"] {
+            let p = prepared();
+            let id = p.task.id.clone();
+            s.insert(&p).unwrap();
+            if phase != "local" {
+                s.phase(&id, phase).unwrap();
+            }
+            if phase == "claiming" || phase == "admitted" {
+                expected.push(id);
+            }
+        }
+        let mut listed = s.claiming_or_admitted().unwrap();
+        listed.sort();
+        expected.sort();
+        assert_eq!(listed, expected);
+        s.phase(expected[0].as_str(), "reported").unwrap();
+        assert_eq!(s.claiming_or_admitted().unwrap(), [expected[1].clone()]);
+    }
 }

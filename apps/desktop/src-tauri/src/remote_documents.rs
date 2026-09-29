@@ -99,7 +99,16 @@ impl RemoteDocuments {
     }
     pub async fn share(&self, c: &AccountClient, id: &str) -> Result<DocumentAction> {
         let w = self.workspace(c).await?;
-        let (p, _) = w.load(id)?;
+        let (p, phase) = w.load(id)?;
+        // A reported action's local task is terminal and can never be admitted
+        // again (claim refuses terminal tasks). After a server-side deletion a
+        // re-share would insert a fresh record that this desktop would then
+        // silently never execute — refuse explicitly instead.
+        if phase == "reported" {
+            return Err(AccountError::new(
+                "该摘录已执行完毕，本地不会再次执行；请重新选择文件生成新任务",
+            ));
+        }
         w.phase(id, "sharing")?;
         self.pending
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -206,6 +215,27 @@ impl RemoteDocuments {
                 }
                 w.phase(id, "reported")?;
             }
+        }
+        // Reverse sweep: a ledger entry in a proof phase (claiming/admitted —
+        // only reachable after the server once listed the record) whose id is
+        // absent from the current list was deleted by either side. Converge
+        // locally: cancel a still-waiting task, mark reported, and never
+        // re-share, re-admit or touch the published file. `sharing` entries
+        // are untouched: absence there may just mean the POST never arrived.
+        let live: std::collections::HashSet<&str> = docs
+            .iter()
+            .map(|d| d.authorization.binding.resource_id.as_str())
+            .collect();
+        for id in w.jobs.claiming_or_admitted().map_err(local_error)? {
+            if live.contains(id.as_str()) {
+                continue;
+            }
+            if let Ok(local) = w.executor.store.detail(&id) {
+                if local.task.status == ExecutionStatus::WaitingConfirmation {
+                    let _ = w.executor.store.cancel(&id, local.task.revision);
+                }
+            }
+            let _ = w.phase(&id, "reported");
         }
         let rows = self.list(c).await?;
         self.pending.store(
