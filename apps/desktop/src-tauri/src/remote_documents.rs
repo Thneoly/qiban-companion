@@ -105,9 +105,7 @@ impl RemoteDocuments {
         // re-share would insert a fresh record that this desktop would then
         // silently never execute — refuse explicitly instead.
         if phase == "reported" {
-            return Err(AccountError::new(
-                "该摘录已执行完毕，本地不会再次执行；请重新选择文件生成新任务",
-            ));
+            return Err(AccountError::new("document_finished"));
         }
         w.phase(id, "sharing")?;
         self.pending

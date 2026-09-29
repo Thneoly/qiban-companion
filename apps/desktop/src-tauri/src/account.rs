@@ -21,7 +21,10 @@ impl AccountError {
     pub(crate) fn new(code: &'static str) -> Self {
         let message = match code {
             "document_storage" => "文档预览或本地执行台账不可用，请检查文档格式、容量和数据目录。",
-            "document_capacity" => "共享文档或动作记录已达上限，当前版本尚未提供清理入口。",
+            "document_capacity" => {
+                "共享文档或动作记录已达上限；可在手机上删除已结束的任务记录释放配额。"
+            }
+            "document_finished" => "该摘录已执行完毕，本地不会再次执行；请重新选择文件生成新任务。",
             "pairing_rate_limited" => "配对码核对失败次数过多，请五分钟后重新生成配对码再试。",
             "pairing_denied" => "配对信息已失效，或当前会话没有此权限。",
             "pairing_conflict" => "配对状态已变化，请刷新后重新核对。",

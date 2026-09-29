@@ -359,12 +359,24 @@ try {
   await expect(rowB).toHaveCount(0, { timeout: 15000 });
   // Deleted elsewhere between reads: the phone's delete hits 403 and the
   // explicit already-gone note appears while the refresh removes the row.
+  // Freeze list reads until the click lands — otherwise the 5s poll could
+  // remove the stale row before the phone acts on it.
+  let releaseList;
+  const listHeld = new Promise((resolve) => {
+    releaseList = resolve;
+  });
+  await phone.route("**/api/documents", async (route) => {
+    if (route.request().method() === "GET") await listHeld;
+    await route.continue();
+  });
   await desktopCall(
     `/v1/documents/${docC.authorization.binding.actionId}/delete`,
     {},
   );
   phone.once("dialog", (dialog) => dialog.accept());
   await rowC.getByRole("button", { name: "删除记录", exact: true }).click();
+  releaseList();
+  await phone.unroute("**/api/documents");
   await expect(documents.getByRole("status")).toContainText("已不存在");
   await expect(rowC).toHaveCount(0);
   await refreshDocuments();
