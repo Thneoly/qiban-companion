@@ -4,6 +4,7 @@ import {
   decodePairings,
   decodePairing,
   pairingStatus,
+  relativeTime,
   type Pairing,
 } from "@companion/contracts";
 import { api, ApiError, message } from "./api";
@@ -193,8 +194,8 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
                 ["pending", "active"].includes(p.status) && (
                   <small className="presence">
                     {p.desktopOnline
-                      ? `电脑在线 · 最后联系 ${relative(p.desktopLastHeartbeatAt)} · 可执行：${capabilities(p)}（每次动作仍需确认）`
-                      : `电脑离线 · 最后联系 ${relative(p.desktopLastHeartbeatAt) || "从未"}`}
+                      ? `电脑在线 · 最后联系 ${relativeTime(p.desktopLastHeartbeatAt, Date.now())} · 可执行：${capabilities(p)}（每次动作仍需确认）`
+                      : `电脑离线 · 最后联系 ${relativeTime(p.desktopLastHeartbeatAt, Date.now()) || "从未"}`}
                   </small>
                 )}
             </div>
@@ -231,13 +232,6 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
   );
 }
 
-function relative(at: number | null): string {
-  if (at === null) return "";
-  // Phone clock skew only affects this display text; the online boolean is
-  // decided by the server clock, never by this computation.
-  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
-  return seconds < 60 ? `${seconds} 秒前` : `${Math.round(seconds / 60)} 分钟前`;
-}
 function capabilities(p: Pairing): string {
   if (p.desktopCapabilities.length === 0) return "无";
   return p.desktopCapabilities

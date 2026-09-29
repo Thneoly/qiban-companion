@@ -15,7 +15,7 @@ zeroize = "1"
 # compiled-in Mozilla root set, so enterprise TLS interception and custom
 # roots installed on this machine are honored during SMTP handshakes.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-native-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

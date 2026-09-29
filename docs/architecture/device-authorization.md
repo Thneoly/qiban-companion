@@ -70,6 +70,19 @@
 
 准入响应丢失时，服务器已准入而本地未开始的任务会保守取消并报告失败；不能根据查询到 admitted 就重新开始保存。已发布产物通过重开执行台账与文件核对补回执，每个动作只对应一个固定新文件。当前使用 HTTP 轮询（含设备心跳，见下节），尚无 WebSocket 和恢复备份后的跨服务执行锁。
 
+### 手机端六态呈现（2026-09-27）
+
+服务端状态机不因展示拆分而改变；手机以 `deriveDocumentPhase`（packages/contracts）在本地把服务端状态与配对 presence 租约 join 成六个任务阶段：`confirmed→等待电脑`、`admitted→执行中`，其余一一对应。规则：
+
+- **推断必须标注**："执行中（推断）"= admitted ∧ 电脑在线（会话级租约），非任务级真相；桌面本地执行状态不上报。admitted ∧ 离线显示"已开始，电脑离线"；presence 为 null（旧协调器或本轮读取失败）不装饰、不声称执行中。
+- **手机永不宣布终态**：awaiting/confirmed 显示"（剩余 m:ss）"倒计时，到期只显示"（已到有效期）"并声明以服务端刷新为准；completed/failed/cancelled 等终态（以及 unknown、cancel_requested 等可继续演变的状态）始终来自服务端读取时推导或回执，手机端不自行改写。
+- **取消可见性真值**：`awaiting_confirmation | confirmed | admitted` 显示取消按钮；`cancel_requested | unknown` 不显示（服务端 `invalidated_state` 保留原状态，按下是空操作），改为指引 + 每任务刷新。
+- **核对结果入口**：completed 展示"回报的产物哈希与预览摘要一致（服务端接收回报时核对）"——这是回执前置校验保证的事实，不是手机侧新核验；内容下载不在当前范围。
+- **unknown 恢复**：桌面同步循环把 unknown 视为待核对，在线时每 5s 自动核对重发回执；手机指引"电脑上线后自动核对，无需重新确认"。
+- **不可达三分**：服务不可达（横幅"任务状态未知"、保留旧数据）≠ 电脑离线（presence 判定）≠ 结果未知（回执状态）；presence 读取失败按无 presence 推导，不用陈旧租约装饰。
+
+交付证据见[任务进度与恢复入口](../status/task-progress-recovery.md)。
+
 ## 设备心跳与在线状态（2026-09-27）
 
 - **路由**：`POST /v1/devices/heartbeat`（gated：认证 + 16 并发 + 16KB body 上限）。请求体 `{capabilities: string[]}`（原始列表 ≤8 项，每项必须匹配 `ActionScope::slug()`，未知 slug/超限/未知字段 → 400）。返回 `{"updated": bool}`——已登录但从未配对的会话没有设备行，幂等返回 false。
