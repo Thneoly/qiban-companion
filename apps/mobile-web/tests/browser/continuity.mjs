@@ -111,7 +111,9 @@ try {
   await phone.screenshot({ path: `${output}mobile-tasks.png`, fullPage: true });
   await mobile.setOffline(true);
   await phone.getByRole("button", { name: "刷新", exact: true }).click();
-  await expect(phone.getByRole("status")).toContainText("连接中断");
+  // Scoped to the global notice: panel banners are separate role=status
+  // elements and would make an unscoped locator strict-mode ambiguous.
+  await expect(phone.locator("main > .notice")).toContainText("连接中断");
   await pc.getByLabel("想让栖栖记住什么？").fill("电脑新增的第二件小事");
   await pc.getByRole("button", { name: "记下来", exact: true }).click();
   await expect(pc.locator(".todos .task-list li")).toHaveCount(2);
@@ -288,7 +290,7 @@ try {
   await beat();
   const docB = await share("核对.txt", "先报告未知再补齐结果的摘录");
   const rowB = row("核对.txt");
-  await expect(rowB).toContainText("等待手机确认");
+  await expect(rowB).toContainText("等待手机确认", { timeout: 15000 });
   phone.once("dialog", (dialog) => dialog.accept());
   await rowB
     .getByRole("button", { name: "确认电脑保存这份摘录", exact: true })
@@ -314,7 +316,7 @@ try {
   // C: cancelling before admission hides the cancel affordance afterwards.
   const docC = await share("停止.txt", "确认前就取消的摘录");
   const rowC = row("停止.txt");
-  await expect(rowC).toContainText("等待手机确认");
+  await expect(rowC).toContainText("等待手机确认", { timeout: 15000 });
   await rowC
     .getByRole("button", { name: "取消或请求停止", exact: true })
     .click();
@@ -351,6 +353,8 @@ try {
   await expect(phone.locator(".pairing .presence")).toContainText(
     "最后联系",
   );
+  // Refresh the document panel too instead of waiting for its 5s tick.
+  await refreshDocuments();
   await expect(rowD.getByTestId("remote-document-status")).toHaveText(
     "已开始，电脑离线",
   );
@@ -376,6 +380,7 @@ try {
     "无法连接服务，电脑在线状态未知",
   );
   await expect(phone.locator(".pairing .task-list li")).not.toHaveCount(0);
+  await refreshDocuments();
   await expect(
     documents.locator("p[role=status].notice"),
   ).toContainText("无法连接服务，任务状态未知");

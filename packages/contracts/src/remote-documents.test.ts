@@ -200,9 +200,9 @@ describe("document phase derivation", () => {
     expect(
       deriveDocumentPhase(doc("unknown"), pairing(false), NOW).hint,
     ).toContain("无需重新确认");
-    expect(deriveDocumentPhase(doc("cancel_requested"), pairing(false), NOW).hint).toContain(
-      "恢复联网后会核对停止结果",
-    );
+    const stopping = deriveDocumentPhase(doc("cancel_requested"), pairing(false), NOW);
+    expect(stopping.label).toBe("已请求停止，等待电脑核对");
+    expect(stopping.hint).toContain("恢复联网后会核对停止结果");
   });
   it("keeps the awaiting-confirmation hint independent of presence", () => {
     const online = deriveDocumentPhase(doc("awaiting_confirmation"), pairing(true), NOW);
