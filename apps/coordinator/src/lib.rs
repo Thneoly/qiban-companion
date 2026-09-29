@@ -59,6 +59,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/documents/{id}/confirm", post(documents::confirm))
         .route("/v1/documents/{id}/admit", post(documents::admit))
         .route("/v1/documents/{id}/cancel", post(documents::cancel))
+        .route("/v1/documents/{id}/delete", post(documents::delete))
         .route("/v1/documents/{id}/receipt", post(documents::receipt))
         .layer(DefaultBodyLimit::max(16384))
         .layer(middleware::from_fn_with_state(

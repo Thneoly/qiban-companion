@@ -50,6 +50,19 @@ pub(super) async fn cancel(
         storage(&s, i, move |s, i| s.cancel_document(i, &id)).await?,
     ))
 }
+/// Terminal records only; either participant. Returns the pre-delete snapshot.
+pub(super) async fn delete(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    b: Result<Json<Empty>, JsonRejection>,
+) -> Result<Json<DocumentAction>, ApiError> {
+    request_body(b)?;
+    let i = s.auth.verify(bearer(&h)?).await?;
+    Ok(Json(
+        storage(&s, i, move |s, i| s.delete_document(i, &id)).await?,
+    ))
+}
 pub(super) async fn confirm(
     State(s): State<AppState>,
     h: HeaderMap,
