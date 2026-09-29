@@ -317,6 +317,107 @@ fn shared_document_rejects_changed_preview_and_rolls_back_partial_writes() {
 }
 
 #[test]
+fn finished_document_deletion_is_terminal_scoped_atomic_and_frees_capacity() {
+    use companion_core::authorization::{document_digest, ShareDocument};
+    let s = fixture();
+    let (d, m, p) = connected(&s);
+    let share = |name: &str, preview: &str| {
+        let mut b = binding(&p);
+        b.parameters_digest = document_digest(name, preview);
+        ShareDocument {
+            pairing_id: p.id.clone(),
+            binding: b,
+            source_name: name.into(),
+            preview: preview.into(),
+        }
+    };
+    // A completed document deletes for either participant and disappears.
+    let done = share("完成.txt", "已完成的摘录");
+    let first = s.share_document(&d, &done).unwrap();
+    s.confirm_action(&m, &done.binding).unwrap();
+    s.admit_action(&d, &done.binding).unwrap();
+    s.receipt_document(&d, &done.binding, "completed", &first.artifact_hash)
+        .unwrap();
+    let snapshot = s.delete_document(&m, &done.binding.action_id).unwrap();
+    assert_eq!(snapshot.authorization.state, "completed");
+    assert!(s.document_action(&d, &done.binding.action_id).is_err());
+    // Retry (e.g. after a lost response) and the other role both fail now.
+    assert!(s.delete_document(&m, &done.binding.action_id).is_err());
+    assert!(s.delete_document(&d, &done.binding.action_id).is_err());
+    // Re-sharing the identical body inserts a fresh task: the resource row
+    // was freed atomically with the record.
+    let again = s.share_document(&d, &done).unwrap();
+    assert_eq!(again.authorization.state, "awaiting_confirmation");
+    // Non-terminal states refuse, including unknown (still awaiting the
+    // desktop's reconciliation receipt).
+    let inflight = share("在途.txt", "先报告未知结果的摘录");
+    s.share_document(&d, &inflight).unwrap();
+    for state_check in 0..4 {
+        match state_check {
+            0 => {}
+            1 => {
+                s.confirm_action(&m, &inflight.binding).unwrap();
+            }
+            2 => {
+                s.admit_action(&d, &inflight.binding).unwrap();
+            }
+            _ => {
+                s.receipt_document(
+                    &d,
+                    &inflight.binding,
+                    "unknown",
+                    &companion_core::execution::digest("先报告未知结果的摘录".as_bytes()),
+                )
+                .unwrap();
+            }
+        }
+        assert!(matches!(
+            s.delete_document(&m, &inflight.binding.action_id),
+            Err(StorageError::Authorization(Error::Conflict))
+        ));
+    }
+    assert!(s
+        .delete_document(&identity("alice", "outsider"), &inflight.binding.action_id)
+        .is_err());
+    assert!(s
+        .delete_document(&identity("bob", "elsewhere"), &inflight.binding.action_id)
+        .is_err());
+    // A cancelled document (never admitted) deletes.
+    let cancelled = share("取消.txt", "确认前取消的摘录");
+    s.share_document(&d, &cancelled).unwrap();
+    s.cancel_document(&m, &cancelled.binding.action_id).unwrap();
+    s.delete_document(&d, &cancelled.binding.action_id).unwrap();
+    assert!(s
+        .list_documents(&m)
+        .unwrap()
+        .iter()
+        .all(|x| x.authorization.binding.action_id != cancelled.binding.action_id));
+    // Capacity is a live count: fill to the 20-document cap, delete one
+    // finished record, and a new share succeeds again.
+    let mut filler = 0;
+    while s.list_documents(&d).unwrap().len() < 20 {
+        let name = format!("填充{filler}.txt");
+        s.share_document(&d, &share(&name, "填充配额的摘录"))
+            .unwrap();
+        filler += 1;
+    }
+    let spare = share("释放.txt", "验证配额释放的摘录");
+    assert!(matches!(
+        s.share_document(&d, &spare),
+        Err(StorageError::Authorization(Error::Capacity))
+    ));
+    s.confirm_action(&m, &done.binding).unwrap();
+    s.admit_action(&d, &done.binding).unwrap();
+    s.receipt_document(&d, &done.binding, "completed", &first.artifact_hash)
+        .unwrap();
+    s.delete_document(&m, &done.binding.action_id).unwrap();
+    assert_eq!(
+        s.share_document(&d, &spare).unwrap().authorization.state,
+        "awaiting_confirmation"
+    );
+}
+
+#[test]
 fn short_code_failures_are_shared_durable_and_not_reset_by_regeneration() {
     let path = std::env::temp_dir().join(format!("qiban-pair-limit-{}.db", uuid::Uuid::new_v4()));
     let d = identity("alice", "desktop");

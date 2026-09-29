@@ -30,6 +30,17 @@ export const documentStates: Record<string, string> = {
   failed: "未保存成功",
   unknown: "结果未知，需要核对",
 };
+/** The server-terminal set == deletable records == the 已结束 section
+ * split. Unknown is excluded on purpose: the desktop still owes a
+ * reconciliation receipt that must stay visible. */
+export const deletableDocumentStates = [
+  "completed",
+  "failed",
+  "cancelled",
+] as const;
+export function isDeletableDocumentState(state: string): boolean {
+  return (deletableDocumentStates as readonly string[]).includes(state);
+}
 export function decodeDocument(value: unknown): DocumentAction {
   const v = value as DocumentAction;
   const a = v?.authorization,

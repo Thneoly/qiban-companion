@@ -4,6 +4,7 @@ use companion_coordinator::{
     router, AppState,
 };
 use companion_storage::accounts::AccountStore;
+use companion_storage::remote_jobs::RemoteJobStore;
 use std::{
     collections::HashMap,
     sync::{
@@ -543,6 +544,92 @@ async fn desktop_mobile_same_companion_integration() {
         );
     }
     drop(ledger);
+    // --- Deletion sweep: a server-deleted record converges locally, and a
+    // reported action can never be silently re-shared. The controller needs a
+    // second alice login, so wait out the real 60s OTP mail cooldown once ---
+    tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+    let mut phone = f.client(Arc::new(MemoryVault::default()));
+    phone
+        .request_code("alice@example.com".into())
+        .await
+        .unwrap();
+    phone.login(f.code("alice@example.com")).await.unwrap();
+    let offer2 = c.pairing_offer("清理测试电脑".into()).await.unwrap();
+    let phone_secret = phone.active_secret().unwrap().token.clone();
+    phone
+        .request(
+            Method::POST,
+            "/v1/pairings/accept",
+            Some(&phone_secret),
+            Some(json!({
+                "code": offer2.code,
+                "pairingId": offer2.pairing.id,
+                "name": "清理手机"
+            })),
+        )
+        .await
+        .unwrap();
+    let remote2 = crate::remote_documents::RemoteDocuments::new(remote_root.clone());
+    let prepared = remote2
+        .prepare(
+            &c,
+            offer2.pairing.id.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            "清理.txt".into(),
+            "清理路径回归的摘录".into(),
+        )
+        .await
+        .unwrap();
+    let cleanup_id = prepared.task.id.clone();
+    let action_id = prepared.task.action_id.clone();
+    let artifact_hash = prepared.task.artifact_hash.clone();
+    let binding = serde_json::to_value(&prepared.share.binding).unwrap();
+    remote2.share(&c, &cleanup_id).await.unwrap();
+    let desktop_secret = c.active_secret().unwrap().token.clone();
+    for (path, body) in [
+        (
+            format!("/v1/documents/{action_id}/confirm"),
+            binding.clone(),
+        ),
+        (format!("/v1/documents/{action_id}/admit"), binding.clone()),
+        (
+            format!("/v1/documents/{action_id}/receipt"),
+            json!({"binding":binding,"state":"failed","artifactHash":artifact_hash}),
+        ),
+        (format!("/v1/documents/{action_id}/delete"), json!({})),
+    ] {
+        // Confirm is controller-only; the rest use the desktop session.
+        let token = if path.ends_with("/confirm") {
+            &phone_secret
+        } else {
+            &desktop_secret
+        };
+        c.request(Method::POST, &path, Some(token), Some(body))
+            .await
+            .unwrap();
+    }
+    let owner2 = c.remote_owner().await.unwrap();
+    let jobs = RemoteJobStore::open(&remote_root.join(&owner2).join("remote-jobs.db")).unwrap();
+    // The share POST reset the phase to sharing; admitting went through raw
+    // HTTP, so set the proof phase exactly as a crashed sync would leave it.
+    jobs.phase(&cleanup_id, "admitted").unwrap();
+    remote2.sync(&c).await.unwrap();
+    assert_eq!(jobs.load(&cleanup_id).unwrap().1, "reported");
+    let ledger2 = crate::execution::ExecutionState::open(&remote_root.join(&owner2)).unwrap();
+    assert_eq!(
+        ledger2.store.detail(&cleanup_id).unwrap().task.status,
+        companion_core::execution::ExecutionStatus::Cancelled
+    );
+    assert_eq!(ledger2.store.list().unwrap().len(), 5);
+    assert!(!remote_root
+        .join(&owner2)
+        .join("document-drafts")
+        .join(format!("{action_id}.md"))
+        .exists());
+    // A reported action must refuse to re-share instead of expiring silently.
+    assert!(remote2.share(&c, &cleanup_id).await.is_err());
+    drop(ledger2);
+    drop(jobs);
     assert!(
         remote_root.starts_with(std::env::temp_dir())
             && remote_root

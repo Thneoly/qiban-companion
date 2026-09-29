@@ -150,4 +150,43 @@ impl AccountStore {
             Ok(d)
         })
     }
+    /// Remove a FINISHED task record (completed/failed/cancelled — the states
+    /// `invalidated_state` maps to themselves). Either participant may call;
+    /// observers and missing rows are denied by document(). All three rows
+    /// (shared_documents, action_authorizations, authorized_resources) go in
+    /// this one transaction: an orphaned resource row would PK-conflict the
+    /// next share's plain INSERT. The desktop-side file is untouched. Returns
+    /// the pre-delete snapshot.
+    pub fn delete_document(
+        &self,
+        i: &VerifiedIdentity,
+        id: &str,
+    ) -> Result<DocumentAction, StorageError> {
+        self.access(i, |tx, a, now| {
+            let d = document(tx, &a.account_id, id, i, now)?;
+            if !matches!(
+                d.authorization.state.as_str(),
+                "completed" | "failed" | "cancelled"
+            ) {
+                return Err(Error::Conflict.into());
+            }
+            let p = pair(tx, &a.account_id, &d.authorization.pairing_id, i, now)?;
+            let resource = &d.authorization.binding.resource_id;
+            tx.execute(
+                "DELETE FROM shared_documents WHERE account_id=?1 AND action_id=?2",
+                params![a.account_id, id],
+            )?;
+            tx.execute(
+                "DELETE FROM action_authorizations WHERE account_id=?1 AND action_id=?2",
+                params![a.account_id, id],
+            )?;
+            // Keep the resource row only while another action still uses it.
+            tx.execute(
+                "DELETE FROM authorized_resources WHERE account_id=?1 AND desktop_id=?2 AND resource_id=?3 \
+                 AND NOT EXISTS(SELECT 1 FROM action_authorizations WHERE account_id=?1 AND resource_id=?3)",
+                params![a.account_id, p.desktop_id, resource],
+            )?;
+            Ok(d)
+        })
+    }
 }

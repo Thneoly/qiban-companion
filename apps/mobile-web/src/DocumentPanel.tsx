@@ -3,6 +3,7 @@ import {
   decodeDocuments,
   decodePairings,
   deriveDocumentPhase,
+  isDeletableDocumentState,
   type DocumentAction,
   type Pairing,
 } from "@companion/contracts";
@@ -115,10 +116,7 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
   useEffect(() => {
     if (
       !docs.some(
-        (d) =>
-          !["completed", "failed", "cancelled"].includes(
-            d.authorization.state,
-          ),
+        (d) => !isDeletableDocumentState(d.authorization.state),
       )
     )
       return;
@@ -134,7 +132,10 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       clockNow,
     );
   }
-  async function run(d: DocumentAction, operation: "confirm" | "cancel") {
+  async function run(
+    d: DocumentAction,
+    operation: "confirm" | "cancel" | "delete",
+  ) {
     if (acting.current) return;
     acting.current = true;
     docGeneration.current++;
@@ -148,7 +149,17 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       if (active.current) await refresh();
     } catch (e) {
       if (active.current) {
-        failure(e);
+        // A retried delete after a lost response: the record is already
+        // gone and the server has no 404 semantics for documents.
+        if (
+          operation === "delete" &&
+          e instanceof ApiError &&
+          e.code === "pairing_denied"
+        ) {
+          setNote("该记录已不存在（可能已在其他设备删除），已刷新列表。");
+        } else {
+          failure(e);
+        }
         await refresh();
       }
     } finally {
@@ -156,6 +167,132 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       if (active.current) setBusy(false);
     }
   }
+  // Save a local copy of a completed result — verify the preview against the
+  // reported artifact hash on the phone first, so the copy is phone-verified,
+  // not merely server-verified.
+  async function saveCopy(d: DocumentAction) {
+    if (acting.current) return;
+    acting.current = true;
+    docGeneration.current++;
+    setBusy(true);
+    setNote("");
+    try {
+      const digest = Array.from(
+        new Uint8Array(
+          await crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(d.preview),
+          ),
+        ),
+        (b) => b.toString(16).padStart(2, "0"),
+      ).join("");
+      if (digest !== d.artifactHash) {
+        setNote("副本内容与回报哈希不一致，已取消保存，请刷新后再试。");
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([d.preview], { type: "text/markdown;charset=utf-8" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${d.sourceName.replace(/\.[^.]+$/, "")}-${d.authorization.binding.actionId.slice(0, 8)}.md`;
+      link.click();
+      // Revoking immediately would abort the download before it starts.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setNote("副本已按回报哈希核验一致，保存到本机。");
+    } finally {
+      acting.current = false;
+      if (active.current) setBusy(false);
+    }
+  }
+  function renderDoc(d: DocumentAction) {
+    const p = phase(d);
+    return (
+      <article key={d.authorization.binding.actionId}>
+        <h4>{d.sourceName}</h4>
+        <p data-testid="remote-document-status">{p.label}</p>
+        <p className="hint" data-testid="remote-document-phase-hint">
+          {p.hint}
+        </p>
+        <details>
+          <summary>
+            {d.authorization.state === "completed"
+              ? "核对保存结果"
+              : "查看具体摘录与保存信息"}
+          </summary>
+          <pre>{d.preview}</pre>
+          <p>
+            保存至电脑应用数据的 remote-documents/账号目录/document-drafts/
+            下，文件名 {d.authorization.binding.actionId}.md；不覆盖原文。
+          </p>
+          {d.authorization.state === "completed" && (
+            <p>
+              产物哈希 {d.artifactHash.slice(0, 12)}…。电脑回报完成时，服务端已核对该哈希与这份预览的摘要一致；上方预览即本次保存的内容。
+            </p>
+          )}
+        </details>
+        {d.currentRole === "controller" &&
+          d.authorization.state === "awaiting_confirmation" && (
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `确认让电脑将 ${d.sourceName} 的这份摘录保存为新草稿？`,
+                  )
+                )
+                  void run(d, "confirm");
+              }}
+            >
+              确认电脑保存这份摘录
+            </button>
+          )}
+        {["awaiting_confirmation", "confirmed", "admitted"].includes(
+          d.authorization.state,
+        ) && (
+          <button disabled={busy} onClick={() => void run(d, "cancel")}>
+            取消或请求停止
+          </button>
+        )}
+        {["waiting_desktop", "executing", "cancel_requested", "unknown"]
+          .includes(p.key) && (
+          <button
+            disabled={busy}
+            aria-label={`刷新此任务 ${d.sourceName}`}
+            onClick={() => void refresh()}
+          >
+            刷新此任务
+          </button>
+        )}
+        {d.authorization.state === "completed" && (
+          <button disabled={busy} onClick={() => void saveCopy(d)}>
+            保存副本到手机
+          </button>
+        )}
+        {isDeletableDocumentState(d.authorization.state) && (
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "删除后此记录从手机与服务端消失且无法撤销，电脑不再执行或补报，已保存的草稿文件与已开始的写入不受影响；确认删除？",
+                )
+              )
+                void run(d, "delete");
+            }}
+          >
+            删除记录
+          </button>
+        )}
+      </article>
+    );
+  }
+  const running = docs.filter(
+    (d) => !isDeletableDocumentState(d.authorization.state),
+  );
+  const finished = docs.filter((d) =>
+    isDeletableDocumentState(d.authorization.state),
+  );
   return (
     <section className="card remote-documents">
       <h2>文档确认与结果</h2>
@@ -172,68 +309,21 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       )}
       {note && <p role="status">{note}</p>}
       {!docs.length && <p className="hint">暂时没有分享给此设备的文档。</p>}
-      {docs.map((d) => {
-        const p = phase(d);
-        return (
-          <article key={d.authorization.binding.actionId}>
-            <h3>{d.sourceName}</h3>
-            <p data-testid="remote-document-status">{p.label}</p>
-            <p className="hint" data-testid="remote-document-phase-hint">
-              {p.hint}
-            </p>
-            <details>
-              <summary>
-                {d.authorization.state === "completed"
-                  ? "核对保存结果"
-                  : "查看具体摘录与保存信息"}
-              </summary>
-              <pre>{d.preview}</pre>
-              <p>
-                保存至电脑应用数据的 remote-documents 下，文件名{" "}
-                {d.authorization.binding.actionId}.md；不覆盖原文。
-              </p>
-              {d.authorization.state === "completed" && (
-                <p>
-                  产物哈希 {d.artifactHash.slice(0, 12)}…。电脑回报完成时，服务端已核对该哈希与这份预览的摘要一致；上方预览即本次保存的内容。
-                </p>
-              )}
-            </details>
-            {d.currentRole === "controller" &&
-              d.authorization.state === "awaiting_confirmation" && (
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `确认让电脑将 ${d.sourceName} 的这份摘录保存为新草稿？`,
-                      )
-                    )
-                      void run(d, "confirm");
-                  }}
-                >
-                  确认电脑保存这份摘录
-                </button>
-              )}
-            {["awaiting_confirmation", "confirmed", "admitted"].includes(
-              d.authorization.state,
-            ) && (
-              <button disabled={busy} onClick={() => void run(d, "cancel")}>
-                取消或请求停止
-              </button>
-            )}
-            {["waiting_desktop", "executing", "cancel_requested", "unknown"]
-              .includes(p.key) && (
-              <button
-                disabled={busy}
-                aria-label={`刷新此任务 ${d.sourceName}`}
-                onClick={() => void refresh()}
-              >
-                刷新此任务
-              </button>
-            )}
-          </article>
-        );
-      })}
+      {!!running.length && (
+        <>
+          <h3>进行中的任务</h3>
+          {running.map(renderDoc)}
+        </>
+      )}
+      {!!finished.length && (
+        <>
+          <h3>已结束的任务</h3>
+          <p className="hint">
+            已结束的任务不再变化。可把已保存并核验的结果另存副本到本机：副本内容与电脑文件一致（手机已按回报哈希核验），保存在手机本地，与电脑文件互不影响。删除只清除手机与服务端的任务记录，不删除电脑上的文件，也无法撤销；结果未知的任务需电脑核对结束后才能清理。
+          </p>
+          {finished.map(renderDoc)}
+        </>
+      )}
     </section>
   );
 }

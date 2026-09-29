@@ -1107,6 +1107,107 @@ async fn documents_http_enforce_roles_transitions_cancel_and_unknown() {
         "completed"
     );
 
+    // Deletion: terminal records only, either participant, snapshot return.
+    let (_, inflight) = call(
+        &app,
+        "POST",
+        "/v1/documents",
+        Some(&desktop),
+        share("在途.txt", "尚未确认不可删除的摘录"),
+    )
+    .await;
+    let inflight_id = inflight["authorization"]["binding"]["actionId"]
+        .as_str()
+        .unwrap();
+    for token in [&controller, &desktop] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &format!("/v1/documents/{inflight_id}/delete"),
+                Some(token),
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/delete"),
+            Some(&controller),
+            json!({})
+        )
+        .await
+        .1["authorization"]["state"],
+        "completed"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{path}/delete"),
+            Some(&desktop),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let first_id = {
+        // The originally completed document: deleted by the desktop role.
+        let (status, listed) =
+            call(&app, "GET", "/v1/documents", Some(&desktop), Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["sourceName"] == "转移.txt")
+            .map(|d| {
+                d["authorization"]["binding"]["actionId"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/documents/{first_id}/delete"),
+            Some(&desktop),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/documents/{cancelled_id}/delete"),
+            Some(&controller),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, listed) = call(&app, "GET", "/v1/documents", Some(&controller), Value::Null).await;
+    let remaining: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["sourceName"].as_str().unwrap())
+        .collect();
+    assert_eq!(remaining, ["在途.txt"]);
+
     // Cross-account sessions never see another account's tasks (same-account
     // observer isolation is asserted at the storage layer).
     let bob = login(&f, &app, "bob@example.com").await;
