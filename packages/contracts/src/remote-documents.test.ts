@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   decodeDocument,
   decodeDocuments,
+  deletableDocumentStates,
   deriveDocumentPhase,
+  isDeletableDocumentState,
+  documentStates,
   relativeTime,
   type DocumentAction,
 } from "./remote-documents";
@@ -232,5 +235,36 @@ describe("relativeTime", () => {
     expect(relativeTime(NOW - 60_000, NOW)).toBe("1 分钟前");
     expect(relativeTime(NOW - 119_000, NOW)).toBe("2 分钟前");
     expect(relativeTime(NOW + 30_000, NOW)).toBe("0 秒前");
+  });
+});
+
+describe("deletable document states", () => {
+  it("is exactly the server-terminal set, a subset of documentStates", () => {
+    expect([...deletableDocumentStates]).toEqual([
+      "completed",
+      "failed",
+      "cancelled",
+    ]);
+    for (const state of deletableDocumentStates) {
+      expect(Object.hasOwn(documentStates, state)).toBe(true);
+    }
+    for (const state of Object.keys(documentStates)) {
+      expect(isDeletableDocumentState(state)).toBe(
+        deletableDocumentStates.includes(
+          state as (typeof deletableDocumentStates)[number],
+        ),
+      );
+    }
+  });
+  it("keeps unknown and in-flight records undeletable", () => {
+    for (const state of [
+      "unknown",
+      "awaiting_confirmation",
+      "confirmed",
+      "admitted",
+      "cancel_requested",
+    ]) {
+      expect(isDeletableDocumentState(state)).toBe(false);
+    }
   });
 });

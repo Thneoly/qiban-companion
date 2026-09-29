@@ -252,12 +252,12 @@ test("pairing gateway only permits explicit control routes and never exposes act
   assert.equal(calls.length, 4);
 });
 
-test("document gateway permits confirmation and cancellation but denies submission, admission and receipts", async (t) => {
+test("document gateway permits confirmation, cancellation and deletion but denies submission, admission and receipts", async (t) => {
   const call = await fixture(t, async () => Response.json([]));
   const headers = { Cookie: `__Host-qiban_session=${token}` };
   const id = "00000000-0000-0000-0000-000000000000";
   assert.equal((await call("/api/documents", { headers })).status, 200);
-  for (const op of ["confirm", "cancel"]) {
+  for (const op of ["confirm", "cancel", "delete"]) {
     assert.equal(
       (
         await call(`/api/documents/${id}/${op}`, {

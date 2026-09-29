@@ -103,7 +103,9 @@ export function createWebServer({
           req.method === "POST" &&
           (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/.test(path) ||
             /^\/api\/pairings\/[0-9a-f-]{36}\/revoke$/.test(path) ||
-            /^\/api\/documents\/[0-9a-f-]{36}\/(confirm|cancel)$/.test(path))
+            /^\/api\/documents\/[0-9a-f-]{36}\/(confirm|cancel|delete)$/.test(
+              path,
+            ))
         )
       )
         return fail(404, "not_found");
