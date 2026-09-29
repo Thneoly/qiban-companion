@@ -197,7 +197,8 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       link.href = url;
       link.download = `${d.sourceName.replace(/\.[^.]+$/, "")}-${d.authorization.binding.actionId.slice(0, 8)}.md`;
       link.click();
-      URL.revokeObjectURL(url);
+      // Revoking immediately would abort the download before it starts.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setNote("副本已按回报哈希核验一致，保存到本机。");
     } finally {
       acting.current = false;

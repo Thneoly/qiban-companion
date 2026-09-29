@@ -3,7 +3,7 @@ import { chromium, expect } from "@playwright/test";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createWebServer } from "../../server/server.mjs";
 
@@ -34,6 +34,7 @@ try {
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
+    acceptDownloads: true,
   });
   const other = await browser.newContext();
   const pc = await desktop.newPage();
@@ -324,6 +325,52 @@ try {
   await expect(
     rowC.getByRole("button", { name: "取消或请求停止" }),
   ).toHaveCount(0);
+  // --- Results and cleanup: finished records sit in their own section, a
+  // phone-verified local copy can be saved, and deletion is explicit ---
+  await expect(
+    documents.getByRole("heading", { name: "已结束的任务" }),
+  ).toBeVisible();
+  await expect(documents.locator("article")).toHaveCount(3);
+  const download = phone.waitForEvent("download");
+  await rowA
+    .getByRole("button", { name: "保存副本到手机", exact: true })
+    .click();
+  const saved = await download;
+  assert.match(saved.suggestedFilename(), /^进度-[0-9a-f]{8}\.md$/);
+  assert.equal(
+    await readFile(await saved.path(), "utf8"),
+    docA.preview,
+    "the copy must equal the verified result content",
+  );
+  await expect(documents.getByRole("status")).toContainText("核验一致");
+  // Lost response: the server processed the delete, the phone saw a network
+  // error, and its automatic refresh reveals the record is already gone.
+  await phone.route(
+    "**/api/documents/*/delete",
+    async (route) => {
+      await route.fetch();
+      await route.abort();
+    },
+    { times: 1 },
+  );
+  phone.once("dialog", (dialog) => dialog.accept());
+  await rowB.getByRole("button", { name: "删除记录", exact: true }).click();
+  await expect(documents.getByRole("status")).toContainText("连接中断");
+  await expect(rowB).toHaveCount(0, { timeout: 15000 });
+  // Deleted elsewhere between reads: the phone's delete hits 403 and the
+  // explicit already-gone note appears while the refresh removes the row.
+  await desktopCall(
+    `/v1/documents/${docC.authorization.binding.actionId}/delete`,
+    {},
+  );
+  phone.once("dialog", (dialog) => dialog.accept());
+  await rowC.getByRole("button", { name: "删除记录", exact: true }).click();
+  await expect(documents.getByRole("status")).toContainText("已不存在");
+  await expect(rowC).toHaveCount(0);
+  await refreshDocuments();
+  await expect(rowB).toHaveCount(0);
+  await expect(rowC).toHaveCount(0);
+  await expect(documents.locator("article")).toHaveCount(1);
   // D: admitted while online, then the desktop goes dark for the lease test.
   const docD = await share("离线.txt", "准入后电脑离线的摘录");
   const rowD = row("离线.txt");
@@ -445,7 +492,7 @@ try {
   await bob.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(bob.getByRole("heading", { name: /我们的待办/ })).toBeVisible();
   console.log(
-    "PASS: two device logins share companion and tasks; account isolation, cookie recovery, lost-response dedup, reconnect, cancellation, device presence lease, six-state document progress with recovery, stale response protection and logout verified.",
+    "PASS: two device logins share companion and tasks; account isolation, cookie recovery, lost-response dedup, reconnect, cancellation, device presence lease, six-state document progress with recovery, phone-verified result copies, record deletion across lost responses and elsewhere-deleted races, stale response protection and logout verified.",
   );
 } finally {
   await browser.close();
