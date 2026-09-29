@@ -23,6 +23,15 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
   expired.current = onExpired;
   function failure(e: unknown) {
     if (e instanceof ApiError && e.status === 401) expired.current();
+    // A 409 here means the task moved on (often the window expired between
+    // render and click) — the coordinator reports it as pairing_conflict.
+    if (
+      e instanceof ApiError &&
+      ["conflict", "pairing_conflict"].includes(e.code)
+    ) {
+      setNote("该任务状态已变化（可能已到有效期），已重新获取列表。");
+      return;
+    }
     setNote(message(e));
   }
   // The presence lease decorates labels only while the last pairings read
@@ -75,7 +84,9 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
         void refreshPresence();
     };
     const documentTimer = setInterval(documentsTick, 5000);
-    // 10s matches the documented presence contract (lease 15s + poll 10s).
+    // Presence effectively refreshes with the 5s documents cycle (refresh()
+    // pulls both); this 10s timer is only a floor, still inside the
+    // documented worst case (lease 15s + poll 10s).
     const presenceTimer = setInterval(presenceTick, 10000);
     const resume = () => {
       if (document.visibilityState === "visible") {
@@ -97,11 +108,17 @@ export function DocumentPanel({ onExpired }: { onExpired: () => void }) {
       document.removeEventListener("visibilitychange", resume);
     };
   }, []);
-  // Live countdown only while a document actually waits inside its window.
+  // Live clock while any phase can still move: countdowns for
+  // awaiting/confirmed AND the last-contact stamps on offline hints of
+  // admitted/cancel_requested/unknown (otherwise the stamp freezes while
+  // PairingPanel keeps counting for the same pairing).
   useEffect(() => {
     if (
-      !docs.some((d) =>
-        ["awaiting_confirmation", "confirmed"].includes(d.authorization.state),
+      !docs.some(
+        (d) =>
+          !["completed", "failed", "cancelled"].includes(
+            d.authorization.state,
+          ),
       )
     )
       return;

@@ -4,9 +4,9 @@
 
 ## 实现与归属
 
-- **核心思路**：六态 = 服务端状态（**零改动**）× 配对 presence 租约（PR #31）的**手机端展示层推导**。无 schema 迁移、无协议 bump、无生产 Rust 改动；新增的唯一"状态"是 `confirmed→等待电脑`、`admitted→执行中` 的呈现拆分，"执行中"始终标注"（推断）"。
+- **核心思路**：六态 = 服务端状态（**零改动**）× 配对 presence 租约（PR #31）的**手机端展示层推导**。无 schema 迁移、无协议 bump；唯一的 Rust 侧改动是协调器测试（`#[cfg(test)]`）及其需要的 tokio `time` 特性声明（该特性本就经依赖统一启用，不改变构建产物）。新增的唯一"状态"是 `confirmed→等待电脑`、`admitted→执行中` 的呈现拆分，"执行中"始终标注"（推断）"。
 - **契约（packages/contracts/src/remote-documents.ts）**：纯函数 `deriveDocumentPhase(doc, pairing|null|undefined, now) -> {key,label,hint}` 与 `relativeTime(at, now)`（自 PairingPanel 私有函数上移，输出一致）；`documentStates` 保持不动（仍是 decode 白名单与桌面前端渲染源）。pairingId 不匹配时按无 presence 处理，绝不用错误行装饰。
-- **手机 UI（DocumentPanel）**：文档 5s 轮询不变，新增 pairings 10s 轮询（对齐 PR #31 约定超时契约）+ online/focus/visibilitychange 即时刷新；按 `authorization.pairingId` join。渲染派生标签 + hint 行；awaiting/confirmed 标签带"（剩余 m:ss）"倒计时（1s ticker 仅在这类文档存在时启用），到期显示"（已到有效期）"并声明以服务端刷新为准——**手机永不自行宣布终态**。
+- **手机 UI（DocumentPanel）**：文档 5s 轮询不变，新增 pairings 读取（随文档 5s 周期一并刷新，另有 10s 兜底定时器——仍优于 PR #31 约定超时的最坏情况）+ online/focus/visibilitychange 即时刷新；按 `authorization.pairingId` join。渲染派生标签 + hint 行；awaiting/confirmed 标签带"（剩余 m:ss）"倒计时，非终态文档存在时 1s ticker 持续走秒（倒计时与离线"最后联系"都需要），到期显示"（已到有效期）"并声明以服务端刷新为准——**手机永不自行宣布终态**。
 - **诚实性修正**：取消按钮从 cancel_requested/unknown 移除（服务端 `invalidated_state` 保留这两个状态，按下是空操作）；这两态改为指引 + "刷新此任务"按钮（waiting_desktop/executing 同样提供）。pairings 读取失败 ⇒ 该轮按无 presence 推导（标签退化为"在线状态未知/以回报为准"），**绝不用陈旧 presence 装饰**；0/503 的文档读取显示"无法连接服务，任务状态未知"横幅并保留最后一轮数据（与 PairingPanel 同款模式）。
 - **核对结果入口**：completed 的展开块升级为"核对保存结果"——预览、保存路径、产物哈希与前 12 位、以及"电脑回报完成时，服务端已核对该哈希与这份预览的摘要一致"的声明。依据：`receipt_document` 拒绝 `artifact_hash ≠ digest(preview)` 的回执，completed 只可能在哈希匹配时存在——手机展示的是**服务端已核验的事实**，不声称手机侧核验、不声称可下载（下载/查看是路线第 4 项）。unknown 指引"电脑在线会自动核对/上线后自动核对，无需重新确认"——依据：桌面 sync 循环在 unknown 仍在 pending 集内，每 5s 核对重发回执。
 - **协调器测试**：文档端点此前 HTTP 覆盖为零；新增全链路回归（share→confirm→admit→receipt 的角色/单次准入/哈希校验/幂等/终态冲突 409、准入前取消、cancel_requested→unknown→completed 补齐、跨账号列表为空）。控制器会话需要同邮箱第二次登录，测试内等满真实 60s OTP 冷却一次（与 mobile-peer.mjs 同一理由：尊重真实限流，不加测试缝）；5 分钟过期与同账号观察者隔离仍由存储层测试覆盖（HTTP 层无时钟缝/第三会话缝）。
@@ -35,5 +35,5 @@
 - 执行中是 presence 推断（会话级租约），非任务级真相；桌面本地 `ExecutionStatus::Running` 仍不上报（服务端"执行中"真状态明确不做）。
 - 结果内容下载/查看与记录清理是路线第 4 项；20 条文档/500 动作上限不变。
 - 无新网关路由：单文档 GET、准入、回执仍桌面直连；手机只用列表刷新 + 本地 join。
-- 两个面板各自 10s 拉 pairings（合计约 +6 请求/分钟，对 600/分钟网关聚合上限无碍）；共享 presence hook 记为后续重构。
+- 文档面板的 pairings 读取随 5s 文档周期刷新（+12 请求/分钟；加上配对面板自身的 10s 轮询，两面板合计约 18 请求/分钟，对 600/分钟网关聚合上限无碍）；共享 presence hook 记为后续重构。
 - 旧协调器（desktopOnline=null）无 presence 装饰、不声称执行中——contracts 单测覆盖，真链路不可仿真（与 PR #31 同一限制，如实记录）。真实手机人工验收未执行，待路线第 1 项统一进行。

@@ -75,7 +75,7 @@
 服务端状态机不因展示拆分而改变；手机以 `deriveDocumentPhase`（packages/contracts）在本地把服务端状态与配对 presence 租约 join 成六个任务阶段：`confirmed→等待电脑`、`admitted→执行中`，其余一一对应。规则：
 
 - **推断必须标注**："执行中（推断）"= admitted ∧ 电脑在线（会话级租约），非任务级真相；桌面本地执行状态不上报。admitted ∧ 离线显示"已开始，电脑离线"；presence 为 null（旧协调器或本轮读取失败）不装饰、不声称执行中。
-- **手机永不宣布终态**：awaiting/confirmed 显示"（剩余 m:ss）"倒计时，到期只显示"（已到有效期）"并声明以服务端刷新为准；cancelled/unknown 等终态始终来自服务端读取时推导或回执。
+- **手机永不宣布终态**：awaiting/confirmed 显示"（剩余 m:ss）"倒计时，到期只显示"（已到有效期）"并声明以服务端刷新为准；completed/failed/cancelled 等终态（以及 unknown、cancel_requested 等可继续演变的状态）始终来自服务端读取时推导或回执，手机端不自行改写。
 - **取消可见性真值**：`awaiting_confirmation | confirmed | admitted` 显示取消按钮；`cancel_requested | unknown` 不显示（服务端 `invalidated_state` 保留原状态，按下是空操作），改为指引 + 每任务刷新。
 - **核对结果入口**：completed 展示"回报的产物哈希与预览摘要一致（服务端接收回报时核对）"——这是回执前置校验保证的事实，不是手机侧新核验；内容下载不在当前范围。
 - **unknown 恢复**：桌面同步循环把 unknown 视为待核对，在线时每 5s 自动核对重发回执；手机指引"电脑上线后自动核对，无需重新确认"。

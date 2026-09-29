@@ -204,6 +204,25 @@ describe("document phase derivation", () => {
       "恢复联网后会核对停止结果",
     );
   });
+  it("keeps the awaiting-confirmation hint independent of presence", () => {
+    const online = deriveDocumentPhase(doc("awaiting_confirmation"), pairing(true), NOW);
+    const offline = deriveDocumentPhase(doc("awaiting_confirmation"), pairing(false), NOW);
+    const absent = deriveDocumentPhase(doc("awaiting_confirmation"), null, NOW);
+    expect(online.hint).toBe(offline.hint);
+    expect(online.hint).toBe(absent.hint);
+    expect(online.hint).not.toContain("最后联系");
+    expect(online.hint).not.toContain("在线");
+    expect(online.hint).not.toContain("离线");
+  });
+  it("falls back to 从未 when the desktop never sent a heartbeat", () => {
+    const silent = { ...pairing(false), desktopLastHeartbeatAt: null };
+    expect(deriveDocumentPhase(doc("confirmed"), silent, NOW).hint).toContain(
+      "最后联系 从未）",
+    );
+    expect(deriveDocumentPhase(doc("unknown"), silent, NOW).hint).toContain(
+      "最后联系 从未）",
+    );
+  });
 });
 
 describe("relativeTime", () => {
