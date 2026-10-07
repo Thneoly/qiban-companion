@@ -22,6 +22,8 @@
     "allow-voice-probe",
     "allow-voice-cancel",
     "allow-voice-key-set",
+    "allow-voice-settings-get",
+    "allow-voice-settings-save",
     "allow-get-runtime-info",
     "allow-list-tasks",
     "allow-create-task",

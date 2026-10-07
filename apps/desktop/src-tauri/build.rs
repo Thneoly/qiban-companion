@@ -28,6 +28,8 @@ fn main() {
         "voice_probe",
         "voice_cancel",
         "voice_key_set",
+        "voice_settings_get",
+        "voice_settings_save",
         "model_settings_get",
         "model_settings_save",
         "model_key_set",
