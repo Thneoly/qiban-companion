@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-settings-save"
+description = "Enables the voice_settings_save command without any pre-configured scope."
+commands.allow = ["voice_settings_save"]
+
+[[permission]]
+identifier = "deny-voice-settings-save"
+description = "Denies the voice_settings_save command without any pre-configured scope."
+commands.deny = ["voice_settings_save"]
