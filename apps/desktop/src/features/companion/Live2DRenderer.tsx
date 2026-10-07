@@ -13,11 +13,13 @@ function loadScript(url:string) {
   });
   scripts.set(url,promise);return promise;
 }
-export function Live2DRenderer({ active, state, bundle, onError }: {active:boolean;state:CompanionState;bundle:ModelBundle;onError:()=>void}) {
+export function Live2DRenderer({ active, state, bundle, onError, mouth }: {active:boolean;state:CompanionState;bundle:ModelBundle;onError:()=>void;mouth?:{current:number}}) {
   const canvas=useRef<HTMLCanvasElement>(null);
   const running=useRef(active);
   const presence=useRef(state);
   presence.current=state;
+  const mouthRef=useRef(mouth);
+  mouthRef.current=mouth;
   useEffect(()=>{running.current=active;},[active]);
   useEffect(()=>{
     let disposed=false;
@@ -28,7 +30,7 @@ export function Live2DRenderer({ active, state, bundle, onError }: {active:boole
         const PIXI=await import('pixi.js');
         const {install}=await import('@pixi/unsafe-eval');
         install({ShaderSystem:PIXI.ShaderSystem});
-        type Model=InstanceType<typeof PIXI.Container> & {update(ms:number):void;motion(group:string,index?:number,priority?:number):Promise<boolean>;expression(name:string):Promise<boolean>;anchor:{set(x:number,y:number):void}};
+        type Model=InstanceType<typeof PIXI.Container> & {update(ms:number):void;motion(group:string,index?:number,priority?:number):Promise<boolean>;expression(name:string):Promise<boolean>;anchor:{set(x:number,y:number):void};internalModel?:{coreModel?:{setParameterValueById(id:string,value:number):void}}};
         const host=window as unknown as {PIXI:Record<string,unknown> & {live2d?:{Cubism4ModelSettings:new(source:object)=>{resolveURL:(file:string)=>string};Live2DModel:{from(source:object,options:object):Promise<Model>}}}};
         host.PIXI ??= {...PIXI};
         await loadScript('/live2d-runtime/cubism4.min.js');
@@ -62,7 +64,14 @@ export function Live2DRenderer({ active, state, bundle, onError }: {active:boole
             if(group)void model.motion(group,0,3).catch(()=>{});
             if(expression)void model.expression(expression.Name).catch(()=>{});
           }
-          model.update(app.ticker.deltaMS);app.renderer.render(app.stage);
+          model.update(app.ticker.deltaMS);
+          // Speech amplitude overwrites the mouth every frame while speaking;
+          // at rest nothing is written, so model motions own the parameter
+          // again immediately. Unknown ids are ignored by the core, so models
+          // without this parameter simply stay unchanged.
+          const open=mouthRef.current?.current ?? 0;
+          if(open>0.02)model.internalModel?.coreModel?.setParameterValueById('ParamMouthOpenY',Math.min(1,open));
+          app.renderer.render(app.stage);
         });
         model.update(0);app.renderer.render(app.stage);
         app.ticker.remove(app.render,app);

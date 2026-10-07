@@ -25,6 +25,7 @@ export function Pet() {
   const [avatar, setAvatar] = useState<AvatarRecord>({ appearance: defaultAppearance });
   const [avatarReady, setAvatarReady] = useState(false);
   const [live2dFailed, setLive2dFailed] = useState(false);
+  const mouth = useRef(0);
   const live2dError=useCallback(()=>{setLive2dFailed(true);setError('数字人加载失败，已恢复栖栖。请在角色与场景中检查模型，或重新选择 2D 数字人重试。');},[]);
   const saveAvatar = async (record: AvatarRecord) => {
     await avatarRecord(record); setAvatar(record); setLive2dFailed(false); setError('');
@@ -145,7 +146,7 @@ export function Pet() {
         {error && <p role="alert" className="pet-error">{error}</p>}
         {appearanceOpen ? <AppearancePanel record={avatar} save={saveAvatar} close={() => setAppearanceOpen(false)}/> : guide ? <FirstUseGuide initialError={guideError} onSettings={() => void act('open_settings')} onLater={() => { setNeedsGuide(false); setGuide(false); }} onComplete={async () => { if (nativeDesktop) await invoke('guide_complete'); setGuideError(''); setNeedsGuide(false); setGuide(false); }}/>
         : <><div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button disabled={!avatarReady} onClick={()=>setAppearanceOpen(true)}>角色与场景</button><button onClick={()=>void act('open_settings')}>模型设置</button><button onClick={()=>void act('open_memory')}>我们的记忆</button><button onClick={() => setGuide(true)}>使用指南</button></div>
-        {chat ? <ChatBubble onPhase={setPhase} onReading={setReading}/> : <>
+        {chat ? <ChatBubble onPhase={setPhase} onReading={setReading} mouth={mouth}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
           <label className="sr-only" htmlFor="pet-draft">想记下什么？</label>
@@ -161,7 +162,7 @@ export function Pet() {
         </div></>}
       </section>}
       <button data-pet-hit data-pet-drag className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
-        {avatar.appearance.renderer === 'live2d' && avatar.model && !live2dFailed && !hidden ? <Live2DRenderer active={!quiet} state={presence} bundle={avatar.model} onError={live2dError}/> : <AvatarArtwork state={presence}/>}
+        {avatar.appearance.renderer === 'live2d' && avatar.model && !live2dFailed && !hidden ? <Live2DRenderer active={!quiet} state={presence} bundle={avatar.model} onError={live2dError} mouth={mouth}/> : <AvatarArtwork state={presence} mouth={mouth}/>}
       </button>
       {!open && error && <button data-pet-hit className="pet-error-reopen" onClick={() => setOpen(true)}>操作未完成，点击查看</button>}
     </div>

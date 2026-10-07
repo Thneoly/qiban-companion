@@ -32,6 +32,10 @@ const SINGLE_SHOT_CHARS = 500;
 export function useVoiceTurn(options: {
   onTranscript(text: string, turn: VoiceTurnContext): boolean | Promise<boolean>;
   onStopChat(): void;
+  /** Amplitude (0..1) of the clip currently playing, smoothed and gated. The
+   * renderers read it every frame to drive the mouth; playback itself never
+   * depends on it. Optional so surfaces without a mouth can adopt the turn. */
+  mouth?: { current: number };
 }) {
   const [micState, setMicState] = useState<MicState>('off');
   const [guidance, setGuidance] = useState('正在检查语音配置…');
@@ -40,6 +44,7 @@ export function useVoiceTurn(options: {
   const micRef = useRef(micState); micRef.current = micState;
   const onTranscript = useRef(options.onTranscript); onTranscript.current = options.onTranscript;
   const onStopChat = useRef(options.onStopChat); onStopChat.current = options.onStopChat;
+  const mouthTarget = useRef(options.mouth); mouthTarget.current = options.mouth;
 
   const generation = useRef(0);
   const baseUrl = useRef('');
@@ -61,8 +66,13 @@ export function useVoiceTurn(options: {
   const audio = useRef<HTMLAudioElement | null>(null);
   const url = useRef<string | null>(null);
   const recording = useRef(false);
+  const audioCtx = useRef<AudioContext | null>(null);
+  const analyser = useRef<AnalyserNode | null>(null);
+  const mouthSource = useRef<MediaElementAudioSourceNode | null>(null);
+  const mouthFrame = useRef(0);
 
   function release() {
+    stopMouth();
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     if (recorder.current?.state === 'recording') recorder.current.stop();
     stream.current?.getTracks().forEach(track => track.stop()); stream.current = null;
@@ -125,12 +135,69 @@ export function useVoiceTurn(options: {
     fetches.current.set(clip.seq, promise);
     return promise;
   }
+  /** Route the playing element through an analyser so the mouth follows the
+   * real audio amplitude. Routing happens only while the context actually
+   * runs — a suspended context would swallow the element's sound, which must
+   * never happen; in that case the clip plays normally and the mouth rests. */
+  function startMouth(player: HTMLAudioElement, alive: () => boolean) {
+    const target = mouthTarget.current;
+    if (!target) return;
+    const epoch = generation.current;
+    void (async () => {
+      try {
+        let ctx = audioCtx.current;
+        if (!ctx) ctx = audioCtx.current = new AudioContext();
+        if (ctx.state !== 'running') await ctx.resume();
+        if (ctx.state !== 'running' || generation.current !== epoch || !alive()) return;
+        let node = analyser.current;
+        if (!node) {
+          node = ctx.createAnalyser();
+          node.fftSize = 256;
+          node.connect(ctx.destination);
+          analyser.current = node;
+        }
+        const source = ctx.createMediaElementSource(player);
+        source.connect(node);
+        mouthSource.current?.disconnect();
+        mouthSource.current = source;
+        const samples = new Uint8Array(node.fftSize);
+        let smoothed = 0;
+        let previous = performance.now();
+        const tick = () => {
+          if (!alive() || mouthSource.current !== source) return;
+          node!.getByteTimeDomainData(samples);
+          let sum = 0;
+          for (let index = 0; index < samples.length; index++) {
+            const value = (samples[index]! - 128) / 128;
+            sum += value * value;
+          }
+          const rms = Math.sqrt(sum / samples.length);
+          const level = rms < 0.02 ? 0 : Math.min(1, rms * 4);
+          const now = performance.now();
+          smoothed += (level - smoothed) * (1 - Math.exp(-(now - previous) / 150));
+          previous = now;
+          target.current = smoothed;
+          mouthFrame.current = requestAnimationFrame(tick);
+        };
+        mouthFrame.current = requestAnimationFrame(tick);
+      } catch { /* the mouth is cosmetic; playback itself must not fail */ }
+    })();
+  }
+  function stopMouth() {
+    cancelAnimationFrame(mouthFrame.current);
+    mouthSource.current?.disconnect();
+    mouthSource.current = null;
+    if (mouthTarget.current) mouthTarget.current.current = 0;
+  }
   function playClip(wav: Uint8Array<ArrayBuffer>): Promise<boolean> {
     return new Promise(resolve => {
       const blobUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
       url.current = blobUrl;
       const player = new Audio(blobUrl); audio.current = player;
+      let settled = false;
       const settle = (failed: boolean) => {
+        settled = true;
+        stopMouth();
         player.onended = null; player.onerror = null;
         stopPlayback.current = null;
         if (url.current === blobUrl) { URL.revokeObjectURL(blobUrl); url.current = null; }
@@ -141,6 +208,7 @@ export function useVoiceTurn(options: {
       player.onerror = () => settle(true);
       stopPlayback.current = () => settle(false);
       void player.play().catch(() => settle(true));
+      startMouth(player, () => !settled);
     });
   }
   async function drive(epoch: number, turn: string) {
@@ -311,7 +379,7 @@ export function useVoiceTurn(options: {
       setMicState('idle'); setNotice('窗口失焦，本次录音已取消。');
     };
     window.addEventListener('blur', blur);
-    return () => { disposed = true; window.removeEventListener('blur', blur); interrupt(); };
+    return () => { disposed = true; window.removeEventListener('blur', blur); interrupt(); void audioCtx.current?.close().catch(() => {}); };
   }, []);
 
   return {

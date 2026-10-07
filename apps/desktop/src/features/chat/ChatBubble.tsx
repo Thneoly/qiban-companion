@@ -9,7 +9,7 @@ import type { ConversationPhase as Phase } from '../companion/presentation';
 
 const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等待回复', streaming: '正在回复', complete: '已完成', stopped: '已停止', error: '未完成' };
 const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
-export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void }) {
+export function ChatBubble({ onPhase, onReading, mouth }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; mouth?: { current: number } }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
   const [outputBudget, setOutputBudget] = useState(1024);
@@ -186,6 +186,7 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
   const voice = useVoiceTurn({
     onTranscript: (text, turn) => send(text, turn),
     onStopChat: () => void stop(),
+    mouth,
   });
   async function submit(event: FormEvent) {
     event.preventDefault();
