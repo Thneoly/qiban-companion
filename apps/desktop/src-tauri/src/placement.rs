@@ -21,7 +21,10 @@ pub struct PlacementStore {
 impl PlacementStore {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let mut connection = Connection::open(path)?;
-        connection.busy_timeout(Duration::from_millis(250))?;
+        // Exit of the previous instance (placement flush, journal cleanup) can
+        // still hold the file when the next one starts; 250ms lost that race
+        // (real case 2026-10-07: guide_status read failure on quick restart).
+        connection.busy_timeout(Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version > 2 {
             return Err(rusqlite::Error::InvalidQuery);

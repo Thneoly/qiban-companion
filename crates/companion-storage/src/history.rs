@@ -10,7 +10,9 @@ impl HistoryStore {
         Self::from_connection(Connection::open(path)?)
     }
     fn from_connection(mut connection: Connection) -> Result<Self, StorageError> {
-        connection.busy_timeout(Duration::from_millis(250))?;
+        // Match the 5s wait used by the task/account stores: the previous
+        // instance's exit can overlap the next one's startup on quick restarts.
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;

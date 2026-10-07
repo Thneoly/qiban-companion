@@ -105,7 +105,9 @@ impl VoiceConfig {
 impl ModelStore {
     pub fn open(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut connection = Connection::open(path)?;
-        connection.busy_timeout(std::time::Duration::from_millis(250))?;
+        // Same quick-restart race as placement: a failed open here aborts
+        // startup entirely, so allow the same 5s wait as companion-storage.
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version > 2 {
             return Err("模型设置来自更新版本".into());
