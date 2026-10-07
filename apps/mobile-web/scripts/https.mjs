@@ -89,56 +89,74 @@ try {
   console.log(
     "Starting a temporary HTTPS link. No mail is sent until you request a code in the page.",
   );
-  tunnel = spawn(
-    executable,
-    [
-      "tunnel",
-      "--config",
-      config,
-      "--no-autoupdate",
-      "--protocol",
-      "http2",
-      "--url",
-      `http://127.0.0.1:${port}`,
-    ],
-    { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
-  );
   const logFile = `${cache}tunnel.log`;
   await writeFile(logFile, "");
-  const origin = await new Promise((accept, reject) => {
-    let output = "";
-    let link;
-    const timeout = setTimeout(
-      () =>
-        reject(
-          new Error(
-            output.includes("ip=198.18.") || output.includes("ip=198.19.")
-              ? "Tunnel DNS returned a proxy fake IP (198.18/15). Exclude *.argotunnel.com from fake-IP DNS or disable TUN, allow TCP 7844, then retry. Details: .cache/mobile-web/tunnel.log"
-              : "Tunnel did not connect. Check outbound TCP 7844, DNS and proxy settings. Diagnostics: .cache/mobile-web/tunnel.log",
-          ),
-        ),
-      45000,
-    );
-    const inspect = (chunk) => {
-      void appendFile(logFile, chunk).catch(() => {});
-      output = (output + chunk.toString()).slice(-16000);
-      link ??= output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0];
-      if (link && output.includes("Registered tunnel connection")) {
+  const diagnose = (output) =>
+    output.includes("ip=198.18.") || output.includes("ip=198.19.")
+      ? "Tunnel DNS returned a proxy fake IP (198.18/15). Exclude *.argotunnel.com from fake-IP DNS or disable TUN, allow TCP 7844, then retry. Details: .cache/mobile-web/tunnel.log"
+      : "Tunnel did not connect. Check outbound TCP 7844, DNS and proxy settings. Diagnostics: .cache/mobile-web/tunnel.log";
+  // One attempt = spawn cloudflared and wait for a registered connection. The
+  // child is killed on timeout so a retry never leaves a stray process; the
+  // module-level `tunnel` always points at the newest child for stop().
+  const attempt = (edgeArgs) =>
+    new Promise((accept, reject) => {
+      tunnel = spawn(
+        executable,
+        [
+          "tunnel",
+          "--config",
+          config,
+          "--no-autoupdate",
+          "--protocol",
+          "http2",
+          ...edgeArgs,
+          "--url",
+          `http://127.0.0.1:${port}`,
+        ],
+        { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const child = tunnel;
+      let output = "";
+      let link;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(diagnose(output)));
+      }, 45000);
+      const inspect = (chunk) => {
+        void appendFile(logFile, chunk).catch(() => {});
+        output = (output + chunk.toString()).slice(-16000);
+        link ??= output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0];
+        if (link && output.includes("Registered tunnel connection")) {
+          clearTimeout(timeout);
+          accept(link);
+        }
+      };
+      child.stdout.on("data", inspect);
+      child.stderr.on("data", inspect);
+      child.once("error", () => {
         clearTimeout(timeout);
-        accept(link);
-      }
-    };
-    tunnel.stdout.on("data", inspect);
-    tunnel.stderr.on("data", inspect);
-    tunnel.once("error", () => {
-      clearTimeout(timeout);
-      reject(new Error("Unable to start cloudflared."));
+        reject(new Error("Unable to start cloudflared."));
+      });
+      child.once("exit", () => {
+        clearTimeout(timeout);
+        reject(new Error("Tunnel exited before creating a link."));
+      });
     });
-    tunnel.once("exit", () => {
-      clearTimeout(timeout);
-      reject(new Error("Tunnel exited before creating a link."));
-    });
-  });
+  let origin;
+  try {
+    origin = await attempt([]);
+  } catch (first) {
+    // Proxy fake-IP DNS only poisons IPv4; IPv6 edge addresses sidestep it.
+    console.error(`Tunnel attempt failed: ${first.message}`);
+    console.log(
+      "Retrying once with IPv6 edge addresses (bypasses IPv4 fake-IP DNS)...",
+    );
+    await appendFile(
+      logFile,
+      "\n--- retry with IPv6 edge addresses ---\n",
+    ).catch(() => {});
+    origin = await attempt(["--edge-ip-version", "6"]);
+  }
   if (stopping) throw new Error("Stopped.");
   server = createWebServer({
     origin,

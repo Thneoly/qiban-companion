@@ -24,7 +24,7 @@ npm run mobile:https
 
 控制台出现 `Open on BOTH computer and phone: https://….trycloudflare.com` 后，电脑和手机都打开这条完整链接。最近一次链接也写在被 Git 忽略的 `.cache/mobile-web/last-url.txt`；文件可能保留已经失效的旧链接，以当前控制台为准。关闭隧道终端后链接失效，重启会换链接并要求重新登录，服务端伙伴和待办仍保留。
 
-首次下载需可访问 GitHub；隧道需访问 Cloudflare，包括出站 7844 端口。若日志显示 `198.18.x.x` / `198.19.x.x` 与 TLS EOF，检查代理 fake-IP/TUN：让 `*.argotunnel.com` 使用真实 DNS，或临时关闭 TUN 后重试。诊断日志在 `.cache/mobile-web/tunnel.log`。不要通过关闭证书验证解决网络错误。地址创建成功不保证手机所在网络能访问，需实际打开确认。
+首次下载需可访问 GitHub；隧道需访问 Cloudflare，包括出站 7844 端口。若日志显示 `198.18.x.x` / `198.19.x.x` 与 TLS EOF，检查代理 fake-IP/TUN：让 `*.argotunnel.com` 使用真实 DNS，或临时关闭 TUN 后重试。启动脚本失败时会自动改用 IPv6 边缘地址重试一次，可绕开只劫持 IPv4 的 fake-IP DNS（本机需有 IPv6）；自动重试仍失败再按上述处理。诊断日志在 `.cache/mobile-web/tunnel.log`。不要通过关闭证书验证解决网络错误。地址创建成功不保证手机所在网络能访问，需实际打开确认。
 
 临时链接使用 [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)，定位开发联调，不作为正式上线入口。第三方隧道终止公网 TLS，页面和 API 流量经过该服务。只开放本次网页与账号待办接口；SMTP、数据库文件和电脑文件操作不对外开放。
 
