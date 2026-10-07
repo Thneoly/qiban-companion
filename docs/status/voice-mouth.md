@@ -13,7 +13,7 @@
 
 | 端 | 行为 | 静止时 |
 |---|---|---|
-| Live2D | ticker 在 `model.update` 后、render 前，振幅>0.02 每帧 `setParameterValueById('ParamMouthOpenY', min(1, 振幅))` 压制 motion 回写 | ≤0.02 不写，motion 立即夺回；`prefers-reduced-motion` 分支永不写；无此参数的模型安全无效果 |
+| Live2D | ticker 在 `model.update` 后、render 前，振幅>0.02 每帧 `setParameterValueById('ParamMouthOpenY', min(1, 振幅))` 压制 motion 回写 | 说话→静止的跳变沿写一次 0（无 idle motion 的模型否则会卡在最后开度）；其余静止帧不写、motion 夺回；`prefers-reduced-motion` 分支永不写；无此参数的模型安全无效果 |
 | SVG | 振幅分 4 档开合（ry 1.5/3/4.5/6），椭圆随档显示 | 归零隐藏椭圆、恢复原状态嘴线 |
 
 ## 验证证据

@@ -53,6 +53,7 @@ export function Live2DRenderer({ active, state, bundle, onError, mouth }: {activ
         app.ticker.maxFPS=30;
         const reduced=matchMedia('(prefers-reduced-motion: reduce)');
         let previous:CompanionState|undefined;
+        let mouthWasOpen=false;
         const refs=bundle.settings.FileReferences as {Motions?:Record<string,unknown>;Expressions?:{Name:string}[]};
         app.ticker.add(()=>{
           if(!running.current || document.hidden || reduced.matches)return;
@@ -67,10 +68,14 @@ export function Live2DRenderer({ active, state, bundle, onError, mouth }: {activ
           model.update(app.ticker.deltaMS);
           // Speech amplitude overwrites the mouth every frame while speaking;
           // at rest nothing is written, so model motions own the parameter
-          // again immediately. Unknown ids are ignored by the core, so models
-          // without this parameter simply stay unchanged.
+          // again. The speaking→rest edge writes zero once: a model without
+          // idle motions would otherwise keep the last spoken opening forever.
+          // Unknown ids are ignored by the core, so models without this
+          // parameter simply stay unchanged.
           const open=mouthRef.current?.current ?? 0;
-          if(open>0.02)model.internalModel?.coreModel?.setParameterValueById('ParamMouthOpenY',Math.min(1,open));
+          const core=model.internalModel?.coreModel;
+          if(open>0.02){core?.setParameterValueById('ParamMouthOpenY',Math.min(1,open));mouthWasOpen=true;}
+          else if(mouthWasOpen){core?.setParameterValueById('ParamMouthOpenY',0);mouthWasOpen=false;}
           app.renderer.render(app.stage);
         });
         model.update(0);app.renderer.render(app.stage);
