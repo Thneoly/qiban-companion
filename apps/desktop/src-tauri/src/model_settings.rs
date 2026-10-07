@@ -66,19 +66,62 @@ impl ModelConfig {
 pub struct ModelStore {
     connection: Connection,
     pub config: ModelConfig,
+    voice: VoiceConfig,
 }
 pub type ModelState = Mutex<ModelStore>;
+/// Non-empty model/voice identifier: bounded length, no control characters.
+pub(crate) fn identifier(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 160 && !value.chars().any(char::is_control)
+}
+/// Non-secret voice lab settings. The API key itself stays in the credential
+/// manager scoped to the voice base URL; only `use_voice_key` is remembered.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceConfig {
+    pub voice_base_url: String,
+    pub use_voice_key: bool,
+    pub asr_model: String,
+    pub tts_model: String,
+    pub voice: String,
+}
+impl VoiceConfig {
+    pub(crate) fn validated(mut self) -> Result<Self, String> {
+        let checked = ModelConfig {
+            base_url: self.voice_base_url.trim().trim_end_matches('/').into(),
+            ..Default::default()
+        }
+        .validated()?;
+        self.voice_base_url = checked.base_url;
+        self.asr_model = self.asr_model.trim().into();
+        self.tts_model = self.tts_model.trim().into();
+        self.voice = self.voice.trim().into();
+        if !identifier(&self.asr_model) || !identifier(&self.tts_model) || !identifier(&self.voice)
+        {
+            return Err("请填写有效的语音模型与音色编码".into());
+        }
+        Ok(self)
+    }
+}
 impl ModelStore {
     pub fn open(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_millis(250))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err("模型设置来自更新版本".into());
         }
-        if version == 0 {
+        if version < 2 {
+            // v2 adds voice_config; v0 databases still get both tables in one go.
+            let migration = if version == 0 {
+                "CREATE TABLE model_config(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); \
+                 CREATE TABLE voice_config(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); \
+                 PRAGMA user_version=2;"
+            } else {
+                "CREATE TABLE voice_config(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); \
+                 PRAGMA user_version=2;"
+            };
             let tx = connection.transaction()?;
-            tx.execute_batch("CREATE TABLE model_config(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); PRAGMA user_version=1;")?;
+            tx.execute_batch(migration)?;
             tx.commit()?;
         }
         let body: Option<String> = connection
@@ -89,13 +132,34 @@ impl ModelStore {
             .transpose()?
             .unwrap_or_default()
             .validated()?;
-        Ok(Self { connection, config })
+        let voice_body: Option<String> = connection
+            .query_row("SELECT body FROM voice_config WHERE id=1", [], |r| r.get(0))
+            .optional()?;
+        let voice = voice_body
+            .map(|s| serde_json::from_str::<VoiceConfig>(&s))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            connection,
+            config,
+            voice,
+        })
     }
     fn save(&mut self, config: ModelConfig) -> Result<(), String> {
         let config = config.validated()?;
         let body = serde_json::to_string(&config).map_err(|_| "模型设置编码失败")?;
         self.connection.execute("INSERT INTO model_config(id,body) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET body=excluded.body",[body]).map_err(|_|"保存模型设置失败")?;
         self.config = config;
+        Ok(())
+    }
+    pub fn voice_config(&self) -> VoiceConfig {
+        self.voice.clone()
+    }
+    pub fn save_voice_config(&mut self, config: VoiceConfig) -> Result<(), String> {
+        let config = config.validated()?;
+        let body = serde_json::to_string(&config).map_err(|_| "语音设置编码失败")?;
+        self.connection.execute("INSERT INTO voice_config(id,body) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET body=excluded.body",[body]).map_err(|_|"保存语音设置失败")?;
+        self.voice = config;
         Ok(())
     }
 }
@@ -180,9 +244,118 @@ pub fn model_key_delete(state: State<'_, ModelState>) -> Result<(), String> {
         .clone();
     crate::credentials::delete(&base)
 }
+#[tauri::command]
+pub fn voice_settings_get(state: State<'_, ModelState>) -> Result<VoiceConfig, String> {
+    Ok(state.lock().map_err(|_| "模型设置不可用")?.voice_config())
+}
+#[tauri::command]
+pub fn voice_settings_save(
+    state: State<'_, ModelState>,
+    config: VoiceConfig,
+) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|_| "模型设置不可用")?
+        .save_voice_config(config)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn voice_settings_round_trip_without_ever_storing_a_key() {
+        let path = std::env::temp_dir().join(format!("voice-config-{}.db", uuid::Uuid::new_v4()));
+        {
+            let mut store = super::ModelStore::open(&path).unwrap();
+            assert_eq!(store.voice_config().voice_base_url, "");
+            store
+                .save_voice_config(super::VoiceConfig {
+                    voice_base_url: "https://open.bigmodel.cn/api/paas/v4/".into(),
+                    use_voice_key: true,
+                    asr_model: "glm-asr-2512".into(),
+                    tts_model: "glm-tts".into(),
+                    voice: "tongtong".into(),
+                })
+                .unwrap();
+        }
+        let store = super::ModelStore::open(&path).unwrap();
+        let voice = store.voice_config();
+        assert_eq!(voice.voice_base_url, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(voice.asr_model, "glm-asr-2512");
+        assert_eq!(voice.tts_model, "glm-tts");
+        assert_eq!(voice.voice, "tongtong");
+        assert!(voice.use_voice_key);
+        let body: String = store
+            .connection
+            .query_row("SELECT body FROM voice_config", [], |r| r.get(0))
+            .unwrap();
+        // `useVoiceKey` is a boolean flag, not key material; no api-key-style field exists.
+        assert!(!body.to_lowercase().contains("apikey"));
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn invalid_voice_settings_keep_previous_values() {
+        let path = std::env::temp_dir().join(format!("voice-invalid-{}.db", uuid::Uuid::new_v4()));
+        let mut store = super::ModelStore::open(&path).unwrap();
+        let valid = super::VoiceConfig {
+            voice_base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+            use_voice_key: true,
+            asr_model: "glm-asr-2512".into(),
+            tts_model: "glm-tts".into(),
+            voice: "tongtong".into(),
+        };
+        store.save_voice_config(valid.clone()).unwrap();
+        for bad in [
+            super::VoiceConfig {
+                voice_base_url: "http://example.com/v1".into(),
+                asr_model: " ".into(),
+                ..valid.clone()
+            },
+            super::VoiceConfig {
+                tts_model: "x\ny".into(),
+                ..valid.clone()
+            },
+            super::VoiceConfig {
+                voice: String::new(),
+                ..valid.clone()
+            },
+            super::VoiceConfig {
+                voice_base_url: "https://example.com/v1?key=x".into(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(store.save_voice_config(bad).is_err());
+            assert_eq!(store.voice_config().voice, valid.voice);
+            assert_eq!(store.voice_config().voice_base_url, valid.voice_base_url);
+        }
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn version_one_database_migrates_to_voice_table_without_touching_model_config() {
+        let path = std::env::temp_dir().join(format!("voice-migrate-{}.db", uuid::Uuid::new_v4()));
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE model_config(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); \
+                     INSERT INTO model_config VALUES(1,'{\"baseUrl\":\"https://example.com/v1\",\"model\":\"custom\",\"useApiKey\":false}'); \
+                     PRAGMA user_version=1;",
+                )
+                .unwrap();
+        }
+        let store = super::ModelStore::open(&path).unwrap();
+        assert_eq!(store.config.model, "custom");
+        assert_eq!(store.voice_config().voice_base_url, "");
+        let version: u32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn validates_https_and_loopback_without_embedded_credentials() {
         for url in [

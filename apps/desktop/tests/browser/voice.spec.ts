@@ -16,6 +16,8 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'model_settings_get') return { baseUrl: 'https://example.com/v1', model: 'custom-chat', useApiKey: false, hasApiKey: false, maxOutputTokens: 1024 };
+        if (cmd === 'voice_settings_get') return w.savedVoice || { voiceBaseUrl: '', useVoiceKey: true, asrModel: '', ttsModel: '', voice: '' };
+        if (cmd === 'voice_settings_save') { w.savedVoice = args.config; return; }
         if (cmd === 'voice_cancel') { w.cancelled++; return; }
         if (cmd === 'voice_probe') {
           w.calls++;
@@ -79,6 +81,27 @@ test('completed synthesis replays locally without a second request, and prepared
   expect(await page.evaluate(() => (window as any).calls)).toBe(1);
   await expect(page.locator('tr', { hasText: '提交至播放开始' }).locator('td')).toHaveText(firstLatency!);
   expect(await page.evaluate(() => (window as any).cancelled)).toBe(0);
+});
+
+test('saved voice settings pre-fill the form and save edits for next open', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as any).savedVoice = { voiceBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', useVoiceKey: true, asrModel: 'glm-asr-2512', ttsModel: 'glm-tts', voice: 'tongtong' };
+  });
+  await page.getByRole('button', { name: '关闭语音实验' }).click();
+  await page.getByRole('button', { name: '打开语音实验' }).click();
+  await expect(page.getByLabel('语音 API 基地址', { exact: true })).toHaveValue('https://open.bigmodel.cn/api/paas/v4');
+  await expect(page.getByLabel('识别模型', { exact: true })).toHaveValue('glm-asr-2512');
+  await expect(page.getByLabel('合成模型', { exact: true })).toHaveValue('glm-tts');
+  await expect(page.getByLabel('音色编码', { exact: true })).toHaveValue('tongtong');
+  await expect(page.getByRole('button', { name: '保存语音配置' })).toBeEnabled();
+  await page.getByLabel('识别模型', { exact: true }).fill('edited-asr');
+  await page.getByRole('button', { name: '保存语音配置' }).click();
+  await expect(page.locator('.voice-note')).toContainText('语音配置已保存');
+  expect(await page.evaluate(() => (window as any).savedVoice.asrModel)).toBe('edited-asr');
+  expect(await page.evaluate(() => (window as any).savedVoice.useVoiceKey)).toBe(true);
+  await page.getByRole('button', { name: '关闭语音实验' }).click();
+  await page.getByRole('button', { name: '打开语音实验' }).click();
+  await expect(page.getByLabel('识别模型', { exact: true })).toHaveValue('edited-asr');
 });
 
 test('late microphone permission after cancellation releases tracks without recording or uploading', async ({ page }) => {

@@ -106,6 +106,13 @@ export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens};
 }
 
+export interface VoiceSettings {voiceBaseUrl:string;useVoiceKey:boolean;asrModel:string;ttsModel:string;voice:string}
+export function decodeVoiceSettings(value:unknown):VoiceSettings {
+  const v=record(value);
+  if(typeof v.voiceBaseUrl!=='string'||typeof v.useVoiceKey!=='boolean'||typeof v.asrModel!=='string'||typeof v.ttsModel!=='string'||typeof v.voice!=='string')throw Error('语音设置协议不兼容');
+  if(v.voiceBaseUrl.length>512||[v.asrModel,v.ttsModel,v.voice].some(s=>s.length>160))throw Error('语音设置协议不兼容');
+  return {voiceBaseUrl:v.voiceBaseUrl,useVoiceKey:v.useVoiceKey,asrModel:v.asrModel,ttsModel:v.ttsModel,voice:v.voice};
+}
 export interface ChatTurn {user:string;assistant:string}
 export function decodeChatHistory(value:unknown):ChatTurn[] {
   if(!Array.isArray(value)||value.length>6)throw Error('会话记录协议不兼容');

@@ -127,6 +127,8 @@ pub fn run() {
             voice::voice_probe,
             voice::voice_cancel,
             voice::voice_key_set,
+            model_settings::voice_settings_get,
+            model_settings::voice_settings_save,
             model_settings::model_settings_get,
             model_settings::model_settings_save,
             model_settings::model_key_set,
