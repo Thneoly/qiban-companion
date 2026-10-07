@@ -183,23 +183,23 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
         </div>
       )}
       <ul className="task-list">
-        {pairs.map((p) => (
-          <li key={p.id}>
-            <div>
-              <p>
-                {p.desktopName} → {p.controllerName || "等待手机"}
-              </p>
-              <small>{pairingStatus[p.status]}</small>
-              {p.desktopOnline !== null &&
-                ["pending", "active"].includes(p.status) && (
+        {pairs
+          .filter((p) => ["pending", "active"].includes(p.status))
+          .map((p) => (
+            <li key={p.id}>
+              <div>
+                <p>
+                  {p.desktopName} → {p.controllerName || "等待手机"}
+                </p>
+                <small>{pairingStatus[p.status]}</small>
+                {p.desktopOnline !== null && (
                   <small className="presence">
                     {p.desktopOnline
                       ? `电脑在线 · 最后联系 ${relativeTime(p.desktopLastHeartbeatAt, Date.now())} · 可执行：${capabilities(p)}（每次动作仍需确认）`
                       : `电脑离线 · 最后联系 ${relativeTime(p.desktopLastHeartbeatAt, Date.now()) || "从未"}`}
                   </small>
                 )}
-            </div>
-            {["pending", "active"].includes(p.status) && (
+              </div>
               <button
                 disabled={busy}
                 aria-label={`撤销配对 ${p.desktopName}`}
@@ -224,11 +224,39 @@ export function PairingPanel({ onExpired }: { onExpired: () => void }) {
               >
                 撤销
               </button>
-            )}
+            </li>
+          ))}
+      </ul>
+      <PairingHistory pairs={pairs} />
+    </section>
+  );
+}
+
+/** 撤销/失效关系默认折叠：留痕可查（何时撤销过什么），不占当前关系的位置。 */
+function PairingHistory({ pairs }: { pairs: Pairing[] }) {
+  const finished = pairs.filter(
+    (p) => !["pending", "active"].includes(p.status),
+  );
+  if (!finished.length) return null;
+  return (
+    <details className="finished-pairings">
+      <summary>已结束的配对（{finished.length}）</summary>
+      <p className="hint">
+        撤销或失效的关系不再可用，仅作留痕；重新配对会新增记录，不会恢复旧关系。
+      </p>
+      <ul className="task-list">
+        {finished.map((p) => (
+          <li key={p.id}>
+            <div>
+              <p>
+                {p.desktopName} → {p.controllerName || "等待手机"}
+              </p>
+              <small>{pairingStatus[p.status]}</small>
+            </div>
           </li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }
 
