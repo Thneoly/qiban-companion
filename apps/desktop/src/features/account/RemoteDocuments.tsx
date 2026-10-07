@@ -22,7 +22,10 @@ export function RemoteDocuments({
     [prepared, setPrepared] = useState<ExecutionTask | null>(null);
   const [file, setFile] = useState<File | null>(null),
     [note, setNote] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    // actionId of the task this panel just shared; its hint is true only
+    // while that task is still awaiting the phone's confirmation.
+    [shared, setShared] = useState<string | null>(null);
   const request = useRef(crypto.randomUUID()),
     alive = useRef(false),
     acting = useRef(false),
@@ -53,6 +56,16 @@ export function RemoteDocuments({
             (p) => p.status === "active" && p.currentRole === "desktop",
           ),
         );
+        // The "awaiting phone" hint retires with the fact it describes: once
+        // a fresh list shows the task advanced (or gone), the hint is stale.
+        setShared((current) => {
+          const row = rows.find(
+            (d) => d.authorization.binding.actionId === current,
+          );
+          return row?.authorization.state === "awaiting_confirmation"
+            ? current
+            : null;
+        });
       }
     } catch (e) {
       if (alive.current && id === seq.current) fail(e);
@@ -124,6 +137,7 @@ export function RemoteDocuments({
           onChange={(e) => {
             setPair(e.target.value);
             setPrepared(null);
+            setShared(null);
             request.current = crypto.randomUUID();
           }}
         >
@@ -143,6 +157,7 @@ export function RemoteDocuments({
           onChange={(e) => {
             setFile(e.target.files?.[0] || null);
             setPrepared(null);
+            setShared(null);
             request.current = crypto.randomUUID();
           }}
         />
@@ -159,15 +174,13 @@ export function RemoteDocuments({
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                decodeDocument(
+                const doc = decodeDocument(
                   await invoke("remote_document_share", { id: prepared.id }),
                 );
                 if (alive.current) {
                   setPrepared(null);
+                  setShared(doc.authorization.binding.actionId);
                   await refresh();
-                  setNote(
-                    "预览已分享，等待手机确认。关闭面板不停止已经授权的保存。",
-                  );
                 }
               })
             }
@@ -180,6 +193,11 @@ export function RemoteDocuments({
         刷新文档协作
       </button>
       {note && <p role="status">{note}</p>}
+      {shared && (
+        <p role="status">
+          预览已分享，等待手机确认。关闭面板不停止已经授权的保存。
+        </p>
+      )}
       {docs.map((d) => (
         <article key={d.authorization.binding.actionId}>
           <strong>{d.sourceName}</strong>
