@@ -9,7 +9,10 @@ assert(exe&&fs.existsSync(exe));assert(/^dev\.qiban\.companion\.acceptance\.m2-[
 const directory=path.join(process.env.LOCALAPPDATA,id); assert(!fs.existsSync(directory),'Refusing an existing profile');
 const evidence=path.resolve('.cache',id+'-'+require('node:crypto').randomUUID());fs.mkdirSync(evidence,{recursive:true});
 const port=Number(process.env.QIBAN_CDP_PORT||9442),delay=ms=>new Promise(r=>setTimeout(r,ms));
-let child,browser,pet,panel;const requests=[];let heldChat,heldSpeech,chatRequests=0;
+let child,browser,pet,panel;const requests=[];let heldChat,heldSpeech,chatRequests=0,fixtureFailure=null;
+/** Rethrows the first fixture-side protocol violation at the next main-flow
+ * checkpoint; asserts inside the http handler must not crash the harness. */
+const fixtures=()=>{if(fixtureFailure)throw fixtureFailure;};
 const wave=()=>{ // PCM16 mono 16kHz silence: passes wav_seconds, never matches the tone layout.
   const data=Buffer.alloc(1600*2);const out=Buffer.alloc(44+data.length);
   out.write('RIFF',0);out.writeUInt32LE(out.length-8,4);out.write('WAVE',8);out.write('fmt ',12);out.writeUInt32LE(16,16);
@@ -17,6 +20,7 @@ const wave=()=>{ // PCM16 mono 16kHz silence: passes wav_seconds, never matches 
   out.write('data',36);out.writeUInt32LE(data.length,40);data.copy(out,44);return out;};
 const fixtureWav=wave();
 const server=http.createServer((req,res)=>{const chunks=[];req.on('data',c=>chunks.push(c));req.on('end',()=>{const body=Buffer.concat(chunks);
+  try{
   assert(!req.headers.authorization,'fixtures must run without credentials');
   requests.push({path:req.url,bytes:body.length});
   if(req.url.endsWith('/audio/transcriptions')){
@@ -34,7 +38,8 @@ const server=http.createServer((req,res)=>{const chunks=[];req.on('data',c=>chun
     res.write('data: '+JSON.stringify({choices:[{delta:{content:'结束了。'}}]})+'\n\n');
     res.write('data: '+JSON.stringify({choices:[{finish_reason:'stop'}],usage:{total_tokens:7}})+'\n\n');
     res.end('data: [DONE]\n\n');return;}
-  assert.fail('unexpected fixture request '+req.url);});});
+  assert.fail('unexpected fixture request '+req.url);
+  }catch(error){fixtureFailure ??= error;res.destroy();}});});
 server.on('clientError',(_error,socket)=>socket.end());
 async function start(){
   browser=undefined;
@@ -63,13 +68,21 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   // play() wrapper that cannot wedge on autoplay, blob accounting, and an
   // invoke tap recording every voice_speak outcome and turn cancellation.
   await pet.evaluate(()=>{
-    const w=window;w.testPlays=[];w.testBlob={created:0,revoked:0};w.testMic={tracks:[]};w.testVoice={speaks:[],cancels:[]};
+    const w=window;w.testPlays=[];w.testBlob={created:0,revoked:0};w.testMic={tracks:[]};w.testVoice={speaks:[],cancels:[],chatCancels:[]};
     const realCreate=URL.createObjectURL,realRevoke=URL.revokeObjectURL;
     URL.createObjectURL=value=>{w.testBlob.created++;return realCreate.call(URL,value);};
     URL.revokeObjectURL=value=>{w.testBlob.revoked++;return realRevoke.call(URL,value);};
-    const audio=new AudioContext();w.testAudio=audio;void audio.resume().catch(()=>{});
-    const oscillator=audio.createOscillator();oscillator.frequency.value=220;const gain=audio.createGain();gain.gain.value=0.1;oscillator.connect(gain);oscillator.start();
+    // The capture graph is built lazily inside getUserMedia, i.e. behind the
+    // user gesture that clicked the mic, so autoplay policy cannot leave a
+    // suspended context producing unplayable frames.
+    let audio=null,gain=null;
+    const ensureGraph=()=>{
+      if(audio)return;
+      audio=new AudioContext();w.testAudio=audio;void audio.resume().catch(()=>{});
+      const oscillator=audio.createOscillator();oscillator.frequency.value=220;
+      gain=audio.createGain();gain.gain.value=0.1;oscillator.connect(gain);oscillator.start();};
     Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:async()=>{
+      ensureGraph();
       const destination=audio.createMediaStreamDestination();gain.connect(destination);
       w.testMic.tracks.push(...destination.stream.getTracks());return destination.stream;}});
     const realPlay=HTMLMediaElement.prototype.play;
@@ -85,6 +98,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
         pending.then(value=>{entry.settled={ok:true,rawType:value?.constructor?.name,bytes:value instanceof ArrayBuffer?value.byteLength:Array.isArray(value)?value.length:null};},
           error=>{entry.settled={ok:false,error:String(error)};});}
       if(command==='voice_turn_cancel')w.testVoice.cancels.push(args.turnId);
+      if(command==='chat_cancel')w.testVoice.chatCancels.push(args.requestId);
       return pending;};});
   await invoke(panel,'model_settings_save',{config:{baseUrl:chatBase,model:'native-chat',useApiKey:false,maxOutputTokens:1024}});
   await invoke(panel,'voice_settings_save',{config:{voiceBaseUrl:voiceBase,useVoiceKey:false,asrModel:'native-asr',ttsModel:'native-tts',voice:'native-voice'}});
@@ -99,6 +113,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   assert(probe.ok,`raw probe failed: ${probe.error}`);
   assert(probe.rawType==='ArrayBuffer',`raw ipc type was ${probe.rawType}`);
   assert(probe.byteLength===fixtureWav.length&&JSON.stringify(probe.head)===JSON.stringify([...fixtureWav.slice(0,8)]),'raw wav bytes altered');
+  assert.deepStrictEqual(probe.progress,[{requestId:'native-raw-probe',trimmed:null}],'progress channel payload shape');
   await invoke(pet,'voice_turn_cancel',{turnId:'native-raw-turn'});
   // Turn A: record, auto-send, then interrupt while chat and tts are in flight.
   await pet.getByRole('button',{name:'和栖栖互动'}).click();
@@ -112,11 +127,14 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await expect(pet.getByText('我听到：本机语音测试')).toBeVisible({timeout:15000});
   await expect(mic).toHaveText('停止朗读',{timeout:15000});
   for(let n=0;n<100&&requests.filter(r=>r.path.endsWith('/audio/speech')).length<1;n++)await delay(100);
+  fixtures();
+  assert(requests.some(r=>r.path.endsWith('/audio/speech')),'no /audio/speech request reached the fixture');
   await pet.screenshot({path:path.join(evidence,'voice-turn-speaking.png')});
   await mic.click(); // 停止朗读
   await expect(mic).toHaveText('语音说话');
   const interrupted=await pet.evaluate(()=>({voice:window.testVoice,plays:window.testPlays.length}));
   assert(interrupted.plays===0,'interrupted turn must not have played');
+  assert(interrupted.voice.chatCancels.length===1,'chat_cancel not issued with the interrupt');
   const turnSpeak=interrupted.voice.speaks.find(s=>s.requestId!=='native-raw-probe');
   const turn=turnSpeak?.requestId.replace(/-s\d+$/,'');
   // The probe cleanup cancelled 'native-raw-turn' first; the interrupt must
@@ -137,6 +155,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await delay(700);
   await mic.click();
   for(let n=0;n<150&&await pet.evaluate(()=>window.testPlays.length)<2;n++)await delay(100);
+  fixtures();
   await expect(mic).toHaveText('语音说话',{timeout:15000});
   assert(await pet.evaluate(()=>window.testPlays.length)===2,'second turn should play two clips');
   assert.deepEqual(await invoke(pet,'chat_history'),[{user:'本机语音测试',assistant:'第二句。结束了。'}]);
@@ -147,6 +166,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await pet.evaluate(()=>{try{void window.testAudio.close();}catch{}});
   await pet.screenshot({path:path.join(evidence,'voice-turn-complete.png')});
   await stop();
+  fixtures();
   fs.writeFileSync(path.join(evidence,'requests.json'),JSON.stringify(requests,null,2));
   const result={passed:true,identifier:id,micPermission:surface.permission,rawIpc:probe.rawType,requests:requests.length,
     cases:['pet mic surface available','raw wav ipc ArrayBuffer byte-exact','voice turn auto-send over the chat chain',

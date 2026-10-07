@@ -408,6 +408,9 @@ fn cancel_all(state: &VoiceTurnState, turn_id: &str) -> Result<(), String> {
 }
 #[tauri::command]
 pub fn voice_turn_cancel(state: State<'_, VoiceTurnState>, turn_id: String) -> Result<(), String> {
+    if !valid_id(&turn_id) {
+        return Err("语音轮次标识无效".into());
+    }
     cancel_all(state.inner(), &turn_id)
 }
 
@@ -841,13 +844,18 @@ mod tests {
 
     #[tokio::test]
     async fn speak_rejects_invalid_payloads_without_any_request() {
-        let (path, settings) = store_with_voice("https://voice.example.invalid");
+        // A local listener proves the "without any request" claim: any stray
+        // network attempt would surface as an accepted connection.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (path, settings) = store_with_voice(&base);
         let state = VoiceTurnState::default();
         let cases = [
             SpeakRequest {
                 request_id: "t-0".into(),
                 turn_id: "t".into(),
-                expected_base_url: "https://voice.example.invalid".into(),
+                expected_base_url: base.clone(),
                 seq: 0,
                 text: "x".repeat(501),
                 first: true,
@@ -855,7 +863,7 @@ mod tests {
             SpeakRequest {
                 request_id: "t-1".into(),
                 turn_id: "t".into(),
-                expected_base_url: "https://voice.example.invalid".into(),
+                expected_base_url: base.clone(),
                 seq: 0,
                 text: "   ".into(),
                 first: true,
@@ -863,7 +871,7 @@ mod tests {
             SpeakRequest {
                 request_id: "t-2".into(),
                 turn_id: "t".into(),
-                expected_base_url: "https://voice.example.invalid".into(),
+                expected_base_url: base.clone(),
                 seq: 65,
                 text: "句子".into(),
                 first: false,
@@ -883,6 +891,11 @@ mod tests {
                 .is_err());
         }
         assert!(state.0.lock().unwrap().is_empty());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "validation failures must never reach the network"
+        );
         drop(settings); // close SQLite before the Windows file delete
         std::fs::remove_file(path).unwrap();
     }

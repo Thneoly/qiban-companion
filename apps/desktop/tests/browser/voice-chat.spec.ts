@@ -39,7 +39,10 @@ async function mockVoiceChat(page: Page) {
           const id = args.request.requestId;
           const deltas = w.replyDeltas ?? [];
           if (w.hangSilent) return new Promise((_, reject) => { w.onChatCancel = () => reject('fixture cancelled'); });
-          for (const text of deltas) args.onDelta.onmessage({ requestId: id, text, memoryUsage: null });
+          for (const text of deltas) {
+            args.onDelta.onmessage({ requestId: id, text, memoryUsage: null });
+            if (w.deltaGap) await new Promise(resolve => setTimeout(resolve, w.deltaGap));
+          }
           if (w.hangGenerate) return new Promise((_, reject) => { w.onChatCancel = () => reject('fixture cancelled'); });
           w.chatHistory.push({ user: args.request.prompt, assistant: deltas.join('') });
           return { requestId: id, elapsedMs: 3, historySaved: true, usage: { total_tokens: 2 },
@@ -61,7 +64,13 @@ async function mockVoiceChat(page: Page) {
           args.onProgress?.onmessage({ requestId: request.requestId, trimmed: request.first ? null : (w.trimFlag ?? true) });
           if ((w.speakFailSeqs ?? []).includes(request.seq)) return Promise.reject('fixture synthesis failed');
           if (w.speakDelays?.[request.seq] === 'hang') return new Promise(resolve => { (w.hangSpeakResolvers ??= []).push(resolve); });
-          return Promise.resolve(new Uint8Array(w.wavBytes));
+          // The wav's first data byte (index 44) carries the seq so tests can
+          // map a played blob URL back to its sentence; speakRaw toggles the
+          // real-machine return shape (ArrayBuffer) vs the JSON fallback.
+          const bytes = new Uint8Array(w.wavBytes.length);
+          bytes.set(w.wavBytes);
+          bytes[44] = request.seq % 256;
+          return Promise.resolve(w.speakRaw === 'arraybuffer' ? bytes.buffer : bytes);
         }
         if (cmd === 'voice_turn_cancel') { w.turnCancels.push(args.turnId); return; }
         return 1;
@@ -89,6 +98,15 @@ async function mockVoiceChat(page: Page) {
     } as unknown as typeof MediaRecorder;
     w.releaseSpeak = () => { const list = w.hangSpeakResolvers ?? []; w.hangSpeakResolvers = []; for (const resolve of list) resolve(new Uint8Array(w.wavBytes)); };
     w.releasePlays = () => { const list = w.hangPlayResolvers ?? []; w.hangPlayResolvers = []; for (const release of list) release(); };
+    // Map every created blob URL to its bytes so play order can be tied to
+    // sentence seqs instead of opaque URLs.
+    w.urlBytes = new Map();
+    const realCreateObjectURL = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob: Blob) => {
+      const url = realCreateObjectURL(blob);
+      void blob.arrayBuffer().then(value => { w.urlBytes.set(url, new Uint8Array(value)); });
+      return url;
+    };
     HTMLMediaElement.prototype.play = function () {
       const el = this;
       w.playLog.push(el.src);
@@ -193,6 +211,7 @@ test('clips play in sentence order with one-ahead prefetch', async ({ page }) =>
     const w = window as any;
     w.replyDeltas = ['第一句。', '第二句。', '第三句。'];
     w.hangPlayCount = 1;
+    w.speakRaw = 'arraybuffer'; // exercise the real-machine return branch
   });
   await openChat(page);
   await mic(page).click();
@@ -204,6 +223,54 @@ test('clips play in sentence order with one-ahead prefetch', async ({ page }) =>
   await expect.poll(() => page.evaluate(() => (window as any).playLog.length)).toBe(3);
   const calls = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq, first: c.first })));
   expect(calls).toEqual([{ seq: 0, first: true }, { seq: 1, first: false }, { seq: 2, first: false }]);
+  // The played blob URLs map back to sentence order, not just count.
+  const played = await page.evaluate(() => (window as any).playLog.map((src: string) => (window as any).urlBytes.get(src)?.[44]));
+  expect(played).toEqual([0, 1, 2]);
+  await expect(mic(page)).toHaveText('语音说话');
+});
+
+test('interrupting between sentences leaves no second drive loop behind', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Turn A: one clip plays fast, then the stream hangs with the queue empty -
+  // the drive loop parks waiting for a next sentence that never comes.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。'];
+    w.hangGenerate = true;
+  });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('停止朗读');
+  await page.waitForTimeout(120); // let the clip settle so the loop parks
+  await mic(page).click(); // 停止朗读 while parked, not mid-fetch
+  await expect(mic(page)).toHaveText('语音说话');
+  // Turn C: two sentences drip in while the first play hangs. A stale loop
+  // from turn A would clobber the driving flag and start a second concurrent
+  // play; only one clip may ever sound at a time. Turn A's own play is the
+  // baseline, so every count below is plays of turn C only.
+  const baseline = await page.evaluate(() => (window as any).playLog.length);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['C一句。', 'C二句。'];
+    w.hangGenerate = false;
+    w.hangPlayCount = 1;
+    w.deltaGap = 60;
+  });
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect.poll(() => page.evaluate((from: number) => (window as any).playLog.length - from, baseline)).toBe(1);
+  await page.waitForTimeout(250);
+  expect(await page.evaluate((from: number) => (window as any).playLog.length - from, baseline)).toBe(1);
+  const order = await page.evaluate((from: number) => (window as any).playLog.slice(from).map((src: string) => (window as any).urlBytes.get(src)?.[44]), baseline);
+  expect(order).toEqual([0]);
+  await page.evaluate(() => (window as any).releasePlays());
+  await expect.poll(() => page.evaluate((from: number) => (window as any).playLog.length - from, baseline)).toBe(2);
+  const settled = await page.evaluate((from: number) => (window as any).playLog.slice(from).map((src: string) => (window as any).urlBytes.get(src)?.[44]), baseline);
+  expect(settled).toEqual([0, 1]);
   await expect(mic(page)).toHaveText('语音说话');
 });
 

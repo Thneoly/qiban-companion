@@ -74,13 +74,17 @@ export function useVoiceTurn(options: {
     if (url.current) { URL.revokeObjectURL(url.current); url.current = null; }
   }
   /** Stop everything of the current turn: epoch bump drops late clips, the
-   * audio element settles, and the backend cancels in-flight requests. */
+   * audio element settles, and the backend cancels in-flight requests. The
+   * drive loop is also woken: a loop parked waiting for the next sentence
+   * would otherwise survive into a later turn and clobber the new loop's
+   * driving flag when it finally exits. */
   function interrupt() {
     generation.current++;
     const turn = turnId.current; turnId.current = null;
     buffer.current = ''; fullText.current = '';
     queue.current = []; cursor.current = 0; done.current = false;
     fetches.current.clear(); driving.current = false;
+    wake.current?.(); wake.current = null;
     release();
     recording.current = false;
     if (turn) void invoke('voice_turn_cancel', { turnId: turn }).catch(() => {});
@@ -162,8 +166,11 @@ export function useVoiceTurn(options: {
     if (generation.current !== epoch) { driving.current = false; return; }
     // Natural end of the turn: decide whether the next turn needs the
     // single-shot fallback (trim missed on at least half of the later clips).
+    // Only evidence moves the flag — later===0 (one-sentence turns, trim never
+    // attempted) keeps the previous decision, and a clean later clip proves
+    // the provider layout is trimmable again.
     if (stats.current.later >= 2 && stats.current.untrimmed * 2 >= stats.current.later) singleShot.current = true;
-    else if (stats.current.later === 0) singleShot.current = false;
+    else if (stats.current.later >= 1 && stats.current.untrimmed === 0) singleShot.current = false;
     driving.current = false;
     turnId.current = null;
     if (micRef.current === 'speaking') setMicState('idle');
@@ -217,7 +224,12 @@ export function useVoiceTurn(options: {
       if (generation.current !== id || turnId.current !== turn) return;
       setTranscript(data.transcript); setNotice(null);
       setMicState('speaking');
-      const accepted = await onTranscript.current(data.transcript, { onDelta: feed, onDone: finish });
+      // The chat leg's callbacks are bound to this turn: a late settle of a
+      // previous turn's chat request must not mark this turn done.
+      const accepted = await onTranscript.current(data.transcript, {
+        onDelta: text => { if (turnId.current === turn) feed(text); },
+        onDone: () => { if (turnId.current === turn) finish(); },
+      });
       if (!accepted && generation.current === id && turnId.current === turn) {
         turnId.current = null;
         setMicState('idle');
@@ -267,7 +279,7 @@ export function useVoiceTurn(options: {
       }
     }
   }
-  function finishRecording() { recorder.current?.stop(); }
+  function finishRecording() { if (recorder.current?.state === 'recording') recorder.current.stop(); }
   function stopSpeaking() {
     onStopChat.current();
     interrupt();
@@ -289,8 +301,10 @@ export function useVoiceTurn(options: {
     }).catch(() => {
       if (!disposed) { setMicState('off'); setGuidance('语音配置读取失败，已停用麦克风；请收起后重开气泡重试。'); }
     });
-    // Blur only cancels an open recording; speaking must survive the pet
-    // window losing focus, which is normal desktop behaviour.
+    // Blur cancels an open recording (a half-finished take is useless). Live
+    // speech itself is only interrupted here if the bubble unmounts — the pet
+    // window's own blur handler collapses the dialog, and that unmount runs
+    // interrupt(), so in practice refocusing elsewhere also stops playback.
     const blur = () => {
       if (!recording.current) return;
       generation.current++; release(); recording.current = false;

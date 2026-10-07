@@ -26,6 +26,21 @@ test('ascii dot never cuts decimals or versions', () => {
   expect(step.buffer).toBe('');
 });
 
+test('ascii dot followed by whitespace splits latin sentences', () => {
+  // 'Hello. This is a test. Done' — the trailing 'Done' has no terminator
+  // yet, so it stays buffered until either a later delta or the flush.
+  const step = feedSentence('', 'Hello. This is a test. Done');
+  expect(step.sentences).toEqual(['Hello.', 'This is a test.']);
+  expect(step.buffer).toBe('Done');
+  // The whitespace can arrive in a later delta.
+  const later = feedSentence('Done.', ' Next one. Fine.');
+  expect(later.sentences).toEqual(['Done.', 'Next one.']);
+  expect(later.buffer).toBe('Fine.');
+  // A dot before a newline terminates too; before a letter it never does.
+  expect(feedSentence('', 'Done.\n下句。')).toEqual({ buffer: '', sentences: ['Done.', '下句。'] });
+  expect(feedSentence('', 'ok.done. go').sentences).toEqual(['ok.done.']);
+});
+
 test('overlong tail soft-cuts at the last separator, else hard-cuts', () => {
   const head = '一'.repeat(30);
   const soft = `${head}，${'二'.repeat(40)}，${'三'.repeat(20)}`;

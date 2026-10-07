@@ -4,7 +4,10 @@
  * and carry no replay semantics.
  */
 const TERMINATORS = new Set(['。', '！', '？', '；', '!', '?', ';', '…', '\n']);
-// ASCII '.' is deliberately absent: "3.14" must never cut.
+// ASCII '.' only terminates when the next code point is whitespace, so
+// "3.14" never cuts while "Hello. This" does. A '.' with nothing after it
+// stays buffered until either a later delta supplies the whitespace or the
+// final flush speaks it.
 const SOFT_SEPARATORS = new Set(['，', '、', ',', '：', ':']);
 /** Beyond this many code points without a terminator, the tail is cut anyway. */
 export const SENTENCE_LIMIT = 80;
@@ -32,11 +35,15 @@ export function feedSentence(
   let start = 0;
   for (let index = 0; index < chars.length; index++) {
     const ch = chars[index];
-    if (ch === undefined || !TERMINATORS.has(ch)) continue;
+    if (ch === undefined) continue;
+    const endsSentence = TERMINATORS.has(ch) || (ch === '.' && /\s/.test(chars[index + 1] ?? ''));
+    if (!endsSentence) continue;
     const candidate = chars.slice(start, index + 1).join('').trim();
     // A lone terminator (or a run of them) carries no speakable content.
     if (contentCount(candidate) > 0) sentences.push(candidate);
-    start = index + 1;
+    // The whitespace that legitimized an ASCII '.' is split glue, not speech:
+    // consume it so the next sentence never starts with a space.
+    start = index + (ch === '.' ? 2 : 1);
   }
   return { buffer: cutLongTail(chars.slice(start).join(''), sentences), sentences };
 }
