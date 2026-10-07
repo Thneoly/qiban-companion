@@ -138,16 +138,17 @@ export function PairingPanel({
         </div>
       )}
       <ul className="account-tasks">
-        {pairs.map((p) => (
-          <li key={p.id}>
-            <div>
-              <strong>
-                {p.desktopName} → {p.controllerName || "等待手机"}
-              </strong>
-              <small>{pairingStatus[p.status]} · 文档摘录</small>
-              <small>电脑标识：{p.desktopId}</small>
-            </div>
-            {["pending", "active"].includes(p.status) && (
+        {pairs
+          .filter((p) => ["pending", "active"].includes(p.status))
+          .map((p) => (
+            <li key={p.id}>
+              <div>
+                <strong>
+                  {p.desktopName} → {p.controllerName || "等待手机"}
+                </strong>
+                <small>{pairingStatus[p.status]} · 文档摘录</small>
+                <small>电脑标识：{p.desktopId}</small>
+              </div>
               <button
                 disabled={busy}
                 aria-label={`撤销配对 ${p.desktopName}`}
@@ -169,10 +170,36 @@ export function PairingPanel({
               >
                 撤销配对
               </button>
-            )}
-          </li>
-        ))}
+            </li>
+          ))}
       </ul>
+      {pairs.some((p) => !["pending", "active"].includes(p.status)) && (
+        <details className="finished-pairings">
+          <summary>
+            已结束的配对（
+            {pairs.filter((p) => !["pending", "active"].includes(p.status)).length}
+            ）
+          </summary>
+          <p className="helper">
+            撤销或失效的关系不再可用，仅作留痕；重新生成配对码会新增记录，不会恢复旧关系。
+          </p>
+          <ul className="account-tasks">
+            {pairs
+              .filter((p) => !["pending", "active"].includes(p.status))
+              .map((p) => (
+                <li key={p.id}>
+                  <div>
+                    <strong>
+                      {p.desktopName} → {p.controllerName || "等待手机"}
+                    </strong>
+                    <small>{pairingStatus[p.status]} · 文档摘录</small>
+                    <small>电脑标识：{p.desktopId}</small>
+                  </div>
+                </li>
+              ))}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }
