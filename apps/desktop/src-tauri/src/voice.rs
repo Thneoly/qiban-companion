@@ -199,7 +199,21 @@ async fn run(
     let started = Instant::now();
     let response = authorized("/audio/speech").json(&json!({"model":request.tts_model,"input":reply,"voice":request.voice,"response_format":"wav","stream":false})).send().await.map_err(|_| "语音合成连接失败")?;
     let wav = bounded(response, 8 * 1024 * 1024).await?;
-    let output_seconds = wav_seconds(&wav, 60.0)?;
+    // Real providers emit headers the strict RIFF checks may reject (sized-on-close
+    // chunks, placeholder sizes); keep the rejected bytes once for diagnosis.
+    let output_seconds = match wav_seconds(&wav, 60.0) {
+        Ok(seconds) => seconds,
+        Err(reason) => {
+            let dump = std::env::temp_dir().join("qiban-voice-tts-rejected.wav");
+            let _ = std::fs::write(&dump, &wav);
+            let head: String = wav.iter().take(48).map(|b| format!("{b:02x}")).collect();
+            return Err(format!(
+                "合成音频校验失败（{reason}；{}字节，头48hex={head}）；诊断副本已写入 {}",
+                wav.len(),
+                dump.display()
+            ));
+        }
+    };
     Ok(VoiceResult {
         request_id: request.request_id,
         transcript,
