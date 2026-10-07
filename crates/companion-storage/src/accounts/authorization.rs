@@ -76,6 +76,14 @@ fn device(
         )
         .optional()?;
     if let Some(id) = old {
+        // Reuse refreshes the row's frozen session horizon. Without this a
+        // long-lived session cannot re-pair once the horizon frozen at first
+        // registration passes: device() never writes again, live() stays
+        // false forever, and every new offer reads back "expired".
+        tx.execute(
+            "UPDATE paired_devices SET expires_at=?1 WHERE account_id=?2 AND id=?3",
+            params![identity.expires_at() as i64, account, id],
+        )?;
         return Ok(id);
     }
     let id = uuid::Uuid::new_v4().to_string();

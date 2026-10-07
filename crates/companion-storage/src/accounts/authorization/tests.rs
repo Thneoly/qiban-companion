@@ -56,6 +56,38 @@ fn pairing_is_owner_bound_one_time_and_needs_another_session() {
     assert!(hashes.iter().all(Option::is_none));
 }
 #[test]
+fn live_session_re_pairs_after_its_device_row_horizon_passes() {
+    let mut s = fixture();
+    // First registration freezes the desktop row's horizon at the session's
+    // then-current expiry (production: verify carries now+30min).
+    let early =
+        VerifiedIdentity::from_verified_provider("test", "alice", "desktop", 100, 2_000).unwrap();
+    let m = identity("alice", "mobile");
+    let o = s.offer_pairing(&early, "电脑").unwrap();
+    let p = s
+        .accept_pairing(&m, &o.code, &o.pairing.id, "手机")
+        .unwrap();
+    assert_eq!(p.status, "active");
+
+    // Horizon passes; the pairing reads expired. The session keeps verifying
+    // (same session id, fresh horizon) and re-offers.
+    s.clock = || 3_000;
+    assert_eq!(s.list_pairings(&m).unwrap()[0].status, "expired");
+    let refreshed =
+        VerifiedIdentity::from_verified_provider("test", "alice", "desktop", 100, 8_000).unwrap();
+    let o2 = s.offer_pairing(&refreshed, "电脑").unwrap();
+    assert_eq!(
+        o2.pairing.status, "pending",
+        "a re-offer from a live session must not be born expired"
+    );
+    let p2 = s
+        .accept_pairing(&m, &o2.code, &o2.pairing.id, "手机")
+        .unwrap();
+    assert_eq!(p2.status, "active");
+    let listed = s.list_pairings(&m).unwrap();
+    assert!(listed.iter().any(|x| x.id == p2.id && x.status == "active"));
+}
+#[test]
 fn expiration_logout_and_new_login_never_restore_old_pairing() {
     let mut s = fixture();
     let d = identity("alice", "d");
