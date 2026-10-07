@@ -4,9 +4,11 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { nativeDesktop } from '../../lib/surface';
 import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeContextEpoch, type ChatTurn, decodeContextPreview, sameScope, type ContextPreview, type MemoryUsage } from '@companion/contracts';
 import { ConversationReader } from './ConversationReader';
+import { useVoiceTurn, type MicState, type VoiceTurnContext } from '../voice/useVoiceTurn';
 import type { ConversationPhase as Phase } from '../companion/presentation';
 
 const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等待回复', streaming: '正在回复', complete: '已完成', stopped: '已停止', error: '未完成' };
+const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
 export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
@@ -114,12 +116,14 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     };
   }, [onPhase]);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (busy || !configured || !draft.trim() || !previewRef.current) return;
+  /** One chat turn for a prompt, either typed or transcribed. The voice
+   * context receives the same stream the bubble renders: speech is a skin
+   * over this chain, never a parallel one. Returns false when a guard
+   * rejected the request without issuing it. */
+  async function send(prompt: string, voice?: VoiceTurnContext): Promise<boolean> {
+    if (busy || !configured || !prompt || !previewRef.current) return false;
     const shownPreview=previewRef.current;
     const id = crypto.randomUUID();
-    const prompt = draft.trim();
     current.current = id;
     setBusy(true); setReply(''); setPhase('waiting'); setStatus('正在生成…');
     setLastPrompt(prompt); setRecorded(false); setMemoryUsage(null);
@@ -133,6 +137,7 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
         if (delta.requestId === id && delta.text) {
           received += delta.text;
           setReply(received); setPhase('streaming');
+          voice?.onDelta(delta.text);
         }
       } catch {
         current.current = null; setBusy(false); setPhase('error');
@@ -141,12 +146,12 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
       }
     };
     try {
-      if (!(await checkEpoch()) || current.current !== id) return;
+      if (!(await checkEpoch()) || current.current !== id) return true;
       const expectedPersonal = shownPreview.personal.status === 'online'
         ? shownPreview.personal.items.map(({ id: memoryId, seq }) => ({ id: memoryId, seq }))
         : null;
       const result = decodeChatResult(await invoke('chat_generate', { request: { requestId: id, prompt, expectedScope: shownPreview.scope, expectedContextEpoch: shownPreview.contextEpoch, expectedPersonal }, onDelta: channel }));
-      if (!(await checkEpoch())) return;
+      if (!(await checkEpoch())) return true;
       if (alive.current && current.current === id && result.requestId === id) {
         setMemoryUsage(result.memoryUsage);
         setPhase('complete');
@@ -154,7 +159,7 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
         if (!result.historySaved) {
           setDraft('');
           setStatus('回复已完成，但未保存记录（存储不可用、内容超限或模型已切换）；本段不会在重开后恢复，也不会作为前文。');
-          return;
+          return true;
         }
         try {
           const turns = await loadHistory();
@@ -174,7 +179,17 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
       }
     } finally {
       if (current.current === id) { if (alive.current) setBusy(false); current.current = null; }
+      voice?.onDone();
     }
+    return true;
+  }
+  const voice = useVoiceTurn({
+    onTranscript: (text, turn) => send(text, turn),
+    onStopChat: () => void stop(),
+  });
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await send(draft.trim());
   }
   async function stop() {
     const id = current.current;
@@ -198,7 +213,7 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
     finally { if (alive.current) setBusy(false); }
   }
   return <div className={reading ? 'chat-bubble chat-bubble-reading' : 'chat-bubble'}>
-    <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span></div>
+    <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span>{voice.speaking && <span className="chat-speaking">栖栖正在说</span>}</div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
       : <div className="chat-output" aria-label="栖栖的回复" aria-live="polite">{reply || '想聊点什么？'}</div>}
     {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · 应用{preview.items.length}条 · 个人{!preview.personal.policy.enabled ? '未启用' : preview.personal.status === 'online' ? preview.personal.items.length + '条' : '服务未连接'}</summary><div>
@@ -216,9 +231,15 @@ export function ChatBubble({ onPhase, onReading }: { onPhase: (phase: Phase) => 
       <small>正文：应用{preview.bodyChars}字 · 个人{preview.personal.bodyChars}字；字符数不是tokens。</small>
     </div></details>}
     {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 · 应用{memoryUsage.memories.length}条 · 个人{memoryUsage.personal.status === 'offline' ? '未含（服务未连接）' : memoryUsage.personal.memories.length + '条'}</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}{memoryUsage.personal.status === 'sent' && memoryUsage.personal.memories.map(item=><p key={item.id}>{preview?.personal.items.find(m=>m.id===item.id&&m.seq===item.seq)?.title ?? '条目已变化或服务暂不可查，请刷新预览'}<br/>seq {item.seq}</p>)}<small>附加字符：应用{memoryUsage.contextChars} · 个人{memoryUsage.personal.status === 'sent' ? memoryUsage.personal.contextChars : 0}；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
+    {voice.transcript ? <p className="chat-subtitle" aria-live="polite">我听到：{voice.transcript}</p> : voice.notice ? <p className="chat-subtitle" role="status">{voice.notice}</p> : null}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
       <input id="chat-draft" maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder="和我说说…" disabled={busy}/>
+      <button type="button" className="pet-voice" aria-label={micLabels[voice.micState]} title={voice.micState === 'off' ? voice.guidance : undefined} disabled={voice.micState === 'off'} onClick={() => {
+        if (voice.micState === 'recording') voice.finishRecording();
+        else if (voice.micState === 'transcribing' || voice.micState === 'speaking') voice.stopSpeaking();
+        else voice.startRecording();
+      }}>{micLabels[voice.micState]}</button>
       {busy ? <button type="button" className="pet-save" onClick={event => { event.preventDefault(); void stop(); }} disabled={!current.current}>停止</button> : <button className="pet-save" disabled={!configured || !preview || !draft.trim()}>发送</button>}
     </form>
     <p className="chat-status" role="status">{status}</p>
