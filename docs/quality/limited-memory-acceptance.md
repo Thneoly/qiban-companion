@@ -1,6 +1,6 @@
 # Q6：有限记忆本地验收设计
 
-2026-09-17，完整Q6测试设计。2026-09-18已执行[M1领域、迁移与单实例测试](../status/memory-foundation.md)，2026-09-19已执行[M2管理/导出和部分竞争测试](../status/memory-panel.md)。**2026-09-19已完成固定50例发送边界和20例本地删除竞争集；真实模型质量及独立体验仍未完成，M4保持Hold**，见[实际记录](../status/memory-q6-local.md)与[执行手册](memory-q6-runbook.md)。M3的[许可、预览、精确请求和竞争测试](../status/memory-model-context.md)已通过本机工程验证，尚非完整Q6集合。依据[产品规则](../product/limited-memory.md)、[技术契约](../architecture/limited-memory.md)及[主测量协议](verification-protocol.md)。
+2026-09-17，完整Q6测试设计。2026-09-18已执行[M1领域、迁移与单实例测试](../status/memory-foundation.md)，2026-09-19已执行[M2管理/导出和部分竞争测试](../status/memory-panel.md)。2026-09-19完成固定50例发送边界和20例本地删除竞争集，2026-10-07完成真实模型质量（deepseek-flash 50/50来源正确）与非实现者体验，**M4经[准出评审](m4-exit-review.md)准出（Hold→Pass）**，实际记录见[本地轮](../status/memory-q6-local.md)与[真实模型轮](../status/memory-q6-live.md)，执行手册见[Q6手册](memory-q6-runbook.md)。M3的[许可、预览、精确请求和竞争测试](../status/memory-model-context.md)已通过本机工程验证。依据[产品规则](../product/limited-memory.md)、[技术契约](../architecture/limited-memory.md)及[主测量协议](verification-protocol.md)。
 
 ## 准入与测量口径
 
