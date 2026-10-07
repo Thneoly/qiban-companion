@@ -16,6 +16,7 @@ mod placement;
 mod remote_documents;
 mod tray;
 mod voice;
+mod voice_companion;
 
 use companion_storage::TaskStore;
 use std::sync::{atomic::Ordering, Arc};
@@ -33,6 +34,7 @@ pub fn run() {
         }))
         .manage(state)
         .manage(voice::VoiceState::default())
+        .manage(voice_companion::VoiceTurnState::default())
         .manage(memory_export::ExportState::default())
         .setup(move |app| {
             let data_dir = app.path().app_local_data_dir()?;
@@ -127,6 +129,9 @@ pub fn run() {
             voice::voice_probe,
             voice::voice_cancel,
             voice::voice_key_set,
+            voice_companion::voice_transcribe,
+            voice_companion::voice_speak,
+            voice_companion::voice_turn_cancel,
             model_settings::voice_settings_get,
             model_settings::voice_settings_save,
             model_settings::model_settings_get,

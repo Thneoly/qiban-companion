@@ -106,12 +106,24 @@ export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens};
 }
 
-export interface VoiceSettings {voiceBaseUrl:string;useVoiceKey:boolean;asrModel:string;ttsModel:string;voice:string}
+export interface VoiceSettings {voiceBaseUrl:string;useVoiceKey:boolean;asrModel:string;ttsModel:string;voice:string;hasVoiceKey:boolean}
 export function decodeVoiceSettings(value:unknown):VoiceSettings {
   const v=record(value);
-  if(typeof v.voiceBaseUrl!=='string'||typeof v.useVoiceKey!=='boolean'||typeof v.asrModel!=='string'||typeof v.ttsModel!=='string'||typeof v.voice!=='string')throw Error('语音设置协议不兼容');
+  if(typeof v.voiceBaseUrl!=='string'||typeof v.useVoiceKey!=='boolean'||typeof v.asrModel!=='string'||typeof v.ttsModel!=='string'||typeof v.voice!=='string'||typeof v.hasVoiceKey!=='boolean')throw Error('语音设置协议不兼容');
   if(v.voiceBaseUrl.length>512||[v.asrModel,v.ttsModel,v.voice].some(s=>s.length>160))throw Error('语音设置协议不兼容');
-  return {voiceBaseUrl:v.voiceBaseUrl,useVoiceKey:v.useVoiceKey,asrModel:v.asrModel,ttsModel:v.ttsModel,voice:v.voice};
+  return {voiceBaseUrl:v.voiceBaseUrl,useVoiceKey:v.useVoiceKey,asrModel:v.asrModel,ttsModel:v.ttsModel,voice:v.voice,hasVoiceKey:v.hasVoiceKey};
+}
+export interface VoiceTranscript {requestId:string;transcript:string;recognitionMs:number}
+export function decodeVoiceTranscribe(value:unknown):VoiceTranscript {
+  const v=record(value);
+  if(typeof v.requestId!=='string'||!v.requestId||typeof v.transcript!=='string'||!v.transcript||[...v.transcript].length>1800||!integer(v.recognitionMs))throw Error('语音识别协议不兼容');
+  return {requestId:v.requestId,transcript:v.transcript,recognitionMs:v.recognitionMs};
+}
+export interface VoiceSpeakProgress {requestId:string;trimmed:boolean|null}
+export function decodeVoiceSpeakProgress(value:unknown):VoiceSpeakProgress {
+  const v=record(value);
+  if(typeof v.requestId!=='string'||!v.requestId||(v.trimmed!==null&&typeof v.trimmed!=='boolean'))throw Error('语音朗读进度协议不兼容');
+  return {requestId:v.requestId,trimmed:v.trimmed as boolean|null};
 }
 export interface ChatTurn {user:string;assistant:string}
 export function decodeChatHistory(value:unknown):ChatTurn[] {

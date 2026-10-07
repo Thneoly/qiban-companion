@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-turn-cancel"
+description = "Enables the voice_turn_cancel command without any pre-configured scope."
+commands.allow = ["voice_turn_cancel"]
+
+[[permission]]
+identifier = "deny-voice-turn-cancel"
+description = "Denies the voice_turn_cancel command without any pre-configured scope."
+commands.deny = ["voice_turn_cancel"]

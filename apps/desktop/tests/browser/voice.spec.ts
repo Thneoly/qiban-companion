@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
         if (cmd === 'model_settings_get') return { baseUrl: 'https://example.com/v1', model: 'custom-chat', useApiKey: false, hasApiKey: false, maxOutputTokens: 1024 };
-        if (cmd === 'voice_settings_get') return w.savedVoice || { voiceBaseUrl: '', useVoiceKey: true, asrModel: '', ttsModel: '', voice: '' };
+        if (cmd === 'voice_settings_get') { const base = w.savedVoice || { voiceBaseUrl: '', useVoiceKey: true, asrModel: '', ttsModel: '', voice: '' }; return { ...base, hasVoiceKey: Boolean(w.savedVoice) }; }
         if (cmd === 'voice_settings_save') { w.savedVoice = args.config; return; }
         if (cmd === 'voice_cancel') { w.cancelled++; return; }
         if (cmd === 'voice_probe') {

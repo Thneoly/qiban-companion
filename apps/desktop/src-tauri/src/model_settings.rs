@@ -246,9 +246,27 @@ pub fn model_key_delete(state: State<'_, ModelState>) -> Result<(), String> {
         .clone();
     crate::credentials::delete(&base)
 }
+/// Voice settings plus key presence: the pet window has no form and needs to
+/// know whether the saved voice provider is usable before offering the mic.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceSettings {
+    #[serde(flatten)]
+    config: VoiceConfig,
+    has_voice_key: bool,
+}
+/// Empty voice address means never configured: no credential lookup happens.
+fn voice_status(config: VoiceConfig) -> Result<VoiceSettings, String> {
+    let has_voice_key = !config.voice_base_url.is_empty()
+        && crate::credentials::read(&config.voice_base_url)?.is_some();
+    Ok(VoiceSettings {
+        config,
+        has_voice_key,
+    })
+}
 #[tauri::command]
-pub fn voice_settings_get(state: State<'_, ModelState>) -> Result<VoiceConfig, String> {
-    Ok(state.lock().map_err(|_| "模型设置不可用")?.voice_config())
+pub fn voice_settings_get(state: State<'_, ModelState>) -> Result<VoiceSettings, String> {
+    voice_status(state.lock().map_err(|_| "模型设置不可用")?.voice_config())
 }
 #[tauri::command]
 pub fn voice_settings_save(
@@ -263,6 +281,17 @@ pub fn voice_settings_save(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn voice_settings_status_short_circuits_empty_address_and_hides_keys() {
+        let status = voice_status(VoiceConfig::default()).unwrap();
+        assert!(!status.has_voice_key);
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["hasVoiceKey"], false);
+        assert_eq!(value["voiceBaseUrl"], "");
+        assert!(value["asrModel"].is_string());
+        // Flattened config fields sit next to the flag; nothing else leaks.
+        assert_eq!(value.as_object().unwrap().len(), 6);
+    }
     #[test]
     fn voice_settings_round_trip_without_ever_storing_a_key() {
         let path = std::env::temp_dir().join(format!("voice-config-{}.db", uuid::Uuid::new_v4()));
