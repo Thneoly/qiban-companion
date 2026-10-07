@@ -51,7 +51,11 @@ class Harness {
   async create(body,kind='preference',eventDate=null){const before=await this.list();await this.mutate({action:'create',expectedEpoch:before.contextEpoch,draft:{body,kind,eventDate}});return (await this.list()).items.find(m=>!before.items.some(old=>old.id===m.id));}
   async send(p,prompt){return this.pet.evaluate(async({p,prompt})=>{
     const native=window.__TAURI_INTERNALS__,deltas=[];const requestId=crypto.randomUUID();const callback=native.transformCallback(raw=>{if(raw.message)deltas.push(raw.message);});
-    try{return {ok:true,requestId,result:await native.invoke('chat_generate',{request:{requestId,prompt,expectedScope:p.scope,expectedContextEpoch:p.contextEpoch},onDelta:`__CHANNEL__:${callback}`}),deltas};}
+    // Protocol v3: expectedPersonal is required at parse time. null = the
+    // preview saw the personal-memory service offline, so the personal block
+    // is omitted and the receipt reports offline — Q6 exercises app memory
+    // only; the personal path is covered by its own suite.
+    try{return {ok:true,requestId,result:await native.invoke('chat_generate',{request:{requestId,prompt,expectedScope:p.scope,expectedContextEpoch:p.contextEpoch,expectedPersonal:null},onDelta:`__CHANNEL__:${callback}`}),deltas};}
     catch(error){return {ok:false,requestId,error,deltas};}
   },{p,prompt});}
   async history(){return this.invoke(this.pet,'chat_history');}
