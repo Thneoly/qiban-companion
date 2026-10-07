@@ -54,8 +54,14 @@ pub struct VoiceResult {
     audio_cost: Option<f64>,
 }
 
-/// Accept PCM16 RIFF/WAVE only, including ancillary chunks; bound decoded duration.
-fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
+/// Parsed PCM16 RIFF/WAVE layout: byte rate, block align, and data chunk length.
+pub(crate) struct WavFormat {
+    pub(crate) byte_rate: usize,
+    pub(crate) block: usize,
+    pub(crate) data_len: usize,
+}
+/// Accept PCM16 RIFF/WAVE only, including ancillary chunks.
+pub(crate) fn wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
     let invalid = || "需要完整PCM16 WAV音频，时长或格式超出实验范围".to_string();
     if bytes.len() < 44
         || bytes.len() > 8 * 1024 * 1024
@@ -107,10 +113,19 @@ fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
         return Err(invalid());
     }
     let (rate, block) = format.ok_or_else(invalid)?;
-    let size = data_len.ok_or_else(invalid)?;
-    let seconds = size as f64 / rate as f64;
-    if size % block != 0 || seconds <= 0.0 || seconds > limit {
-        return Err(invalid());
+    let data_len = data_len.ok_or_else(invalid)?;
+    Ok(WavFormat {
+        byte_rate: rate,
+        block,
+        data_len,
+    })
+}
+/// Bound decoded duration on top of the parsed layout.
+pub(crate) fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
+    let format = wav_format(bytes)?;
+    let seconds = format.data_len as f64 / format.byte_rate as f64;
+    if format.data_len % format.block != 0 || seconds <= 0.0 || seconds > limit {
+        return Err("需要完整PCM16 WAV音频，时长或格式超出实验范围".to_string());
     }
     Ok(seconds)
 }
@@ -130,6 +145,89 @@ async fn bounded(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>,
     }
     Ok(bytes)
 }
+/// Shared plumbing for the speech endpoints: one HTTP client and one voice
+/// provider base URL. The key is read by the caller and never sent back.
+pub(crate) struct SpeechClient {
+    client: reqwest::Client,
+    base_url: String,
+    key: String,
+}
+impl SpeechClient {
+    pub(crate) fn new(base_url: String, key: String) -> Result<Self, String> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(45))
+            .build()
+            .map_err(|_| "语音网络初始化失败")?;
+        Ok(Self {
+            client,
+            base_url,
+            key,
+        })
+    }
+    fn authorized(&self, path: &str) -> reqwest::RequestBuilder {
+        let builder = self.client.post(format!("{}{path}", self.base_url));
+        if self.key.is_empty() {
+            builder
+        } else {
+            builder.bearer_auth(&self.key)
+        }
+    }
+    pub(crate) async fn transcribe(&self, asr_model: &str, wav: Vec<u8>) -> Result<String, String> {
+        let part = reqwest::multipart::Part::bytes(wav)
+            .file_name("recording.wav")
+            .mime_str("audio/wav")
+            .map_err(|_| "音频编码失败")?;
+        let form = reqwest::multipart::Form::new()
+            .text("model", asr_model.to_string())
+            .text("stream", "false")
+            .part("file", part);
+        let response = self
+            .authorized("/audio/transcriptions")
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|_| "语音识别连接失败")?;
+        let value: Value = serde_json::from_slice(&bounded(response, 65536).await?)
+            .map_err(|_| "语音识别响应格式不兼容")?;
+        Ok(value["text"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty() && s.chars().count() <= 1800)
+            .ok_or("没有可用的识别文本，或内容过长")?
+            .to_string())
+    }
+    pub(crate) async fn synthesize(
+        &self,
+        tts_model: &str,
+        voice: &str,
+        input: &str,
+    ) -> Result<(Vec<u8>, f64), String> {
+        let response = self
+            .authorized("/audio/speech")
+            .json(&json!({"model":tts_model,"input":input,"voice":voice,"response_format":"wav","stream":false}))
+            .send()
+            .await
+            .map_err(|_| "语音合成连接失败")?;
+        let wav = bounded(response, 8 * 1024 * 1024).await?;
+        // Real providers emit headers the strict RIFF checks may reject (sized-on-close
+        // chunks, placeholder sizes); keep the rejected bytes once for diagnosis.
+        let seconds = match wav_seconds(&wav, 60.0) {
+            Ok(seconds) => seconds,
+            Err(reason) => {
+                let dump = std::env::temp_dir().join("qiban-voice-tts-rejected.wav");
+                let _ = std::fs::write(&dump, &wav);
+                let head: String = wav.iter().take(48).map(|b| format!("{b:02x}")).collect();
+                return Err(format!(
+                    "合成音频校验失败（{reason}；{}字节，头48hex={head}）；诊断副本已写入 {}",
+                    wav.len(),
+                    dump.display()
+                ));
+            }
+        };
+        Ok((wav, seconds))
+    }
+}
 async fn run(
     config: &ModelConfig,
     key: &str,
@@ -139,42 +237,10 @@ async fn run(
     stage: impl Fn(&'static str) -> Result<(), String>,
 ) -> Result<VoiceResult, String> {
     let input_seconds = wav_seconds(&request.wav, 30.0)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|_| "语音网络初始化失败")?;
-    let authorized = |path: &str| {
-        let builder = client.post(format!("{}{path}", speech.base_url));
-        if speech_key.is_empty() {
-            builder
-        } else {
-            builder.bearer_auth(speech_key)
-        }
-    };
+    let client = SpeechClient::new(speech.base_url.clone(), speech_key.to_string())?;
     stage("recognizing")?;
     let started = Instant::now();
-    let part = reqwest::multipart::Part::bytes(request.wav)
-        .file_name("recording.wav")
-        .mime_str("audio/wav")
-        .map_err(|_| "音频编码失败")?;
-    let form = reqwest::multipart::Form::new()
-        .text("model", request.asr_model)
-        .text("stream", "false")
-        .part("file", part);
-    let response = authorized("/audio/transcriptions")
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|_| "语音识别连接失败")?;
-    let value: Value = serde_json::from_slice(&bounded(response, 65536).await?)
-        .map_err(|_| "语音识别响应格式不兼容")?;
-    let transcript = value["text"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty() && s.chars().count() <= 1800)
-        .ok_or("没有可用的识别文本，或内容过长")?
-        .to_string();
+    let transcript = client.transcribe(&request.asr_model, request.wav).await?;
     let recognition_ms = started.elapsed().as_millis();
     stage("generating")?;
     let started = Instant::now();
@@ -194,23 +260,9 @@ async fn run(
     }
     stage("synthesizing")?;
     let started = Instant::now();
-    let response = authorized("/audio/speech").json(&json!({"model":request.tts_model,"input":reply,"voice":request.voice,"response_format":"wav","stream":false})).send().await.map_err(|_| "语音合成连接失败")?;
-    let wav = bounded(response, 8 * 1024 * 1024).await?;
-    // Real providers emit headers the strict RIFF checks may reject (sized-on-close
-    // chunks, placeholder sizes); keep the rejected bytes once for diagnosis.
-    let output_seconds = match wav_seconds(&wav, 60.0) {
-        Ok(seconds) => seconds,
-        Err(reason) => {
-            let dump = std::env::temp_dir().join("qiban-voice-tts-rejected.wav");
-            let _ = std::fs::write(&dump, &wav);
-            let head: String = wav.iter().take(48).map(|b| format!("{b:02x}")).collect();
-            return Err(format!(
-                "合成音频校验失败（{reason}；{}字节，头48hex={head}）；诊断副本已写入 {}",
-                wav.len(),
-                dump.display()
-            ));
-        }
-    };
+    let (wav, output_seconds) = client
+        .synthesize(&request.tts_model, &request.voice, &reply)
+        .await?;
     Ok(VoiceResult {
         request_id: request.request_id,
         transcript,
