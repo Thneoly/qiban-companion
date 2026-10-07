@@ -2,9 +2,9 @@
 
 React + TypeScript + Tauri 2 + Rust 的桌面 AI 伙伴工程骨架。暂用“栖伴／栖栖”作为开发名称。产品、设计、计划与验证资料统一进入[文档中心](docs/README.md)。
 
-当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**普通待办只记录，不自动执行；新增受限文档摘录任务，需选定文件、预览并确认保存。** 已加入可配置的 Chat Completions 本机多轮对话与本地 Live2D 模型导入；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音服务尚未验证通过；正式桌宠语音、通用手机远程任务、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
+当前可运行：角色互动样机、待办创建/列表/取消、桌面 SQLite 持久化、浏览器内存预览、类型化 IPC 与错误反馈。**普通待办只记录，不自动执行；新增受限文档摘录任务，需选定文件、预览并确认保存。** 已加入可配置的 Chat Completions 本机多轮对话与本地 Live2D 模型导入；已使用本机配置验证 glm-5.3 和 glm-5.3-flash 的真实回复及停止。已增加T04语音实验入口，真实语音全链已于2026-10-07在智谱云端验证（含账单核对）；正式桌宠语音、通用手机远程任务、自动更新与收费仍未接入。默认入口已改为透明悬浮角色：点击打开气泡，拖动角色或场景背景移动，任务面板按需打开。支持托盘恢复、隐藏和安静陪伴；SVG 角色是自制原型资产。
 
-有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，[M3分模型许可、预览与受控注入](docs/status/memory-model-context.md)也已实现。M4的[本地Q6验收包](docs/status/memory-q6-local.md)已通过50例发送边界和20例删除竞争测试，[真实模型质量与非实现者体验](docs/status/memory-q6-live.md)亦已完成（deepseek-flash 50/50来源正确），三证据齐备待准出评审。最新记忆增量见[模型使用记录](docs/status/memory-model-context.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
+有限记忆的[M1单实例、领域契约与迁移已实现](docs/status/memory-foundation.md)；[产品设计](docs/product/limited-memory.md)中的手动管理与JSON导出已在[M2实现](docs/status/memory-panel.md)，[M3分模型许可、预览与受控注入](docs/status/memory-model-context.md)也已实现。M4的[本地Q6验收包](docs/status/memory-q6-local.md)已通过50例发送边界和20例删除竞争测试，[真实模型质量与非实现者体验](docs/status/memory-q6-live.md)亦已完成（deepseek-flash 50/50来源正确），M4经[准出评审](docs/quality/m4-exit-review.md)准出（2026-10-07）。最新记忆增量见[模型使用记录](docs/status/memory-model-context.md)，入门见[首次使用指南](docs/status/first-use-guide.md)，记录能力见[本机对话保存与恢复](docs/status/chat-history-persistence.md)，语音实验见[T04语音验证](docs/status/voice-chain-spike.md)与[真实语音全链](docs/status/voice-real-chain.md)，角色表现见[T08角色状态与动作](docs/status/companion-expression.md)，当前优先级与工作包对照见[交付待办](docs/planning/delivery-backlog.md)。模型设置见[输出预算](docs/status/model-output-budget.md)，阅读体验见[对话阅读与状态反馈](docs/status/chat-reading.md)，模型与会话验收见[临时多轮会话](docs/status/session-chat.md)，配置及渲染基线见[通用模型设置与 Live2D](docs/status/model-settings-live2d.md)。此前实现与实测边界见[位置记忆与下一增量](docs/status/pet-position-memory.md)及[桌面角色交付记录](docs/status/desktop-pet.md)，初始骨架见[历史记录](docs/status/implementation-status.md)。已通过本机原生窗口与交互冒烟检查；这仍是可演示样机。
 
 已新增[T41/T42账号隔离基础](docs/status/account-isolation-foundation.md)：认证适配器边界、账号/伙伴稳定映射、账号内待办及会话撤销的Rust基础与测试。已接续[自有账号与协调HTTP接口](docs/status/coordinator-auth-api.md)，用户已确认真实邮件验证码和账号/伙伴查询成功；已加入本机登录命令及[手机 Web 登录与共享待办](docs/status/mobile-web.md)，已加入[原生桌面账号与共享待办](docs/status/desktop-account.md)：邮箱登录、安全会话保存、重开恢复及退出，真实桌面界面与手机的人工联合验收待补。首发手机入口已确定为[手机Web](docs/architecture/mobile-client-strategy.md)。
 
@@ -62,7 +62,7 @@ npm run coordinator
 - 完整问答在本机明文保存，所有模型合计最近6轮/1.2万字，退出重启可恢复。按地址和模型隔离前文，切回可查看尚未淘汰的记录；“最近 N 轮”查看，“清空对话”删除本机所有模型记录。收起停止生成，未完成片段不保存。
 - 点击“展开阅读”集中查看问答；向上翻阅时暂停自动跟随，“回到最新”恢复。生成状态区区分等待、回复中、完成、停止和失败。
 - 栖栖的表情与动作跟随真实回复状态；展开阅读保留角色缩略形象。安静模式停止动画，支持系统减少动画设置；当前没有语音或口型。
-- 任务面板中的“语音实验”可录音或选择测试WAV，显式运行识别、生成和播放；语音地址、模型和系统密钥独立填写，不改文字配置。此前复用Coding文字地址返回429，正确语音地址的真实链仍待验证，详情见上述记录。
+- 任务面板中的“语音实验”可录音或选择测试WAV，显式运行识别、生成和播放；语音地址、模型和系统密钥独立填写，不改文字配置。真实链已于2026-10-07在智谱验证（识别/生成/合成/播放与账单），播放结束后可重播、已准备文件名有回显；噪声/回声与正式桌宠语音仍属后续，详情见上述记录。
 - “角色与场景”可切换栖栖 / 2D 数字人，导入完整 model3 文件夹、移除模型、选择小舞台/无背景/完整家园并调节背景不透明度；默认 SVG，数字人失败会回退。详见[配置与资源准备](docs/development/model-settings-live2d.md)。
 - “安静陪伴”保留角色并让鼠标完全穿透；“隐藏”收起角色。点击系统托盘图标恢复互动，图标可能位于任务栏的隐藏图标区。
 - 右键托盘可找回角色到主屏、打开面板或退出应用。

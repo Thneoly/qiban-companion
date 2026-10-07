@@ -56,6 +56,31 @@ test('selected audio uploads only on action, and stopped late result cannot play
   await expect(page.getByText('尚未开始播放')).toBeVisible();
 });
 
+test('completed synthesis replays locally without a second request, and prepared file name is echoed', async ({ page }) => {
+  await page.getByLabel('选择测试WAV').setInputFiles({ name: 'fixture.wav', mimeType: 'audio/wav', buffer: wave });
+  await expect(page.locator('.voice-note')).toContainText('音频已准备（fixture.wav）');
+  await page.evaluate(() => {
+    HTMLMediaElement.prototype.play = function () {
+      const el = this;
+      setTimeout(() => el.dispatchEvent(new Event('playing')), 0);
+      setTimeout(() => el.dispatchEvent(new Event('ended')), 50);
+      return Promise.resolve();
+    };
+  });
+  await page.getByRole('button', { name: '运行并播放' }).click();
+  await page.evaluate(() => (window as any).finishVoice());
+  await expect(page.locator('.voice-phase')).toHaveText('播放已结束');
+  await expect(page.getByText('测试文件（fixture.wav）')).toBeVisible();
+  const firstLatency = await page.locator('tr', { hasText: '提交至播放开始' }).locator('td').textContent();
+  expect(firstLatency).toMatch(/\d+ ms/);
+  expect(await page.evaluate(() => (window as any).calls)).toBe(1);
+  await page.getByRole('button', { name: '重播合成语音' }).click();
+  await expect(page.locator('.voice-phase')).toHaveText('播放已结束');
+  expect(await page.evaluate(() => (window as any).calls)).toBe(1);
+  await expect(page.locator('tr', { hasText: '提交至播放开始' }).locator('td')).toHaveText(firstLatency!);
+  expect(await page.evaluate(() => (window as any).cancelled)).toBe(0);
+});
+
 test('late microphone permission after cancellation releases tracks without recording or uploading', async ({ page }) => {
   await page.evaluate(() => {
     const w = window as any;
