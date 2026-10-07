@@ -54,10 +54,12 @@ pub struct VoiceResult {
     audio_cost: Option<f64>,
 }
 
-/// Parsed PCM16 RIFF/WAVE layout: byte rate, block align, and data chunk length.
+/// Parsed PCM16 RIFF/WAVE layout: byte rate, block align, where the data chunk
+/// payload starts, and its length.
 pub(crate) struct WavFormat {
     pub(crate) byte_rate: usize,
     pub(crate) block: usize,
+    pub(crate) data_offset: usize,
     pub(crate) data_len: usize,
 }
 /// Accept PCM16 RIFF/WAVE only, including ancillary chunks.
@@ -76,7 +78,7 @@ pub(crate) fn wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
     // the authority for length consistency, so no equality check here.
     let mut offset = 12;
     let mut format = None;
-    let mut data_len = None;
+    let mut data = None;
     while offset + 8 <= bytes.len() {
         let size = u32_at(offset + 4);
         let start = offset + 8;
@@ -103,8 +105,8 @@ pub(crate) fn wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
                 }
                 format = Some((rate * channels * 2, channels * 2));
             }
-            b"data" if data_len.is_some() => return Err(invalid()),
-            b"data" => data_len = Some(size),
+            b"data" if data.is_some() => return Err(invalid()),
+            b"data" => data = Some((start, size)),
             _ => {}
         }
         offset = end.checked_add(size % 2).ok_or_else(invalid)?;
@@ -113,10 +115,11 @@ pub(crate) fn wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
         return Err(invalid());
     }
     let (rate, block) = format.ok_or_else(invalid)?;
-    let data_len = data_len.ok_or_else(invalid)?;
+    let (data_offset, data_len) = data.ok_or_else(invalid)?;
     Ok(WavFormat {
         byte_rate: rate,
         block,
+        data_offset,
         data_len,
     })
 }

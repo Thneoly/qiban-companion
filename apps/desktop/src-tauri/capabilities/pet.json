@@ -20,6 +20,10 @@
     "allow-chat-history",
     "allow-chat-clear",
     "allow-chat-context-epoch",
-    "allow-chat-context-preview"
+    "allow-chat-context-preview",
+    "allow-voice-settings-get",
+    "allow-voice-transcribe",
+    "allow-voice-speak",
+    "allow-voice-turn-cancel"
   ]
 }
