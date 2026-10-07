@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
-import { decodeModelSettings, decodeVoiceResult, type VoiceResult } from '@companion/contracts';
+import { decodeModelSettings, decodeVoiceResult, decodeVoiceSettings, type VoiceResult } from '@companion/contracts';
 import { nativeDesktop } from '../../lib/surface';
 import { normalizeRecording } from './audio';
 
@@ -47,8 +47,12 @@ function VoiceProbe() {
   }
   useEffect(() => {
     let disposed = false;
-    if (nativeDesktop) void invoke('model_settings_get').then(value => { if (!disposed) { const config = decodeModelSettings(value); setBaseUrl(config.baseUrl); setService(`文字服务：${config.baseUrl} · ${config.model}`); } }).catch(() => { if (!disposed) setService('读取服务失败，请先检查模型设置'); });
-    else setService('浏览器仅预览；语音服务在桌面版调用');
+    if (nativeDesktop) {
+      void invoke('model_settings_get').then(value => { if (!disposed) { const config = decodeModelSettings(value); setBaseUrl(config.baseUrl); setService(`文字服务：${config.baseUrl} · ${config.model}`); } }).catch(() => { if (!disposed) setService('读取服务失败，请先检查模型设置'); });
+      // Saved labs config pre-fills the form; a failed read keeps the empty
+      // form usable rather than blocking the experiment.
+      void invoke('voice_settings_get').then(value => { if (!disposed) { const saved = decodeVoiceSettings(value); if (saved.voiceBaseUrl) { setVoiceBase(saved.voiceBaseUrl); setUseVoiceKey(saved.useVoiceKey); setAsr(saved.asrModel); setTts(saved.ttsModel); setVoice(saved.voice); } } }).catch(() => {});
+    } else setService('浏览器仅预览；语音服务在桌面版调用');
     const blur = () => { if (busyRef.current) cancel(); };
     window.addEventListener('blur', blur);
     return () => { disposed = true; cancel(false); window.removeEventListener('blur', blur); };
@@ -125,6 +129,7 @@ function VoiceProbe() {
       <label>语音 API 基地址<input value={voiceBase} maxLength={512} onChange={e => setVoiceBase(e.target.value)}/></label>
       <label><input type="checkbox" checked={useVoiceKey} onChange={e => setUseVoiceKey(e.target.checked)}/>语音服务需要 API Key</label>
       <button type="button" disabled={!voiceBase.trim() || !useVoiceKey} onClick={async () => { setKeyBusy(true); try { await invoke('voice_key_set', { baseUrl: voiceBase.trim() }); setNote('已为该语音地址保存系统密钥，文字服务设置未改动。'); } catch (e) { setNote(typeof e === 'string' ? e : '密钥设置未完成'); } finally { setKeyBusy(false); } }}>设置语音密钥</button>
+      <button type="button" disabled={!voiceBase.trim() || !asr.trim() || !tts.trim() || !voice.trim()} onClick={async () => { try { await invoke('voice_settings_save', { config: { voiceBaseUrl: voiceBase.trim(), useVoiceKey, asrModel: asr.trim(), ttsModel: tts.trim(), voice: voice.trim() } }); setNote('语音配置已保存，下次打开语音实验自动填入；密钥仍单独保存在系统凭据管理器。'); } catch (e) { setNote(typeof e === 'string' ? e : '语音配置保存失败'); } }}>保存语音配置</button>
       <label>识别模型<input value={asr} maxLength={160} onChange={e => setAsr(e.target.value)}/></label>
       <label>合成模型<input value={tts} maxLength={160} onChange={e => setTts(e.target.value)}/></label>
       <label>音色编码<input value={voice} maxLength={160} onChange={e => setVoice(e.target.value)}/></label>

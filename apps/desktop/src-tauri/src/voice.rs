@@ -1,5 +1,5 @@
 //! T04 bounded, non-streaming speech probe. Credentials never cross IPC.
-use crate::model_settings::{ModelConfig, ModelState};
+use crate::model_settings::{identifier, ModelConfig, ModelState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -54,9 +54,6 @@ pub struct VoiceResult {
     audio_cost: Option<f64>,
 }
 
-fn identifier(value: &str) -> bool {
-    !value.trim().is_empty() && value.len() <= 160 && !value.chars().any(char::is_control)
-}
 /// Accept PCM16 RIFF/WAVE only, including ancillary chunks; bound decoded duration.
 fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
     let invalid = || "需要完整PCM16 WAV音频，时长或格式超出实验范围".to_string();
