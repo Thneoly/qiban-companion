@@ -16,7 +16,11 @@ const pilot=['P01','E02','C01','S01','N01'];
     for(const c of selected){
       const record=records.find(r=>r.id===c.id);
       try{
-        await h.reset(c.id);await h.model(base,model,true,2048);
+        // 8192 = the product's configured ceiling. Hybrid-reasoning models
+        // bill chain-of-thought against the same completion budget while the
+        // app streams only delta.content — at 2048 a timestamp-conversion
+        // answer (E04, live-c round) had its body truncated mid-sentence.
+        await h.reset(c.id);await h.model(base,model,true,8192);
         const ids=[];for(const r of c.expected.references)ids.push((await h.create(r.body,r.kind,r.eventDate)).id);
         if(ids.length)await h.policy(ids);
         const preview=await h.preview();assert.equal(preview.items.length,c.expected.references.length);
@@ -26,7 +30,7 @@ const pilot=['P01','E02','C01','S01','N01'];
         if(!result.ok){process.exitCode=1;break;} // Keep failed and unattempted cases; do not retry or probe alternatives.
       }catch(error){process.exitCode=1;record.status='setup_failed';record.error=typeof error==='string'?error:String(error?.code||error);break;}
       finally{
-        h.write('live-review.json',{...h.meta,mode:'model-quality-replay',suiteVersion:suite.version,model,baseUrl:base,maxOutputTokens:2048,invocationCap:cap,attempted,denominator:50,sourceCorrect:null,reviewer:null,cases:records,m4Gate:'hold'});
+        h.write('live-review.json',{...h.meta,mode:'model-quality-replay',suiteVersion:suite.version,model,baseUrl:base,maxOutputTokens:8192,invocationCap:cap,attempted,denominator:50,sourceCorrect:null,reviewer:null,cases:records,m4Gate:'hold'});
       }
     }
     console.log(JSON.stringify({runId:h.meta.runId,mode:'model-quality-replay',attempted,cap,unreviewed:records.filter(r=>r.status==='unreviewed').length,failed:records.filter(r=>r.status.endsWith('failed')).map(r=>r.id),qualityScore:null,m4Gate:'hold'}));
