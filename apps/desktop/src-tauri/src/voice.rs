@@ -68,9 +68,9 @@ fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
         return Err(invalid());
     }
     let u32_at = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
-    if u32_at(4).checked_add(8) != Some(bytes.len()) {
-        return Err(invalid());
-    }
+    // The RIFF size field is not trustworthy on server-generated WAVs (Zhipu's
+    // glm-tts writes len-12, real capture 2026-10-07); chunk walking below is
+    // the authority for length consistency, so no equality check here.
     let mut offset = 12;
     let mut format = None;
     let mut data_len = None;
@@ -357,6 +357,22 @@ mod tests {
         assert!(wav_seconds(&valid[..44], 30.0).is_err());
         assert!(wav_seconds(&valid, 0.00001).is_err());
         assert!(!identifier("\nmodel"));
+        // Zhipu glm-tts writes the RIFF size field len-12 (capture 2026-10-07);
+        // chunk walking, not that field, decides length consistency.
+        let mut provider = valid.clone();
+        let short = (provider.len() as u32 - 12).to_le_bytes();
+        provider[4..8].copy_from_slice(&short);
+        assert!(wav_seconds(&provider, 30.0).is_ok());
+        // Ancillary watermark chunks between fmt and data are walked through.
+        let mut ancillary = Vec::with_capacity(valid.len() + 14);
+        ancillary.extend_from_slice(b"RIFF");
+        ancillary.extend_from_slice(&(valid.len() as u32 + 6).to_le_bytes());
+        ancillary.extend_from_slice(&valid[8..36]);
+        ancillary.extend_from_slice(b"AIGC");
+        ancillary.extend_from_slice(&2_u32.to_le_bytes());
+        ancillary.extend_from_slice(b"{}");
+        ancillary.extend_from_slice(&valid[36..]);
+        assert!(wav_seconds(&ancillary, 30.0).is_ok());
     }
 
     #[tokio::test]
