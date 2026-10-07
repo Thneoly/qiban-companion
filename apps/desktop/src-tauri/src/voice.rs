@@ -68,9 +68,9 @@ fn wav_seconds(bytes: &[u8], limit: f64) -> Result<f64, String> {
         return Err(invalid());
     }
     let u32_at = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
-    if u32_at(4).checked_add(8) != Some(bytes.len()) {
-        return Err(invalid());
-    }
+    // The RIFF size field is not trustworthy on server-generated WAVs (Zhipu's
+    // glm-tts writes len-12, real capture 2026-10-07); chunk walking below is
+    // the authority for length consistency, so no equality check here.
     let mut offset = 12;
     let mut format = None;
     let mut data_len = None;
@@ -199,7 +199,21 @@ async fn run(
     let started = Instant::now();
     let response = authorized("/audio/speech").json(&json!({"model":request.tts_model,"input":reply,"voice":request.voice,"response_format":"wav","stream":false})).send().await.map_err(|_| "语音合成连接失败")?;
     let wav = bounded(response, 8 * 1024 * 1024).await?;
-    let output_seconds = wav_seconds(&wav, 60.0)?;
+    // Real providers emit headers the strict RIFF checks may reject (sized-on-close
+    // chunks, placeholder sizes); keep the rejected bytes once for diagnosis.
+    let output_seconds = match wav_seconds(&wav, 60.0) {
+        Ok(seconds) => seconds,
+        Err(reason) => {
+            let dump = std::env::temp_dir().join("qiban-voice-tts-rejected.wav");
+            let _ = std::fs::write(&dump, &wav);
+            let head: String = wav.iter().take(48).map(|b| format!("{b:02x}")).collect();
+            return Err(format!(
+                "合成音频校验失败（{reason}；{}字节，头48hex={head}）；诊断副本已写入 {}",
+                wav.len(),
+                dump.display()
+            ));
+        }
+    };
     Ok(VoiceResult {
         request_id: request.request_id,
         transcript,
@@ -343,6 +357,22 @@ mod tests {
         assert!(wav_seconds(&valid[..44], 30.0).is_err());
         assert!(wav_seconds(&valid, 0.00001).is_err());
         assert!(!identifier("\nmodel"));
+        // Zhipu glm-tts writes the RIFF size field len-12 (capture 2026-10-07);
+        // chunk walking, not that field, decides length consistency.
+        let mut provider = valid.clone();
+        let short = (provider.len() as u32 - 12).to_le_bytes();
+        provider[4..8].copy_from_slice(&short);
+        assert!(wav_seconds(&provider, 30.0).is_ok());
+        // Ancillary watermark chunks between fmt and data are walked through.
+        let mut ancillary = Vec::with_capacity(valid.len() + 14);
+        ancillary.extend_from_slice(b"RIFF");
+        ancillary.extend_from_slice(&(valid.len() as u32 + 6).to_le_bytes());
+        ancillary.extend_from_slice(&valid[8..36]);
+        ancillary.extend_from_slice(b"AIGC");
+        ancillary.extend_from_slice(&2_u32.to_le_bytes());
+        ancillary.extend_from_slice(b"{}");
+        ancillary.extend_from_slice(&valid[36..]);
+        assert!(wav_seconds(&ancillary, 30.0).is_ok());
     }
 
     #[tokio::test]

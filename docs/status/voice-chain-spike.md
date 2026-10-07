@@ -44,3 +44,5 @@
 3. 根据实测决定流式ASR/分句TTS路线，再推进T11/T12；T06/T10记录恢复与T13/T14有限记忆仍按[交付计划](../planning/delivery-backlog.md)接续。
 
 协议依据：[智谱ASR文档](https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-asr-2512)规定WAV/MP3与30秒输入限制；[TTS接口](https://docs.bigmodel.cn/api-reference/模型-api/文本转语音)提供模型、音色和WAV格式参数。本轮只采用这些协议事实，不采用宣传中的识别率作为本项目证据。[MDN getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)说明安全上下文、授权及迟迟不返回的可能性，对应实现中的显式启动和迟到释放逻辑。
+
+接续（2026-10-07）：真实云端全链、麦克风权限、停止与账单已在智谱验证，期间发现并修复智谱WAV头RIFF size兼容缺陷，见[真实语音全链记录](voice-real-chain.md)。本文的429教训与地址/密钥拆分设计继续有效。
