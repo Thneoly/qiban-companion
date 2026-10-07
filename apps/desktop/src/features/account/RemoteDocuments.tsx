@@ -30,6 +30,7 @@ export function RemoteDocuments({
     alive = useRef(false),
     acting = useRef(false),
     seq = useRef(0),
+    fileInput = useRef<HTMLInputElement>(null),
     auth = useRef(onAuthError);
   auth.current = onAuthError;
   function fail(e: unknown) {
@@ -151,6 +152,7 @@ export function RemoteDocuments({
         <label htmlFor="remote-source">选择要分享摘录的文档</label>
         <input
           id="remote-source"
+          ref={fileInput}
           type="file"
           accept=".txt,.md"
           disabled={busy}
@@ -174,13 +176,34 @@ export function RemoteDocuments({
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                const doc = decodeDocument(
-                  await invoke("remote_document_share", { id: prepared.id }),
-                );
-                if (alive.current) {
-                  setPrepared(null);
-                  setShared(doc.authorization.binding.actionId);
-                  await refresh();
+                try {
+                  const doc = decodeDocument(
+                    await invoke("remote_document_share", { id: prepared.id }),
+                  );
+                  if (alive.current) {
+                    setPrepared(null);
+                    setShared(doc.authorization.binding.actionId);
+                    await refresh();
+                  }
+                } catch (e) {
+                  // "重新选择文件" must actually work: re-picking the SAME
+                  // file fires no change event (the input value is
+                  // unchanged), so the request id would never roll and
+                  // prepare would keep returning the finished task. Reset
+                  // the picker so any re-selection starts a fresh task.
+                  if (
+                    e &&
+                    typeof e === "object" &&
+                    "code" in e &&
+                    String(e.code) === "document_finished"
+                  ) {
+                    setFile(null);
+                    setPrepared(null);
+                    setShared(null);
+                    request.current = crypto.randomUUID();
+                    if (fileInput.current) fileInput.current.value = "";
+                  }
+                  throw e;
                 }
               })
             }
