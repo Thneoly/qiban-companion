@@ -390,3 +390,46 @@ test('the transcript subtitle appears before any reply text streams', async ({ p
   await page.evaluate(() => (window as any).onChatCancel?.());
   await expect(mic(page)).toHaveText('语音说话');
 });
+
+test('the svg mouth follows playback amplitude in coarse steps', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Headless autoplay policy may suspend the audio context and starve the
+  // analyser; the mouth chain itself is what needs testing, so the context
+  // gate is forced open and the analyser data is synthesised on demand.
+  await page.evaluate(() => {
+    const w = window as any;
+    const real = window.AudioContext;
+    class Forced extends real {
+      get state() { return 'running'; }
+      async resume() { try { await super.resume(); } catch { /* forced */ } }
+    }
+    window.AudioContext = Forced;
+    const read = AnalyserNode.prototype.getByteTimeDomainData;
+    AnalyserNode.prototype.getByteTimeDomainData = function (array: Uint8Array) {
+      if (w.mouthDrive) { for (let i = 0; i < array.length; i++) array[i] = i % 2 ? 230 : 26; return; }
+      return read.call(this, array);
+    };
+  });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。'];
+    w.hangPlayCount = 1;
+  });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).playLog.length)).toBe(1);
+  const mouth = page.locator('.pet-character svg .avatar-mouth');
+  await expect(mouth).toHaveAttribute('data-level', '0');
+  // A loud square wave opens the mouth fully (RMS≈0.8, smoothed over 150ms);
+  // silence closes it again and restores the resting mouth line.
+  await page.evaluate(() => { (window as any).mouthDrive = true; });
+  await expect.poll(() => mouth.getAttribute('data-level')).toBe('4');
+  await page.evaluate(() => { (window as any).mouthDrive = false; });
+  await expect.poll(() => mouth.getAttribute('data-level')).toBe('0');
+  await expect(page.locator('.pet-character svg .resting-mouth')).toBeVisible();
+  await page.evaluate(() => (window as any).releasePlays());
+  await expect(mic(page)).toHaveText('语音说话');
+});

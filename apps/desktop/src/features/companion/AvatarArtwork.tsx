@@ -1,11 +1,33 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { CompanionState } from './presentation';
 
+/** Coarse mouth opening steps driven by the speech amplitude ref. */
+const MOUTH_STEPS = [1.5, 3, 4.5, 6];
+
 /** Original code-native prototype artwork, revision 2. No external character assets. */
-export function AvatarArtwork({ state = 'idle' }: { state?: CompanionState }) {
+export function AvatarArtwork({ state = 'idle', mouth }: { state?: CompanionState; mouth?: { current: number } }) {
   const gradient = useId();
   const fill = `url(#${gradient})`;
   const resting = state === 'quiet' || state === 'paused';
+  const restingMouth = useRef<SVGPathElement>(null);
+  const speakingMouth = useRef<SVGEllipseElement>(null);
+  useEffect(() => {
+    if (!mouth) return;
+    let frame = 0;
+    const tick = () => {
+      const amplitude = mouth.current;
+      const level = amplitude > 0.75 ? 4 : amplitude > 0.5 ? 3 : amplitude > 0.25 ? 2 : amplitude > 0.02 ? 1 : 0;
+      // Direct DOM writes between React renders: JSX props stay stable, so
+      // re-renders never clobber the moving mouth.
+      speakingMouth.current?.setAttribute('data-level', String(level));
+      speakingMouth.current?.setAttribute('display', level ? 'inline' : 'none');
+      speakingMouth.current?.setAttribute('ry', String(MOUTH_STEPS[level - 1] ?? MOUTH_STEPS[0]));
+      restingMouth.current?.setAttribute('display', level ? 'none' : 'inline');
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [mouth]);
   return (<svg viewBox="0 0 280 310" data-expression={state} role="img" aria-label="白色小精灵栖栖，戴着紫色围巾">
         <defs><linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1"><stop stopColor="#fffefc"/><stop offset="1" stopColor="#e5ddf7"/></linearGradient></defs>
         <ellipse cx="140" cy="285" rx="66" ry="12" fill="#b4a4d0" opacity=".18"/>
@@ -16,7 +38,8 @@ export function AvatarArtwork({ state = 'idle' }: { state?: CompanionState }) {
           <ellipse cx="89" cy="162" rx="14" ry="8" fill="#edcbd7"/><ellipse cx="193" cy="162" rx="14" ry="8" fill="#edcbd7"/>
           {resting ? <path className="resting-eyes" d="M106 148Q112 152 118 148M165 148Q171 152 177 148" fill="none" stroke="#514363" strokeWidth="3" strokeLinecap="round"/> : state === 'pleased' ? <path d="M106 150Q112 139 118 150M165 150Q171 139 177 150" fill="none" stroke="#514363" strokeWidth="3" strokeLinecap="round"/> : <g className="eyes"><ellipse cx="112" cy="148" rx="5" ry="8" fill="#514363"/><ellipse cx="171" cy="148" rx="5" ry="8" fill="#514363"/></g>}
           {state === 'concerned' && <path d="M105 134L118 129M165 129L178 134" fill="none" stroke="#675078" strokeWidth="3" strokeLinecap="round"/>}
-          <path d={state === 'concerned' ? 'M134 169Q141 163 149 169' : resting ? 'M136 166L147 166' : 'M134 164Q141 172 149 164'} fill="none" stroke="#675078" strokeWidth="3" strokeLinecap="round"/>
+          <path ref={restingMouth} className="resting-mouth" d={state === 'concerned' ? 'M134 169Q141 163 149 169' : resting ? 'M136 166L147 166' : 'M134 164Q141 172 149 164'} fill="none" stroke="#675078" strokeWidth="3" strokeLinecap="round"/>
+          {mouth && <ellipse ref={speakingMouth} className="avatar-mouth" cx="141" cy="172" rx="8" ry="1.5" fill="#675078" display="none"/>}
           <path d="M76 186Q141 207 208 185L210 208Q143 231 73 208Z" fill="#9d85cd"/>
           <path d="M173 205L196 207L187 247Q175 252 165 243Z" fill="#b49adf"/>
           <path d="M66 207Q35 185 37 205Q42 225 65 236" fill="#eee9f6" stroke="#e5dff0" strokeWidth="2"/>
