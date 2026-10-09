@@ -188,8 +188,15 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     onStopChat: () => void stop(),
     mouth,
   });
-  useEffect(() => { onVoiceActive?.(voice.micState === 'transcribing' || voice.micState === 'speaking'); }, [voice.micState, onVoiceActive]);
-  useEffect(() => () => { onVoiceActive?.(false); }, [onVoiceActive]); // a stale true would pin the bubble open forever
+  // Reported during render, not from an effect: micState flips inside native
+  // recorder/audio callbacks, and the pet's blur handler reads the flag from a
+  // raw listener — a passive effect would leave a scheduler-tick window where
+  // blur sees a stale value and kills the turn it should protect. The callback
+  // only assigns a ref (idempotent, safe in StrictMode and discarded renders);
+  // same pattern as the pet's appearanceOpenRef. The unmount reset below is
+  // what keeps a stale true from pinning the bubble open forever.
+  onVoiceActive?.(voice.micState === 'transcribing' || voice.micState === 'speaking');
+  useEffect(() => () => { onVoiceActive?.(false); }, [onVoiceActive]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     await send(draft.trim());
