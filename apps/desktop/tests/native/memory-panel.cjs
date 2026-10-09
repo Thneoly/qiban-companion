@@ -21,7 +21,7 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);db.close();
+  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,4);db.close();
   await invoke(pet,'pet_action',{action:'open_memory'});
   await panel.getByRole('region',{name:'我们的记忆'}).getByRole('button',{name:'保存记忆',exact:true}).waitFor();
 }
@@ -50,7 +50,7 @@ async function exportFile(destination,overwrite=false){
   await exportFile();const exported=path.join(evidence,'memories.json');await exportFile(exported);
   assert.equal(JSON.parse(fs.readFileSync(exported,'utf8')).items[0].body,'合成经历：完成一次徒步🌱');
   await memory().locator('article').getByRole('button',{name:'更正',exact:true}).click();await memory().getByLabel('记忆内容').fill('合成经历：已更正');
-  await memory().getByRole('button',{name:'检查更正影响'}).click();await memory().getByRole('button',{name:'确认并清空聊天'}).click();await expect(memory().locator('article')).toContainText('合成经历：已更正');
+  await memory().getByRole('button',{name:'检查更正影响'}).click();await memory().getByRole('button',{name:'确认并开始新对话'}).click();await expect(memory().locator('article')).toContainText('合成经历：已更正');
   await exportFile(exported,true);assert.equal(JSON.parse(fs.readFileSync(exported,'utf8')).items[0].body,'合成经历：已更正');
   await memory().screenshot({path:path.join(evidence,'memory-panel.png')});
   await invoke(panel,'model_settings_save',{config:{baseUrl:`http://127.0.0.1:${server.address().port}`,model:'m2-fixture',useApiKey:false,maxOutputTokens:1024}});
@@ -61,7 +61,7 @@ async function exportFile(destination,overwrite=false){
   },requestContext);
   for(let n=0;n<100&&!requests.length;n++)await delay(100);assert.equal(requests.length,1);
   assert(!JSON.stringify(requests[0]).includes('合成经历'),'M2 must not inject memory');
-  await memory().getByRole('button',{name:'删除全部记忆'}).click();await memory().getByRole('button',{name:'确认并清空聊天'}).click();await expect(memory()).toContainText('还没有留下记忆');
+  await memory().getByRole('button',{name:'删除全部记忆'}).click();await memory().getByRole('button',{name:'确认并开始新对话'}).click();await expect(memory()).toContainText('还没有留下记忆');
   heldResponse.end('data: {"choices":[{"delta":{"content":"迟到文本"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
   await expect.poll(()=>pet.evaluate(()=>window.testResult?.ok)).toBe(false);
   assert.deepEqual(await invoke(pet,'chat_history'),[]);

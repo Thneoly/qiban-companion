@@ -82,8 +82,8 @@ export function MemoryPanel() {
     {note && <p role="status" className="memory-notice">{note}</p>}
     {pending && <div className="memory-confirm" role="alertdialog" aria-labelledby="memory-confirm-title" aria-describedby="memory-confirm-description">
       <h3 id="memory-confirm-title">{pending.action === 'update' ? '确认更正记忆' : pending.action === 'delete_all' ? '确认删除全部记忆' : '确认删除这条记忆'}</h3>
-      <p id="memory-confirm-description">这会停止正在生成的回复，并清空这台电脑上<strong>全部模型的聊天记录</strong>，避免继续引用旧内容。{pending.action === 'delete_all' ? '全部记忆正文将删除。' : pending.action === 'delete' ? '此条记忆正文将删除。' : '原正文将被替换。'}已发给服务商的内容和已导出的文件不能撤回。</p>
-      <button autoFocus disabled={busy} onClick={() => pending && void mutate({ ...pending, restartConversation: true }, pending.action === 'update' ? '记忆已更正。' : '记忆已删除。')}>确认并清空聊天</button><button disabled={busy} onClick={() => setPending(null)}>返回，不修改</button>
+      <p id="memory-confirm-description">这会停止正在生成的回复，并删除使用过{pending.action === 'delete_all' ? '这些' : '这条'}记忆的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。{pending.action === 'delete_all' ? '全部记忆正文将删除。' : pending.action === 'delete' ? '此条记忆正文将删除。' : '原正文将被替换。'}已发给服务商的内容和已导出的文件不能撤回。</p>
+      <button autoFocus disabled={busy} onClick={() => pending && void mutate({ ...pending, restartConversation: true }, pending.action === 'update' ? '记忆已更正。' : '记忆已删除。')}>确认并开始新对话</button><button disabled={busy} onClick={() => setPending(null)}>返回，不修改</button>
     </div>}
     <div className="memory-layout">
       <form onSubmit={save} className="memory-form">
@@ -93,7 +93,7 @@ export function MemoryPanel() {
           <label>记忆内容<textarea rows={5} maxLength={800} value={draft.body} onChange={e => setDraft({ ...draft, body: e.target.value })} placeholder="例如：讨论方案时，先给结论，再讲理由。" aria-describedby="memory-body-count"/></label>
           <small id="memory-body-count" className={count > 200 ? 'memory-error' : ''}>{count} / 200 字符</small>
           <label>经历日期（可选）<input type="date" value={draft.eventDate ?? ''} onChange={e => setDraft({ ...draft, eventDate: e.target.value || null })}/></label>
-          <p className="memory-help">来源固定为“用户在记忆面板填写”。新增会停止当前生成，保留已有聊天；更正须确认清空聊天。</p>
+          <p className="memory-help">来源固定为“用户在记忆面板填写”。新增会停止当前生成，保留已有聊天；更正须确认开始新对话。</p>
           <button type="submit" disabled={!editing && (snapshot?.items.length ?? 0) >= 30}>{editing ? '检查更正影响' : '保存记忆'}</button>
           {editing && <button type="button" onClick={() => { setEditing(null); setDraft(empty); }}>取消编辑</button>}
         </fieldset>

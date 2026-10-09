@@ -302,8 +302,8 @@ export function PersonalMemoryPanel() {
       {injectionError && <p role="alert" className="personal-memory-error">{injectionError}</p>}
       {confirming && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
         <h4 id="personal-injection-confirm-title">确认收回个人记忆使用</h4>
-        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并清空这台电脑上<strong>全部模型的聊天记录</strong>。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
-        <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并清空聊天</button>
+        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并删除使用过所移除条目的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
+        <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并开始新对话</button>
         <button disabled={injectionBusy} onClick={() => setConfirming(false)}>返回，不修改</button>
       </div>}
       <button disabled={injectionBusy || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirming(true); else void saveInjection(false); }}>保存选择</button>

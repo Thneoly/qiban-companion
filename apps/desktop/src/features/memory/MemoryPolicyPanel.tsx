@@ -45,7 +45,7 @@ export function MemoryPolicyPanel({ items, epoch, locked }: { items: MemoryRecor
       <small>{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送</small>
       <button type="button" disabled={chosen.length>5||chars>800} onClick={()=>void save()}>保存此模型的记忆设置</button>
     </fieldset>
-    {confirm&&<div role="alertdialog" aria-label="确认收回记忆使用" className="memory-confirm"><p>停用或移除选择会停止正在生成的回复，清空本机全部模型的聊天。保留本机记忆条目；已经发给服务商的内容不能撤回。</p><button disabled={busy} onClick={()=>void save(true)}>确认收回并清空聊天</button><button disabled={busy} onClick={()=>setConfirm(false)}>返回</button></div>}
+    {confirm&&<div role="alertdialog" aria-label="确认收回记忆使用" className="memory-confirm"><p>停用或移除选择会停止正在生成的回复，并删除使用过所移除条目的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。保留本机记忆条目；已经发给服务商的内容不能撤回。</p><button disabled={busy} onClick={()=>void save(true)}>确认收回并开始新对话</button><button disabled={busy} onClick={()=>setConfirm(false)}>返回</button></div>}
     {message&&<p role="status" className="memory-notice">{message}</p>}
   </section>;
 }

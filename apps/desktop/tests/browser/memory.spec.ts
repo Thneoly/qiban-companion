@@ -48,14 +48,14 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await card.getByRole('button',{name:'更正',exact:true}).click();
   await panel.getByLabel('记忆内容').fill('先说结论，再列证据');
   await panel.getByRole('button',{name:'检查更正影响'}).click();
-  await expect(panel.getByRole('alertdialog')).toContainText('全部模型的聊天记录');
+  await expect(panel.getByRole('alertdialog')).toContainText('使用过这条记忆的对话');
   await panel.getByRole('button',{name:'返回，不修改'}).click();
   expect(await page.evaluate(()=>(window as any).memoryMutations.length)).toBe(1);
   await panel.getByRole('button',{name:'检查更正影响'}).click();
-  await panel.getByRole('button',{name:'确认并清空聊天'}).click();
+  await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(card).toContainText('先说结论，再列证据');
   await card.getByRole('button',{name:'删除',exact:true}).click();
-  await panel.getByRole('button',{name:'确认并清空聊天'}).click();
+  await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel).toContainText('还没有留下记忆');
 });
 
@@ -76,7 +76,7 @@ test('keeps drafts and records on failure, and distinguishes cancelled exports a
   await expect(panel.getByRole('status')).toContainText('已导出1条');
   await panel.getByRole('button',{name:'删除全部记忆'}).click();
   await page.evaluate(()=>{(window as any).memoryEpoch++;});
-  await panel.getByRole('button',{name:'确认并清空聊天'}).click();
+  await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel.getByRole('alert')).toContainText('已变化');
   await expect(panel.locator('article')).toHaveCount(1);
 });
