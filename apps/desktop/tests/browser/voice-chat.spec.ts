@@ -316,6 +316,37 @@ test('interrupting speech drops late clips, cancels both legs, and allows a fres
   await expect(mic(page)).toHaveText('语音说话');
 });
 
+test('a speaking turn survives pet-window blur and collapse resumes once idle', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // One clip hangs mid-synthesis so the turn is solidly in speaking state.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。'];
+    w.hangGenerate = true;
+    w.speakDelays = { 0: 'hang' };
+  });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('停止朗读');
+  // Blur while speaking: the bubble stays, the turn keeps running — no cancel
+  // of either leg, the stop control remains reachable.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(mic(page)).toBeVisible();
+  await expect(mic(page)).toHaveText('停止朗读');
+  expect(await page.evaluate(() => ({ turn: (window as any).turnCancels.length, chat: (window as any).chatCancels.length }))).toEqual({ turn: 0, chat: 0 });
+  // Settle the turn (chat leg resolves, hung synthesis lands and plays), then
+  // a fresh blur collapses the dialog again — the exemption is per-turn only.
+  await page.evaluate(() => (window as any).onChatCancel?.());
+  await page.evaluate(() => (window as any).releaseSpeak());
+  await expect(mic(page)).toHaveText('语音说话');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(page.getByLabel('栖栖的交互气泡')).toBeHidden();
+  await expect(page.getByRole('button', { name: '和栖栖互动' })).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('the first clip keeps its tone, later clips report trimming, and the untrimmed fallback engages', async ({ page }) => {
   await mockVoiceChat(page);
   await page.goto('/');

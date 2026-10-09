@@ -370,9 +370,11 @@ export function useVoiceTurn(options: {
       if (!disposed) { setMicState('off'); setGuidance('语音配置读取失败，已停用麦克风；请收起后重开气泡重试。'); }
     });
     // Blur cancels an open recording (a half-finished take is useless). Live
-    // speech itself is only interrupted here if the bubble unmounts — the pet
-    // window's own blur handler collapses the dialog, and that unmount runs
-    // interrupt(), so in practice refocusing elsewhere also stops playback.
+    // speech is NOT interrupted by blur: the pet surface keeps the bubble (and
+    // this hook) mounted while a turn is transcribing or speaking, so the
+    // companion finishes its sentence. Escape, the × button, quiet/hide and a
+    // blur outside an active turn still unmount the bubble, whose cleanup
+    // interrupts everything.
     const blur = () => {
       if (!recording.current) return;
       generation.current++; release(); recording.current = false;
