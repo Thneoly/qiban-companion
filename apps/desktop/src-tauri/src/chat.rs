@@ -6,7 +6,7 @@ use crate::personal_memory_context::{
     PersonalSeqReference,
 };
 use companion_core::{
-    conversation::{ChatTurn, Conversation},
+    conversation::{ChatTurn, ChatTurnUsage, Conversation},
     memory::{Memory, MemoryScope},
 };
 use companion_storage::history::HistoryStore;
@@ -35,12 +35,28 @@ impl ChatState {
     }
 }
 impl ChatInner {
-    pub(crate) fn invalidate_memory(&mut self, clear: bool) {
+    pub(crate) fn invalidate_memory(&mut self, history_changed: bool) {
         if let Some((_, signal)) = self.active.take() {
             let _ = signal.send(true);
         }
-        if clear {
-            self.conversation.clear();
+        if history_changed {
+            // Precise cleanup leaves a surviving prefix on disk; an empty
+            // in-memory view would resurrect it on restart (ghost split), so
+            // reload the current scope. The clear still bumps the version —
+            // in-flight completions must stay dead (DEL12).
+            let reload = self.conversation.scope().and_then(|(base, model)| {
+                self.store
+                    .as_ref()
+                    .and_then(|store| store.load(&base, &model).ok())
+                    .map(|turns| (base, model, turns))
+            });
+            match reload {
+                Some((base, model, turns)) => {
+                    self.conversation.clear();
+                    self.conversation.restore(&base, &model, turns);
+                }
+                None => self.conversation.clear(),
+            }
         }
     }
     fn ensure_current(&self, id: &str, epoch: i64, version: u64) -> Result<(), String> {
@@ -83,14 +99,21 @@ impl ChatInner {
         self.conversation.clear();
         Ok(())
     }
-    fn complete(&mut self, base: &str, model: &str, version: u64, turn: ChatTurn) -> bool {
+    fn complete(
+        &mut self,
+        base: &str,
+        model: &str,
+        version: u64,
+        turn: ChatTurn,
+        usage: &[ChatTurnUsage],
+    ) -> bool {
         if self.conversation.version() != version || !self.conversation.matches(base, model) {
             return false;
         }
         let Some(store) = self.store.as_mut() else {
             return false;
         };
-        match store.append(base, model, &turn) {
+        match store.append_with_usage(base, model, &turn, usage) {
             Ok(turns) => {
                 self.conversation.restore(base, model, turns);
                 true
@@ -375,7 +398,22 @@ pub async fn chat_generate(
             let (usage, reply)=result.map_err(|_| "回复超时，请稍后重试")??;
             let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
             inner.ensure_current(&request.request_id, epoch, version)?;
-            let history_saved = inner.complete(&config.base_url, &config.model, version, ChatTurn { user:request.prompt.clone(), assistant:reply });
+            // The receipt says what was sent to the provider; the ledger below
+            // records what entered local history, written in the same
+            // transaction as the turn (failed/cancelled turns leave no rows).
+            let ledger: Vec<ChatTurnUsage> = usage_receipt
+                .memories
+                .iter()
+                .map(|m| ChatTurnUsage::app(m.id.clone(), m.revision))
+                .chain(
+                    usage_receipt
+                        .personal
+                        .memories
+                        .iter()
+                        .map(|p| ChatTurnUsage::personal(p.id, p.seq)),
+                )
+                .collect();
+            let history_saved = inner.complete(&config.base_url, &config.model, version, ChatTurn { user:request.prompt.clone(), assistant:reply }, &ledger);
             Ok(ChatResult { request_id:request.request_id, elapsed_ms:started.elapsed().as_millis(), usage, history_saved, memory_usage: usage_receipt.clone() })
         }
     }
@@ -622,7 +660,7 @@ mod tests {
         assert!(inner
             .ensure_current("finished-network", 1, version)
             .is_err());
-        assert!(!inner.complete("https://q6.invalid", "fixture", version, completed));
+        assert!(!inner.complete("https://q6.invalid", "fixture", version, completed, &[]));
         assert!(inner
             .store
             .as_ref()
@@ -632,6 +670,76 @@ mod tests {
             .is_empty());
         drop(inner);
         drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn precise_cleanup_reloads_the_surviving_prefix_into_memory() {
+        let path = std::env::temp_dir().join(format!("q6-reload-{}.db", uuid::Uuid::new_v4()));
+        {
+            let state = ChatState::open(&path);
+            let mut inner = state.0.lock().unwrap();
+            inner.select("https://q6.invalid", "fixture").unwrap();
+            let memory = inner
+                .store
+                .as_mut()
+                .unwrap()
+                .memory_create(
+                    &companion_core::memory::MemoryDraft {
+                        kind: companion_core::memory::MemoryKind::Preference,
+                        body: "used".into(),
+                        event_date: None,
+                    },
+                    0,
+                )
+                .unwrap()
+                .value;
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .append_with_usage(
+                    "https://q6.invalid",
+                    "fixture",
+                    &ChatTurn {
+                        user: "前缀问题".into(),
+                        assistant: "前缀回答".into(),
+                    },
+                    &[],
+                )
+                .unwrap();
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .append_with_usage(
+                    "https://q6.invalid",
+                    "fixture",
+                    &ChatTurn {
+                        user: "载入问题".into(),
+                        assistant: "载入回答".into(),
+                    },
+                    &[ChatTurnUsage::app(memory.id.clone(), memory.revision)],
+                )
+                .unwrap();
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .memory_delete(&memory.id, memory.revision, 1)
+                .unwrap();
+            inner.invalidate_memory(true);
+            // Reload keeps the surviving prefix; an in-memory clear would
+            // resurrect it on restart (ghost split).
+            let history = inner.conversation.history();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].user, "前缀问题");
+        }
+        {
+            let state = ChatState::open(&path);
+            let mut inner = state.0.lock().unwrap();
+            inner.select("https://q6.invalid", "fixture").unwrap();
+            assert_eq!(inner.conversation.history()[0].user, "前缀问题");
+        }
         std::fs::remove_file(path).unwrap();
     }
     #[test]
@@ -775,7 +883,7 @@ mod tests {
             let mut inner = state.0.lock().unwrap();
             inner.select("a", "model").unwrap();
             let version = inner.conversation.version();
-            assert!(inner.complete("a", "model", version, turn()));
+            assert!(inner.complete("a", "model", version, turn(), &[]));
         }
         {
             let state = ChatState::open(&path);
@@ -787,14 +895,14 @@ mod tests {
             assert!(inner.conversation.history().is_empty());
             inner.select("a", "model").unwrap();
             assert_eq!(inner.conversation.history(), vec![turn()]);
-            assert!(!inner.complete("a", "model", version, turn()));
+            assert!(!inner.complete("a", "model", version, turn(), &[]));
             let version = inner.conversation.version();
             let (signal, _) = watch::channel(false);
             inner.active = Some(("pending".into(), signal));
             assert!(inner.clear().is_err());
             inner.active = None;
             inner.clear().unwrap();
-            assert!(!inner.complete("a", "model", version, turn()));
+            assert!(!inner.complete("a", "model", version, turn(), &[]));
         }
         {
             let state = ChatState::open(&path);

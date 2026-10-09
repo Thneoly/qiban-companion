@@ -133,7 +133,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
         if (r.enabled && r.selectedIds.reduce((n: number, id: number) => { const record = records.find((m: any) => m.id === id); return n + (record ? [...record.content].length : 0); }, 0) > 800) throw { code: 'selection_too_large' };
         w.policyWrites.push(r);
         w.policyState = { enabled: r.enabled && r.selectedIds.length > 0, revision: w.policyState.revision + 1, selectedIds: r.selectedIds, epoch: w.policyState.epoch + 1 };
-        return { contextEpoch: w.policyState.epoch, chatCleared: removing, notificationsDelivered: true };
+        return { contextEpoch: w.policyState.epoch, chatCleared: removing, clearedTurns: removing ? 1 : 0, notificationsDelivered: true };
       }
       return baseInvoke(cmd, args);
     };
@@ -169,7 +169,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   // Removal requires the confirm dialog; cancelling does not write.
   await section.getByText('#1 洞察一').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
-  await expect(section.getByRole('alertdialog')).toContainText('全部模型的聊天');
+  await expect(section.getByRole('alertdialog')).toContainText('仍在其他模型选用的对话不动');
   await section.getByRole('button', { name: '返回，不修改' }).click();
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(1);
 
@@ -178,8 +178,9 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   await section.getByText('允许此模型使用所选个人记忆').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
   await expect(section.getByRole('alertdialog')).toBeVisible();
-  await section.getByRole('button', { name: '确认收回并清空聊天' }).click();
+  await section.getByRole('button', { name: '确认收回并开始新对话' }).click();
   await expect(section).toContainText('已保存状态：关闭');
+  await expect(section.getByRole('status')).toContainText('已清除使用过所移除条目的最近 1 轮对话');
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(2);
   expect(await page.evaluate(() => (window as any).policyWrites[1].restartConversation)).toBe(true);
 });

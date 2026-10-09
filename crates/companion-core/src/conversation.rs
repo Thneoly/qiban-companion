@@ -6,6 +6,44 @@ pub struct ChatTurn {
     pub assistant: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnUsageKind {
+    App,
+    Personal,
+}
+
+/// What one persisted turn actually carried into the provider request.
+/// Mirrors the send-time receipt; storage persists it into chat_turn_usage
+/// so precise cleanup can find every turn that used a memory item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTurnUsage {
+    pub kind: TurnUsageKind,
+    pub memory_id: String,
+    pub revision: i64,
+    pub personal_id: i64,
+    pub personal_seq: i64,
+}
+impl ChatTurnUsage {
+    pub fn app(memory_id: String, revision: i64) -> Self {
+        Self {
+            kind: TurnUsageKind::App,
+            memory_id,
+            revision,
+            personal_id: 0,
+            personal_seq: 0,
+        }
+    }
+    pub fn personal(personal_id: i64, personal_seq: i64) -> Self {
+        Self {
+            kind: TurnUsageKind::Personal,
+            memory_id: String::new(),
+            revision: 0,
+            personal_id,
+            personal_seq,
+        }
+    }
+}
+
 /// Bounded model context. Persistence is owned by the storage layer.
 #[derive(Default, Clone)]
 pub struct Conversation {
@@ -18,6 +56,11 @@ impl Conversation {
         self.identity
             .as_ref()
             .is_some_and(|(b, m)| b == base && m == model)
+    }
+    /// The currently selected (base, model), if any — callers use it to
+    /// reload the persisted archive for the same scope.
+    pub fn scope(&self) -> Option<(String, String)> {
+        self.identity.clone()
     }
     pub fn restore(&mut self, base: &str, model: &str, turns: Vec<ChatTurn>) {
         self.select(base, model);

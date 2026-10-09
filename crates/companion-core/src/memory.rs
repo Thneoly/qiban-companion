@@ -27,7 +27,7 @@ pub enum MemoryError {
     CounterExhausted,
     #[error("记忆不存在或已删除")]
     NotFound,
-    #[error("请先确认清空全部聊天")]
+    #[error("请先确认开始新对话（将停止当前回复并清理相关聊天）")]
     ConfirmationRequired,
 }
 

@@ -1,6 +1,6 @@
 //! Fixed Q6 storage cases. Crash injection is compiled only in test binaries.
 use super::*;
-use companion_core::conversation::ChatTurn;
+use companion_core::conversation::{ChatTurn, ChatTurnUsage};
 fn draft(body: &str) -> MemoryDraft {
     MemoryDraft {
         kind: MemoryKind::Preference,
@@ -14,6 +14,12 @@ fn scope() -> MemoryScope {
         model: "fixture".into(),
     }
 }
+fn q6_turn() -> ChatTurn {
+    ChatTurn {
+        user: "Q6 合成问题".into(),
+        assistant: "Q6 合成旧回答".into(),
+    }
+}
 fn fixture() -> (HistoryStore, Memory) {
     let mut db = Connection::open_in_memory().unwrap();
     db.pragma_update(None, "foreign_keys", true).unwrap();
@@ -22,24 +28,33 @@ fn fixture() -> (HistoryStore, Memory) {
     tx.execute_batch(include_str!("memory-schema.sql")).unwrap();
     tx.execute_batch(include_str!("memory-schema-v3.sql"))
         .unwrap();
+    tx.execute_batch(include_str!("memory-schema-v4.sql"))
+        .unwrap();
     tx.commit().unwrap();
     let mut store = HistoryStore(db);
     let memory = store.memory_create(&draft("Q6 合成正文"), 0).unwrap().value;
     policy(&mut store, vec![memory.id.clone()], true);
-    append(&mut store);
+    append_using(&mut store, &memory);
     (store, memory)
+}
+/// One q6-scope turn that carried the selected memory at send time, plus one
+/// foreign-scope turn that carried nothing — the asymmetry precise cleanup
+/// keys on.
+fn append_using(s: &mut HistoryStore, m: &Memory) {
+    s.append_with_usage(
+        "https://q6.invalid",
+        "fixture",
+        &q6_turn(),
+        &[ChatTurnUsage::app(m.id.clone(), m.revision)],
+    )
+    .unwrap();
+    s.append_with_usage("https://other.invalid", "fixture", &q6_turn(), &[])
+        .unwrap();
 }
 fn append(s: &mut HistoryStore) {
     for base in ["https://q6.invalid", "https://other.invalid"] {
-        s.append(
-            base,
-            "fixture",
-            &ChatTurn {
-                user: "Q6 合成问题".into(),
-                assistant: "Q6 合成旧回答".into(),
-            },
-        )
-        .unwrap();
+        s.append_with_usage(base, "fixture", &q6_turn(), &[])
+            .unwrap();
     }
 }
 fn chats(s: &HistoryStore) -> i64 {
@@ -65,8 +80,14 @@ fn policy(s: &mut HistoryStore, ids: Vec<String>, confirm: bool) -> MemoryCommit
 fn q6_del01_single_delete() {
     let (mut s, m) = fixture();
     let epoch = s.context_epoch().unwrap();
-    assert!(s.memory_delete(&m.id, 1, epoch).unwrap().chat_cleared);
-    assert_eq!(chats(&s), 0);
+    // Precise: only the q6-scope turn that carried the memory goes; the
+    // foreign-scope turn that carried nothing survives (M4 exit-review fix).
+    let commit = s.memory_delete(&m.id, 1, epoch).unwrap();
+    assert!(commit.chat_cleared);
+    assert_eq!(commit.cleared_turns, 1);
+    assert!(s.load("https://q6.invalid", "fixture").unwrap().is_empty());
+    assert_eq!(s.load("https://other.invalid", "fixture").unwrap().len(), 1);
+    assert_eq!(chats(&s), 1);
     assert!(s.memory_list().unwrap().is_empty());
     let content: Option<String> =
         s.0.query_row("SELECT body FROM memories WHERE id=?1", [m.id], |r| {
@@ -81,13 +102,15 @@ fn q6_del02_delete_all() {
     let (mut s, _) = fixture();
     s.memory_create(&draft("second"), s.context_epoch().unwrap())
         .unwrap();
-    assert!(
-        s.memory_delete_all(s.context_epoch().unwrap())
-            .unwrap()
-            .chat_cleared
-    );
+    // delete_all shares the precise semantics: only turns that carried one of
+    // the removed items go. The unused second memory prunes nothing extra.
+    let commit = s.memory_delete_all(s.context_epoch().unwrap()).unwrap();
+    assert!(commit.chat_cleared);
+    assert_eq!(commit.cleared_turns, 1);
     assert!(s.memory_list().unwrap().is_empty());
-    assert_eq!(chats(&s), 0);
+    assert!(s.load("https://q6.invalid", "fixture").unwrap().is_empty());
+    assert_eq!(s.load("https://other.invalid", "fixture").unwrap().len(), 1);
+    assert_eq!(chats(&s), 1);
     assert!(s.memory_policy(&scope()).unwrap().selected_ids.is_empty());
 }
 #[test]
@@ -96,8 +119,11 @@ fn q6_del03_retry_preserves_new_chat() {
     let epoch = s.context_epoch().unwrap();
     s.memory_delete(&m.id, 1, epoch).unwrap();
     append(&mut s);
-    assert!(!s.memory_delete(&m.id, 1, epoch).unwrap().chat_cleared);
-    assert_eq!(chats(&s), 2);
+    let retry = s.memory_delete(&m.id, 1, epoch).unwrap();
+    assert!(!retry.chat_cleared);
+    assert_eq!(retry.cleared_turns, 0);
+    // The foreign-scope turn survived the first delete, so 1 + 2 new turns.
+    assert_eq!(chats(&s), 3);
 }
 #[test]
 fn q6_del04_stale_all_preserves_new_memory() {
@@ -109,14 +135,20 @@ fn q6_del04_stale_all_preserves_new_memory() {
     append(&mut s);
     assert!(s.memory_delete_all(epoch).is_err());
     assert_eq!(s.memory_list().unwrap()[0].body, "new");
-    assert_eq!(chats(&s), 2);
+    // The never-used foreign turn survived delete_all, plus 2 new turns.
+    assert_eq!(chats(&s), 3);
 }
 #[test]
 fn q6_del05_correct_clears_all_scopes() {
     let (mut s, m) = fixture();
-    s.memory_update(&m.id, 1, s.context_epoch().unwrap(), &draft("corrected"))
+    let commit = s
+        .memory_update(&m.id, 1, s.context_epoch().unwrap(), &draft("corrected"))
         .unwrap();
-    assert_eq!(chats(&s), 0);
+    assert!(commit.chat_cleared);
+    assert_eq!(commit.cleared_turns, 1);
+    // Precise since M4: only the q6-scope carrier turn goes.
+    assert!(s.load("https://q6.invalid", "fixture").unwrap().is_empty());
+    assert_eq!(s.load("https://other.invalid", "fixture").unwrap().len(), 1);
     let new = &s.memory_list().unwrap()[0];
     assert_eq!(new.body, "corrected");
     assert_eq!(new.revision, 2);
@@ -127,7 +159,8 @@ fn q6_del06_disable_keeps_memory() {
     let (mut s, m) = fixture();
     let r = policy(&mut s, vec![], true);
     assert!(r.chat_cleared);
-    assert_eq!(chats(&s), 0);
+    assert_eq!(r.cleared_turns, 1);
+    assert_eq!(chats(&s), 1);
     assert_eq!(s.memory_list().unwrap(), vec![m]);
     assert!(!s.memory_policy(&scope()).unwrap().enabled);
 }
@@ -139,9 +172,11 @@ fn q6_del07_remove_one_selection() {
         .unwrap()
         .value;
     policy(&mut s, vec![m.id, other.id.clone()], true);
+    // Only m was ever carried by a turn; removing it prunes exactly that turn.
     let r = policy(&mut s, vec![other.id.clone()], true);
     assert!(r.chat_cleared);
-    assert_eq!(chats(&s), 0);
+    assert_eq!(r.cleared_turns, 1);
+    assert_eq!(chats(&s), 1);
     assert_eq!(
         s.memory_policy(&scope()).unwrap().selected_ids,
         vec![other.id]
@@ -182,7 +217,7 @@ fn q6_del13_crash_before_commit_rolls_back() {
     let mut s = HistoryStore::open(&path).unwrap();
     let m = s.memory_create(&draft("survives crash"), 0).unwrap().value;
     policy(&mut s, vec![m.id.clone()], true);
-    append(&mut s);
+    append_using(&mut s, &m);
     let epoch = s.context_epoch().unwrap();
     drop(s);
     let result = std::process::Command::new(std::env::current_exe().unwrap())

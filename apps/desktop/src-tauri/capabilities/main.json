@@ -38,6 +38,7 @@
     "allow-memory-list",
     "allow-memory-mutate",
     "allow-memory-export",
+    "allow-chat-usage-impact",
     "allow-chat-context-preview",
     "allow-memory-policy-set",
     "allow-execution-list",

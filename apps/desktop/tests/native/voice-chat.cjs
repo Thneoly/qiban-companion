@@ -50,7 +50,7 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);db.close();
+  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,4);db.close();
   // The invoke tap that works on the real machine: WebView2 exposes every
   // tauri invoke as an http://ipc.localhost/<command> fetch with the args as
   // the POST body. window.__TAURI_INTERNALS__ and window.ipc are injected

@@ -27,7 +27,7 @@ export function MemoryPolicyPanel({ items, epoch, locked }: { items: MemoryRecor
     acting.current=true;setBusy(true);setMessage('');
     const n=++serial.current;
     try {const receipt=decodeMemoryReceipt(await invoke('memory_policy_set',{request:{expectedScope:preview.scope,expectedEpoch:preview.contextEpoch,expectedRevision:preview.policy.revision,enabled,selectedIds:chosen,restartConversation:confirmed}}));
-      if(n===serial.current){setConfirm(false);setMessage(`使用设置已保存在本机。${receipt.chatCleared?'全部模型的聊天已清空。':''}${receipt.notificationsDelivered?'':'另一窗口待刷新。'}`);
+      if(n===serial.current){setConfirm(false);setMessage(`使用设置已保存在本机。${receipt.clearedTurns>0?`已清除使用过所移除条目的最近 ${receipt.clearedTurns} 轮对话，其余保留。`:''}${receipt.notificationsDelivered?'':'另一窗口待刷新。'}`);
         try{const next=decodeContextPreview(await invoke('chat_context_preview'));if(n===serial.current){setPreview(next);setEnabled(next.policy.enabled);setIds(next.policy.selectedIds);}}
         catch{if(n===serial.current){setPreview(null);setMessage('使用设置已保存，但暂时无法刷新；请重新打开面板，不必重复提交。');}}
       }
@@ -45,7 +45,7 @@ export function MemoryPolicyPanel({ items, epoch, locked }: { items: MemoryRecor
       <small>{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送</small>
       <button type="button" disabled={chosen.length>5||chars>800} onClick={()=>void save()}>保存此模型的记忆设置</button>
     </fieldset>
-    {confirm&&<div role="alertdialog" aria-label="确认收回记忆使用" className="memory-confirm"><p>停用或移除选择会停止正在生成的回复，清空本机全部模型的聊天。保留本机记忆条目；已经发给服务商的内容不能撤回。</p><button disabled={busy} onClick={()=>void save(true)}>确认收回并清空聊天</button><button disabled={busy} onClick={()=>setConfirm(false)}>返回</button></div>}
+    {confirm&&<div role="alertdialog" aria-label="确认收回记忆使用" className="memory-confirm"><p>停用或移除选择会停止正在生成的回复，并删除使用过所移除条目、且此后不再使用它的对话：从第一次使用它的一轮起全部清除，之前的对话保留；仍在其他模型选用的对话不动。保留本机记忆条目；已经发给服务商的内容不能撤回。</p><button disabled={busy} onClick={()=>void save(true)}>确认收回并开始新对话</button><button disabled={busy} onClick={()=>setConfirm(false)}>返回</button></div>}
     {message&&<p role="status" className="memory-notice">{message}</p>}
   </section>;
 }

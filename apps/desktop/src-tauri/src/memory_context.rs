@@ -161,6 +161,7 @@ pub fn memory_policy_set(
     Ok(MemoryReceipt {
         context_epoch: result.context_epoch,
         chat_cleared: result.chat_cleared,
+        cleared_turns: result.cleared_turns,
         notifications_delivered: delivered,
     })
 }

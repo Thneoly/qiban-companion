@@ -119,6 +119,7 @@ pub fn run() {
             memory::memory_list,
             memory::memory_mutate,
             memory::chat_context_epoch,
+            memory::chat_usage_impact,
             memory_export::memory_export,
             personal_memory::personal_memory_overview,
             personal_memory::personal_memory_recall,

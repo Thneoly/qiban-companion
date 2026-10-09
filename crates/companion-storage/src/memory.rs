@@ -1,7 +1,8 @@
 //! Internal storage primitives. Host must coordinate cache invalidation before exposing writes.
 use crate::{history::HistoryStore, StorageError};
 use companion_core::{memory::*, now_ms};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Statement, ToSql, TransactionBehavior};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 #[path = "memory_q6_tests.rs"]
@@ -14,7 +15,20 @@ mod tests;
 pub struct MemoryCommit<T> {
     pub value: T,
     pub context_epoch: i64,
+    /// True iff cleared_turns > 0: unrelated scopes keep their chats.
     pub chat_cleared: bool,
+    pub cleared_turns: u64,
+}
+
+/// Per-scope view of what a removal would clear, for confirm dialogs.
+pub struct UsageImpactScope {
+    pub scope: MemoryScope,
+    pub affected_turns: u64,
+    pub kept_turns: u64,
+}
+pub struct UsageImpactReport {
+    pub scopes: Vec<UsageImpactScope>,
+    pub affected_turns_total: u64,
 }
 
 fn timestamp() -> Result<i64, StorageError> {
@@ -167,6 +181,17 @@ pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
             return Err(StorageError::Unavailable);
         }
     }
+    // Usage ledger mirrors the send-time limits: at most 5 app + 5 personal
+    // entries per persisted turn (orphans are caught by foreign_key_check).
+    let over_limit: i64 = db.query_row(
+        "SELECT count(*) FROM (SELECT turn_id, memory_kind FROM chat_turn_usage \
+         GROUP BY turn_id, memory_kind HAVING count(*) > 5)",
+        [],
+        |r| r.get(0),
+    )?;
+    if over_limit != 0 {
+        return Err(StorageError::Unavailable);
+    }
     if db.prepare("PRAGMA foreign_key_check")?.exists([])? {
         return Err(StorageError::Unavailable);
     }
@@ -223,6 +248,7 @@ impl HistoryStore {
                 value: old,
                 context_epoch: change.expected_epoch,
                 chat_cleared: false,
+                cleared_turns: 0,
             });
         }
         let policy = MemoryPolicy {
@@ -239,19 +265,79 @@ impl HistoryStore {
         for (position, id) in policy.selected_ids.iter().enumerate() {
             tx.execute("INSERT INTO memory_selection(base_url,model,memory_id,position) VALUES(?1,?2,?3,?4)", params![scope.base_url,scope.model,id,position as i64])?;
         }
-        if clear {
-            tx.execute("DELETE FROM chat_turns", [])?;
-        }
+        let removed: Vec<String> = old
+            .selected_ids
+            .iter()
+            .filter(|id| !change.selected_ids.contains(id))
+            .cloned()
+            .collect();
+        // Other scopes still selecting a removed item keep injecting it every
+        // turn; pruning their history would drop data the next request carries
+        // again anyway. Their ledger rows survive for a later real delete.
+        let still = still_selecting_scopes(
+            &tx,
+            "SELECT DISTINCT base_url, model FROM memory_selection WHERE memory_id=?1",
+            &removed,
+        )?;
+        let cleared_turns = prune_chats(&tx, &removed, &[], &still)?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: policy,
             context_epoch,
-            chat_cleared: clear,
+            chat_cleared: cleared_turns > 0,
+            cleared_turns,
         })
     }
 
     pub fn context_epoch(&self) -> Result<i64, StorageError> {
         epoch(&self.0)
+    }
+
+    /// Consultative impact of a would-be removal, per scope: the suffix that
+    /// a commit-time prune would drop and the prefix that would survive. The
+    /// commit's cleared_turns stays authoritative (turns may land between
+    /// this read and the commit).
+    pub fn usage_impact(
+        &self,
+        app_ids: &[String],
+        personal_ids: &[i64],
+    ) -> Result<UsageImpactReport, StorageError> {
+        let count =
+            |sql: &str, base: &str, model: &str, cutoff: i64| -> Result<u64, StorageError> {
+                let value: i64 = self
+                    .0
+                    .query_row(sql, params![base, model, cutoff], |r| r.get(0))?;
+                u64::try_from(value).map_err(|_| StorageError::Unavailable)
+            };
+        let mut scopes = Vec::new();
+        let mut affected_turns_total = 0u64;
+        for ((base, model), cutoff) in usage_cutoffs(&self.0, app_ids, personal_ids)? {
+            let affected = count(
+                "SELECT count(*) FROM chat_turns WHERE base=?1 AND model=?2 AND id>=?3",
+                &base,
+                &model,
+                cutoff,
+            )?;
+            let kept = count(
+                "SELECT count(*) FROM chat_turns WHERE base=?1 AND model=?2 AND id<?3",
+                &base,
+                &model,
+                cutoff,
+            )?;
+            affected_turns_total += affected;
+            scopes.push(UsageImpactScope {
+                scope: MemoryScope {
+                    base_url: base,
+                    model,
+                },
+                affected_turns: affected,
+                kept_turns: kept,
+            });
+        }
+        Ok(UsageImpactReport {
+            scopes,
+            affected_turns_total,
+        })
     }
 
     fn read_personal_policy(
@@ -332,6 +418,7 @@ impl HistoryStore {
                 value: old,
                 context_epoch: change.expected_epoch,
                 chat_cleared: false,
+                cleared_turns: 0,
             });
         }
         let policy = PersonalMemoryPolicy {
@@ -355,14 +442,26 @@ impl HistoryStore {
                 params![scope.base_url, scope.model, id, position as i64],
             )?;
         }
-        if clear {
-            tx.execute("DELETE FROM chat_turns", [])?;
-        }
+        let removed: Vec<i64> = old
+            .selected_ids
+            .iter()
+            .filter(|id| !change.selected_ids.contains(id))
+            .copied()
+            .collect();
+        // Ledger rows record (personal_id, seq); removal matches the id and
+        // ignores seq — the service may have resequenced between turns.
+        let still = still_selecting_scopes(
+            &tx,
+            "SELECT DISTINCT base_url, model FROM personal_memory_selection WHERE personal_memory_id=?1",
+            &removed,
+        )?;
+        let cleared_turns = prune_chats(&tx, &[], &removed, &still)?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: policy,
             context_epoch,
-            chat_cleared: clear,
+            chat_cleared: cleared_turns > 0,
+            cleared_turns,
         })
     }
     pub fn memory_list(&self) -> Result<Vec<Memory>, StorageError> {
@@ -439,6 +538,7 @@ impl HistoryStore {
             value: memory,
             context_epoch,
             chat_cleared: false,
+            cleared_turns: 0,
         })
     }
 
@@ -472,12 +572,18 @@ impl HistoryStore {
             params![id,memory.kind.as_str(),memory.body,memory.event_date,memory.updated_at,memory.revision])?;
         // Revalidate every model selection, including ones not currently displayed in the UI.
         validate_schema(&tx)?;
-        tx.execute("DELETE FROM chat_turns", [])?;
+        // The ledger keyed this id at every revision it ever carried, so one
+        // prune covers every turn the old wording reached. No skip here:
+        // scopes still selecting the item will send the NEW wording, but
+        // their history quoting the old one is exactly the contamination
+        // being corrected.
+        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
             context_epoch,
-            chat_cleared: true,
+            chat_cleared: cleared_turns > 0,
+            cleared_turns,
         })
     }
 
@@ -504,6 +610,7 @@ impl HistoryStore {
                 value: (),
                 context_epoch: epoch(&tx)?,
                 chat_cleared: false,
+                cleared_turns: 0,
             });
         }
         if revision != expected_revision {
@@ -513,14 +620,16 @@ impl HistoryStore {
         let revision = next_counter(revision)?;
         remove_selections(&tx, Some(id))?;
         tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=?2,deleted_at=?3 WHERE id=?1", params![id,revision,timestamp()?])?;
-        tx.execute("DELETE FROM chat_turns", [])?;
+        // Ledger rows outlive the tombstone (no FK): pruning still sees the id.
+        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
         #[cfg(test)]
         q6_tests::crash_before_commit();
         tx.commit()?;
         Ok(MemoryCommit {
             value: (),
             context_epoch,
-            chat_cleared: true,
+            chat_cleared: cleared_turns > 0,
+            cleared_turns,
         })
     }
 
@@ -532,18 +641,23 @@ impl HistoryStore {
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let context_epoch = advance(&tx, expected_epoch)?;
+        let mut active_ids = Vec::new();
         // Check overflow before SQL arithmetic; never wrap or promote the integer to REAL.
         for memory in read_active(&tx)? {
             next_counter(memory.revision)?;
+            active_ids.push(memory.id);
         }
         remove_selections(&tx, None)?;
         tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=revision+1,deleted_at=?1 WHERE deleted_at IS NULL", [timestamp()?])?;
-        tx.execute("DELETE FROM chat_turns", [])?;
+        // Same precise semantics as a single delete: only turns that carried
+        // one of the removed items go, scope by scope.
+        let cleared_turns = prune_chats(&tx, &active_ids, &[], &BTreeSet::new())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: (),
             context_epoch,
-            chat_cleared: true,
+            chat_cleared: cleared_turns > 0,
+            cleared_turns,
         })
     }
 }
@@ -576,6 +690,102 @@ fn read_policy(db: &Connection, scope: &MemoryScope) -> Result<MemoryPolicy, Sto
         revision,
         selected_ids,
     })
+}
+
+/// Per-scope cutoffs: for each (base, model) archive, the earliest persisted
+/// turn that carried any of the given items. Every later turn quotes earlier
+/// turns, so suffix-pruning from the cutoff removes the item's influence while
+/// the prior prefix survives.
+fn usage_cutoffs(
+    db: &Connection,
+    app_ids: &[String],
+    personal_ids: &[i64],
+) -> Result<BTreeMap<(String, String), i64>, StorageError> {
+    let mut cutoffs: BTreeMap<(String, String), i64> = BTreeMap::new();
+    let mut app = db.prepare(
+        "SELECT t.base, t.model, min(t.id) FROM chat_turns t \
+         JOIN chat_turn_usage u ON u.turn_id=t.id \
+         WHERE u.memory_kind='app' AND u.memory_id=?1 GROUP BY t.base, t.model",
+    )?;
+    merge_cutoffs(&mut app, app_ids, &mut cutoffs)?;
+    let mut personal = db.prepare(
+        "SELECT t.base, t.model, min(t.id) FROM chat_turns t \
+         JOIN chat_turn_usage u ON u.turn_id=t.id \
+         WHERE u.memory_kind='personal' AND u.personal_id=?1 GROUP BY t.base, t.model",
+    )?;
+    merge_cutoffs(&mut personal, personal_ids, &mut cutoffs)?;
+    Ok(cutoffs)
+}
+
+fn merge_cutoffs<T: ToSql>(
+    statement: &mut Statement,
+    ids: &[T],
+    cutoffs: &mut BTreeMap<(String, String), i64>,
+) -> Result<(), StorageError> {
+    for id in ids {
+        let rows = statement.query_map(params![id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (base, model, cutoff) = row?;
+            cutoffs
+                .entry((base, model))
+                .and_modify(|known| *known = (*known).min(cutoff))
+                .or_insert(cutoff);
+        }
+    }
+    Ok(())
+}
+
+/// Suffix-prune every affected scope from its first turn that carried any of
+/// the given items; usage rows cascade away with their turns. Runs inside the
+/// caller's transaction (after the epoch advance, before commit). Scopes in
+/// `skip` are left alone — deselecting an item in one scope must not prune
+/// another scope that still selects it (it keeps injecting the item every
+/// turn, so its history removes nothing the next request will not carry).
+/// Returns the number of turns removed across scopes.
+fn prune_chats(
+    db: &Connection,
+    app_ids: &[String],
+    personal_ids: &[i64],
+    skip: &BTreeSet<(String, String)>,
+) -> Result<u64, StorageError> {
+    let mut cleared = 0usize;
+    for ((base, model), cutoff) in usage_cutoffs(db, app_ids, personal_ids)? {
+        if skip.contains(&(base.clone(), model.clone())) {
+            continue;
+        }
+        cleared += db.execute(
+            "DELETE FROM chat_turns WHERE base=?1 AND model=?2 AND id>=?3",
+            params![base, model, cutoff],
+        )?;
+    }
+    u64::try_from(cleared).map_err(|_| StorageError::Unavailable)
+}
+
+/// Scopes whose current selection still contains one of `ids` — read after
+/// the caller's own selection rows were rewritten, so the calling scope never
+/// appears. SQL comes from the caller (app vs personal selection table).
+fn still_selecting_scopes<T: ToSql>(
+    db: &Connection,
+    sql: &str,
+    ids: &[T],
+) -> Result<BTreeSet<(String, String)>, StorageError> {
+    let mut scopes = BTreeSet::new();
+    let mut statement = db.prepare(sql)?;
+    for id in ids {
+        let rows = statement.query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            scopes.insert(row?);
+        }
+    }
+    Ok(scopes)
 }
 
 fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageError> {

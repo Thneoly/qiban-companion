@@ -1,6 +1,6 @@
 //! Host coordination for explicit manual memory mutations.
 use crate::chat::ChatState;
-use companion_core::memory::{Memory, MemoryDraft, MemoryError};
+use companion_core::memory::{Memory, MemoryDraft, MemoryError, MAX_MEMORIES};
 use companion_storage::{memory::MemoryCommit, StorageError};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -43,7 +43,7 @@ impl From<StorageError> for MemoryFailure {
                 MemoryError::ConfirmationRequired => Self {
                     affected_scopes: Vec::new(),
                     code: "confirmation_required",
-                    message: "请先确认清空本机全部聊天",
+                    message: "请先确认开始新对话（将停止当前回复并清理相关聊天）",
                 },
                 MemoryError::InvalidInput | MemoryError::UnsupportedKind => Self {
                     affected_scopes: Vec::new(),
@@ -120,6 +120,8 @@ pub struct MemoryChanged {
 pub struct MemoryReceipt {
     pub context_epoch: i64,
     pub chat_cleared: bool,
+    /// Turns the mutation actually cleared (0 = chats untouched).
+    pub cleared_turns: u64,
     pub notifications_delivered: bool,
 }
 
@@ -160,7 +162,7 @@ impl ChatState {
             return Err(MemoryFailure {
                 affected_scopes: Vec::new(),
                 code: "confirmation_required",
-                message: "请先确认停止当前回复并清空本机全部模型的聊天记录",
+                message: "请先确认开始新对话（将停止当前回复并清理相关聊天）",
             });
         }
         let mut inner = self.0.lock().map_err(|_| MemoryFailure::unavailable())?;
@@ -169,13 +171,17 @@ impl ChatState {
             .as_mut()
             .ok_or_else(MemoryFailure::unavailable)?;
         let previous_epoch = store.context_epoch()?;
-        let (context_epoch, chat_cleared) = match request {
+        let (context_epoch, chat_cleared, cleared_turns) = match request {
             MemoryMutation::Create {
                 draft,
                 expected_epoch,
             } => {
                 let result = store.memory_create(&draft, expected_epoch)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::Update {
                 id,
@@ -196,7 +202,11 @@ impl ChatState {
                     });
                 }
                 let result = store.memory_update(&id, expected_revision, expected_epoch, &draft)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::Delete {
                 id,
@@ -205,15 +215,20 @@ impl ChatState {
                 ..
             } => {
                 let result = store.memory_delete(&id, expected_revision, expected_epoch)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::DeleteAll { expected_epoch, .. } => {
                 let MemoryCommit {
                     context_epoch,
                     chat_cleared,
+                    cleared_turns,
                     ..
                 } = store.memory_delete_all(expected_epoch)?;
-                (context_epoch, chat_cleared)
+                (context_epoch, chat_cleared, cleared_turns)
             }
         };
         // An idempotent delete retry must not stop a newer conversation.
@@ -227,6 +242,7 @@ impl ChatState {
         Ok(MemoryReceipt {
             context_epoch,
             chat_cleared,
+            cleared_turns,
             notifications_delivered,
         })
     }
@@ -234,6 +250,76 @@ impl ChatState {
 #[tauri::command]
 pub fn memory_list(state: State<'_, ChatState>) -> Result<MemorySnapshot, MemoryFailure> {
     state.memory_snapshot()
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageImpactQuery {
+    app_ids: Vec<String>,
+    personal_ids: Vec<i64>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageImpactScope {
+    pub scope: companion_core::memory::MemoryScope,
+    pub affected_turns: u64,
+    pub kept_turns: u64,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageImpactReport {
+    pub scopes: Vec<UsageImpactScope>,
+    pub affected_turns_total: u64,
+}
+/// Same admission shape as the mutation paths: bounded, deduplicated, well-formed.
+fn valid_usage_query(app_ids: &[String], personal_ids: &[i64]) -> bool {
+    app_ids.len() <= MAX_MEMORIES
+        && personal_ids.len() <= 5
+        && app_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == app_ids.len()
+        && app_ids.iter().all(|id| uuid::Uuid::parse_str(id).is_ok())
+        && personal_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == personal_ids.len()
+        && personal_ids.iter().all(|id| *id >= 1)
+}
+
+/// Read-only consult for confirm dialogs: what a removal would clear today.
+/// The commit-time receipt stays authoritative — turns may land in between.
+#[tauri::command]
+pub fn chat_usage_impact(
+    state: State<'_, ChatState>,
+    request: UsageImpactQuery,
+) -> Result<UsageImpactReport, MemoryFailure> {
+    if !valid_usage_query(&request.app_ids, &request.personal_ids) {
+        return Err(MemoryFailure {
+            affected_scopes: Vec::new(),
+            code: "invalid_input",
+            message: "影响范围查询的参数无效，请刷新后重试",
+        });
+    }
+    let inner = state.0.lock().map_err(|_| MemoryFailure::unavailable())?;
+    let store = inner
+        .store
+        .as_ref()
+        .ok_or_else(MemoryFailure::unavailable)?;
+    let report = store.usage_impact(&request.app_ids, &request.personal_ids)?;
+    Ok(UsageImpactReport {
+        scopes: report
+            .scopes
+            .into_iter()
+            .map(|entry| UsageImpactScope {
+                scope: entry.scope,
+                affected_turns: entry.affected_turns,
+                kept_turns: entry.kept_turns,
+            })
+            .collect(),
+        affected_turns_total: report.affected_turns_total,
+    })
 }
 #[tauri::command]
 pub fn memory_mutate(
@@ -257,7 +343,10 @@ pub fn chat_context_epoch(state: State<'_, ChatState>) -> Result<i64, MemoryFail
 #[cfg(test)]
 mod tests {
     use super::*;
-    use companion_core::{conversation::ChatTurn, memory::MemoryKind};
+    use companion_core::{
+        conversation::{ChatTurn, ChatTurnUsage},
+        memory::MemoryKind,
+    };
     fn draft() -> MemoryDraft {
         MemoryDraft {
             kind: MemoryKind::Preference,
@@ -299,19 +388,22 @@ mod tests {
                 |_| true,
             )
             .unwrap();
+        let memory = state.memory_snapshot().unwrap().items.remove(0);
         {
             let mut inner = state.0.lock().unwrap();
+            // The turn carried the memory, so the committed delete prunes it.
             inner
                 .store
                 .as_mut()
                 .unwrap()
-                .append(
+                .append_with_usage(
                     "https://q6.invalid",
                     "fixture",
                     &ChatTurn {
                         user: "old".into(),
                         assistant: "old".into(),
                     },
+                    &[ChatTurnUsage::app(memory.id.clone(), memory.revision)],
                 )
                 .unwrap();
         }
@@ -343,6 +435,29 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
+    fn usage_query_admission_rejects_malformed_ids() {
+        let id = || uuid::Uuid::new_v4().to_string();
+        // Empty both sides is the legal "nothing selected" consult.
+        assert!(valid_usage_query(&[], &[]));
+        assert!(valid_usage_query(&[id()], &[7]));
+        let repeated = id();
+        for bad_app in [
+            vec![repeated.clone(), repeated],          // duplicate
+            vec!["not-a-uuid".into()],                 // malformed id
+            (0..31).map(|_| id()).collect::<Vec<_>>(), // over capacity
+        ] {
+            assert!(!valid_usage_query(&bad_app, &[]), "{bad_app:?}");
+        }
+        for bad_personal in [
+            vec![7, 7],             // duplicate
+            vec![0],                // non-positive
+            vec![-1],               // negative
+            vec![1, 2, 3, 4, 5, 6], // over five
+        ] {
+            assert!(!valid_usage_query(&[], &bad_personal), "{bad_personal:?}");
+        }
+    }
+    #[test]
     fn confirmation_commit_invalidation_and_notification_failure_are_distinct() {
         let path = std::env::temp_dir().join(format!("memory-host-{}.db", uuid::Uuid::new_v4()));
         let state = ChatState::open(&path);
@@ -360,6 +475,22 @@ mod tests {
             let mut inner = state.0.lock().unwrap();
             let (tx, rx) = tokio::sync::watch::channel(false);
             inner.active = Some(("old".into(), tx));
+            // Persist the in-flight turn as a carrier so the confirmed delete
+            // actually prunes it (precise cleanup keys on the usage ledger).
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .append_with_usage(
+                    "a",
+                    "m",
+                    &ChatTurn {
+                        user: "old".into(),
+                        assistant: "old".into(),
+                    },
+                    &[ChatTurnUsage::app(memory.id.clone(), memory.revision)],
+                )
+                .unwrap();
             inner.conversation.restore(
                 "a",
                 "m",
@@ -394,18 +525,16 @@ mod tests {
         let receipt = state.change_memory(delete(true, 1), |_| false).unwrap();
         assert!(!receipt.notifications_delivered);
         assert!(receipt.chat_cleared);
+        assert_eq!(receipt.cleared_turns, 1);
         assert_eq!(receipt.context_epoch, 2);
         assert!(*cancelled.borrow_and_update());
         assert!(state.0.lock().unwrap().conversation.history().is_empty());
         assert!(state.memory_snapshot().unwrap().items.is_empty());
         let (signal, _) = tokio::sync::watch::channel(false);
         state.0.lock().unwrap().active = Some(("new".into(), signal));
-        assert!(
-            !state
-                .change_memory(delete(true, 1), |_| true)
-                .unwrap()
-                .chat_cleared
-        );
+        let retry = state.change_memory(delete(true, 1), |_| true).unwrap();
+        assert!(!retry.chat_cleared);
+        assert_eq!(retry.cleared_turns, 0);
         assert!(state.0.lock().unwrap().active.is_some());
         drop(state);
         std::fs::remove_file(path).unwrap();
