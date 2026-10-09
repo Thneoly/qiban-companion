@@ -39,6 +39,12 @@ export function Pet() {
     return () => { disposed = true; };
   }, []);
   const [open, setOpen] = useState(false);
+  // A voice turn under way (transcribing or speaking) survives blur: the
+  // companion finishes its sentence instead of cutting off mid-word the
+  // moment the user looks elsewhere. Recording is not exempt — the voice hook
+  // cancels a blurred take itself, and a kept-open bubble would only linger.
+  const voiceActiveRef = useRef(false);
+  const setVoiceActive = useCallback((active: boolean) => { voiceActiveRef.current = active; }, []);
   const [hidden, setHidden] = useState(false);
   const [quiet, setQuiet] = useState(false);
   const presence = companionState({ hidden, quiet, open, phase: chat ? phase : 'idle' });
@@ -83,7 +89,7 @@ export function Pet() {
       } catch (e) { if (!disposed) { setError(errorMessage(e)); setOpen(true); } }
     }
     void initialize();
-    const blur = () => { if (!appearanceOpenRef.current) setOpen(false); };
+    const blur = () => { if (!appearanceOpenRef.current && !voiceActiveRef.current) setOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
     window.addEventListener('blur', blur);
     window.addEventListener('keydown', escape);
@@ -146,7 +152,7 @@ export function Pet() {
         {error && <p role="alert" className="pet-error">{error}</p>}
         {appearanceOpen ? <AppearancePanel record={avatar} save={saveAvatar} close={() => setAppearanceOpen(false)}/> : guide ? <FirstUseGuide initialError={guideError} onSettings={() => void act('open_settings')} onLater={() => { setNeedsGuide(false); setGuide(false); }} onComplete={async () => { if (nativeDesktop) await invoke('guide_complete'); setGuideError(''); setNeedsGuide(false); setGuide(false); }}/>
         : <><div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button disabled={!avatarReady} onClick={()=>setAppearanceOpen(true)}>角色与场景</button><button onClick={()=>void act('open_settings')}>模型设置</button><button onClick={()=>void act('open_memory')}>我们的记忆</button><button onClick={() => setGuide(true)}>使用指南</button></div>
-        {chat ? <ChatBubble onPhase={setPhase} onReading={setReading} mouth={mouth}/> : <>
+        {chat ? <ChatBubble onPhase={setPhase} onReading={setReading} onVoiceActive={setVoiceActive} mouth={mouth}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
           <label className="sr-only" htmlFor="pet-draft">想记下什么？</label>

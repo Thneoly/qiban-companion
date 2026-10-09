@@ -56,6 +56,7 @@ async function mockVoiceChat(page: Page) {
         if (cmd === 'voice_transcribe') {
           const { wav, ...rest } = args.request;
           w.transcribeCalls.push({ ...rest, wavLength: wav.length });
+          if (w.hangTranscribe) return new Promise(resolve => { (w.transcribeResolvers ??= []).push(resolve); });
           return { requestId: args.request.requestId, transcript: w.transcript ?? '今天过得怎么样', recognitionMs: 9 };
         }
         if (cmd === 'voice_speak') {
@@ -97,6 +98,7 @@ async function mockVoiceChat(page: Page) {
       }
     } as unknown as typeof MediaRecorder;
     w.releaseSpeak = () => { const list = w.hangSpeakResolvers ?? []; w.hangSpeakResolvers = []; for (const resolve of list) resolve(new Uint8Array(w.wavBytes)); };
+    w.releaseTranscribe = () => { const list = w.transcribeResolvers ?? []; w.transcribeResolvers = []; for (const resolve of list) resolve({ requestId: 'fixture', transcript: '转写完成', recognitionMs: 9 }); };
     w.releasePlays = () => { const list = w.hangPlayResolvers ?? []; w.hangPlayResolvers = []; for (const release of list) release(); };
     // Map every created blob URL to its bytes so play order can be tied to
     // sentence seqs instead of opaque URLs.
@@ -314,6 +316,63 @@ test('interrupting speech drops late clips, cancels both legs, and allows a fres
   await mic(page).click();
   await expect.poll(() => page.evaluate(() => (window as any).playLog.length)).toBe(1);
   await expect(mic(page)).toHaveText('语音说话');
+});
+
+test('a speaking turn survives pet-window blur and collapse resumes once idle', async ({ page }) => {  await mockVoiceChat(page);
+  await page.goto('/');
+  // One clip hangs mid-synthesis so the turn is solidly in speaking state.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。'];
+    w.hangGenerate = true;
+    w.speakDelays = { 0: 'hang' };
+  });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('停止朗读');
+  // Blur while speaking: the bubble stays, the turn keeps running — no cancel
+  // of either leg, the stop control remains reachable.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(mic(page)).toBeVisible();
+  await expect(mic(page)).toHaveText('停止朗读');
+  expect(await page.evaluate(() => ({ turn: (window as any).turnCancels.length, chat: (window as any).chatCancels.length }))).toEqual({ turn: 0, chat: 0 });
+  // Settle the turn (chat leg resolves, hung synthesis lands and plays), then
+  // a fresh blur collapses the dialog again — the exemption is per-turn only.
+  await page.evaluate(() => (window as any).onChatCancel?.());
+  await page.evaluate(() => (window as any).releaseSpeak());
+  await expect(mic(page)).toHaveText('语音说话');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(page.getByLabel('栖栖的交互气泡')).toBeHidden();
+  await expect(page.getByRole('button', { name: '和栖栖互动' })).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('blur during transcription keeps the turn; leaving chat mode releases the exemption', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Pin the transcription half of the exemption: the ASR leg is a network
+  // round-trip, so a blur landing there must not unmount the surface.
+  await page.evaluate(() => { (window as any).hangTranscribe = true; });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).transcribeCalls.length)).toBe(1);
+  await expect(mic(page)).toHaveText('取消语音');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(mic(page)).toBeVisible();
+  await expect(mic(page)).toHaveText('取消语音');
+  expect(await page.evaluate(() => (window as any).turnCancels.length)).toBe(0);
+  // The exemption belongs to the chat surface: switching to 记待办 unmounts
+  // ChatBubble while the flag is still true (transcription mid-flight), and
+  // the unmount reset must let blur collapse again — a stale true would pin
+  // the bubble open forever. The hung transcription promise is discarded with
+  // the unmounted turn.
+  await page.getByRole('button', { name: '记待办' }).click();
+  await expect(page.getByLabel('想记下什么？')).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(page.getByLabel('栖栖的交互气泡')).toBeHidden();
 });
 
 test('the first clip keeps its tone, later clips report trimming, and the untrimmed fallback engages', async ({ page }) => {
