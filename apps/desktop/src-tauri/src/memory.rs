@@ -257,7 +257,10 @@ pub fn chat_context_epoch(state: State<'_, ChatState>) -> Result<i64, MemoryFail
 #[cfg(test)]
 mod tests {
     use super::*;
-    use companion_core::{conversation::ChatTurn, memory::MemoryKind};
+    use companion_core::{
+        conversation::{ChatTurn, ChatTurnUsage},
+        memory::MemoryKind,
+    };
     fn draft() -> MemoryDraft {
         MemoryDraft {
             kind: MemoryKind::Preference,
@@ -299,8 +302,10 @@ mod tests {
                 |_| true,
             )
             .unwrap();
+        let memory = state.memory_snapshot().unwrap().items.remove(0);
         {
             let mut inner = state.0.lock().unwrap();
+            // The turn carried the memory, so the committed delete prunes it.
             inner
                 .store
                 .as_mut()
@@ -312,7 +317,7 @@ mod tests {
                         user: "old".into(),
                         assistant: "old".into(),
                     },
-                    &[],
+                    &[ChatTurnUsage::app(memory.id.clone(), memory.revision)],
                 )
                 .unwrap();
         }
@@ -361,6 +366,22 @@ mod tests {
             let mut inner = state.0.lock().unwrap();
             let (tx, rx) = tokio::sync::watch::channel(false);
             inner.active = Some(("old".into(), tx));
+            // Persist the in-flight turn as a carrier so the confirmed delete
+            // actually prunes it (precise cleanup keys on the usage ledger).
+            inner
+                .store
+                .as_mut()
+                .unwrap()
+                .append_with_usage(
+                    "a",
+                    "m",
+                    &ChatTurn {
+                        user: "old".into(),
+                        assistant: "old".into(),
+                    },
+                    &[ChatTurnUsage::app(memory.id.clone(), memory.revision)],
+                )
+                .unwrap();
             inner.conversation.restore(
                 "a",
                 "m",
