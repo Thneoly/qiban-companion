@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
           if (r.action==='delete') w.memoryItems=w.memoryItems.filter((m:any)=>m.id!==r.id);
           if (r.action==='delete_all') w.memoryItems=[];
           w.memoryEpoch++;
-          return {contextEpoch:w.memoryEpoch,chatCleared:r.action!=='create',notificationsDelivered:!w.failNotice};
+          return {contextEpoch:w.memoryEpoch,chatCleared:r.action!=='create',clearedTurns:r.action!=='create'?1:0,notificationsDelivered:!w.failNotice};
         }
         return 1;
       }

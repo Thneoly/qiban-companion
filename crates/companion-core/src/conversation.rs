@@ -57,6 +57,11 @@ impl Conversation {
             .as_ref()
             .is_some_and(|(b, m)| b == base && m == model)
     }
+    /// The currently selected (base, model), if any — callers use it to
+    /// reload the persisted archive for the same scope.
+    pub fn scope(&self) -> Option<(String, String)> {
+        self.identity.clone()
+    }
     pub fn restore(&mut self, base: &str, model: &str, turns: Vec<ChatTurn>) {
         self.select(base, model);
         self.turns = turns;

@@ -18,6 +18,7 @@ fn main() {
         "memory_list",
         "memory_mutate",
         "chat_context_epoch",
+        "chat_usage_impact",
         "memory_export",
         "personal_memory_overview",
         "personal_memory_recall",

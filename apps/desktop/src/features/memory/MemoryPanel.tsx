@@ -50,7 +50,7 @@ export function MemoryPanel() {
       const receipt = decodeMemoryReceipt(await invoke('memory_mutate', { request }));
       if (!alive.current) return;
       setPending(null); setEditing(null); setDraft(empty); setSnapshot(null);
-      const message = success + (receipt.chatCleared ? ' 本机全部模型的聊天记录已清空。' : ' 已有聊天记录保留。');
+      const message = success + (receipt.clearedTurns > 0 ? ` 已清除使用过该记忆的最近 ${receipt.clearedTurns} 轮对话，其余保留。` : ' 已有聊天记录保留。');
       setNote(message + (receipt.notificationsDelivered ? '' : ' 本机已提交，另一窗口待刷新。'));
       if (!(await refresh())) setNote(message + ' 列表暂未刷新，请重试读取；不必重复提交。');
     } catch (e) { if (alive.current) { setError(memoryErrorMessage(e)); setPending(null); } }

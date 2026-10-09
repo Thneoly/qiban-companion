@@ -47,7 +47,7 @@ export function decodeMemories(value: unknown): MemoryRecord[] {
 }
 
 export interface MemorySnapshot { items: MemoryRecord[]; contextEpoch: number }
-export interface MemoryReceipt { contextEpoch: number; chatCleared: boolean; notificationsDelivered: boolean }
+export interface MemoryReceipt { contextEpoch: number; chatCleared: boolean; clearedTurns: number; notificationsDelivered: boolean }
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return incompatible();
   return value as Record<string, unknown>;
@@ -60,14 +60,30 @@ export function decodeMemorySnapshot(value: unknown): MemorySnapshot {
 }
 export function decodeMemoryReceipt(value: unknown): MemoryReceipt {
   const v = object(value);
-  if (!integer(v.contextEpoch) || typeof v.chatCleared !== 'boolean' || typeof v.notificationsDelivered !== 'boolean') return incompatible();
-  return { contextEpoch: v.contextEpoch, chatCleared: v.chatCleared, notificationsDelivered: v.notificationsDelivered };
+  if (!integer(v.contextEpoch) || typeof v.chatCleared !== 'boolean' || !integer(v.clearedTurns) || typeof v.notificationsDelivered !== 'boolean') return incompatible();
+  return { contextEpoch: v.contextEpoch, chatCleared: v.chatCleared, clearedTurns: v.clearedTurns, notificationsDelivered: v.notificationsDelivered };
 }
 export function decodeMemoryExport(value: unknown): { status: 'cancelled' } | { status: 'saved'; count: number } {
   const v = object(value);
   if (v.status === 'cancelled') return { status: 'cancelled' };
   if (v.status !== 'saved' || !integer(v.count) || v.count > 30) return incompatible();
   return { status: 'saved', count: v.count };
+}
+export interface UsageImpactScope { scope: { baseUrl: string; model: string }; affectedTurns: number; keptTurns: number }
+export interface UsageImpactReport { scopes: UsageImpactScope[]; affectedTurnsTotal: number }
+/** Consultative precount for confirm dialogs; the commit receipt stays authoritative. */
+export function decodeUsageImpactReport(value: unknown): UsageImpactReport {
+  const v = object(value);
+  // The archive is globally bounded to 6 turns, so scopes cannot exceed that.
+  if (!integer(v.affectedTurnsTotal) || v.affectedTurnsTotal > 6 || !Array.isArray(v.scopes) || v.scopes.length > 6) return incompatible();
+  const scopes = v.scopes.map((entry: unknown) => {
+    const scope = object(entry);
+    const target = object(scope.scope);
+    if (typeof target.baseUrl !== 'string' || typeof target.model !== 'string' || target.baseUrl === '' || target.model === '' ||
+        !integer(scope.affectedTurns) || scope.affectedTurns > 6 || !integer(scope.keptTurns) || scope.keptTurns > 6) return incompatible();
+    return { scope: { baseUrl: target.baseUrl, model: target.model }, affectedTurns: scope.affectedTurns, keptTurns: scope.keptTurns };
+  });
+  return { scopes, affectedTurnsTotal: v.affectedTurnsTotal };
 }
 const memoryErrors: Record<string, string> = {
   invalid_input: '仅可保存偏好或经历，正文需1～200字且日期有效。',
@@ -76,7 +92,7 @@ const memoryErrors: Record<string, string> = {
   conflict: '条目已更改或删除，请刷新后重新选择；你的编辑内容仍保留。',
   context_changed: '记忆或会话已变化，请刷新后重新操作。',
   storage_unavailable: '本机记忆不可用，请刷新或检查数据目录。',
-  confirmation_required: '请先确认停止回复并清空本机全部模型的聊天记录。',
+  confirmation_required: '请先确认开始新对话（将停止当前回复并清理相关聊天）。',
   export_failed: '导出未完成，请选择可写的JSON文件位置重试。',
 };
 export function memoryErrorMessage(value: unknown): string {

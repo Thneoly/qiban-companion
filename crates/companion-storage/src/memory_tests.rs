@@ -657,6 +657,33 @@ fn personal_prune_matches_ids_across_seqs_and_scopes() {
 }
 
 #[test]
+fn usage_impact_reports_per_scope_suffix_counts_without_touching_rows() {
+    let mut s = store();
+    let used = s.memory_create(&draft("used"), 0).unwrap().value;
+    chat_using(&mut s, "a", &[]); // prefix: would survive
+    chat_using(
+        &mut s,
+        "a",
+        &[ChatTurnUsage::app(used.id.clone(), used.revision)],
+    );
+    chat_using(&mut s, "a", &[]); // follower: would go with the carrier
+    chat_using(&mut s, "b", &[]);
+    let report = s.usage_impact(&[used.id], &[]).unwrap();
+    assert_eq!(report.affected_turns_total, 2);
+    assert_eq!(report.scopes.len(), 1);
+    assert_eq!(report.scopes[0].scope.base_url, "a");
+    assert_eq!(report.scopes[0].scope.model, "model");
+    assert_eq!(report.scopes[0].affected_turns, 2);
+    assert_eq!(report.scopes[0].kept_turns, 1);
+    // Unknown ids and empty sets report nothing.
+    let empty = s.usage_impact(&[], &[99]).unwrap();
+    assert_eq!(empty.affected_turns_total, 0);
+    assert!(empty.scopes.is_empty());
+    // Consultative only: nothing was pruned.
+    assert_eq!(chats(&s), 4);
+}
+
+#[test]
 fn personal_policy_schema_corruption_is_rejected() {
     let mut store = store();
     let scope = MemoryScope {

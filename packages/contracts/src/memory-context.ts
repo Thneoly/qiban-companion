@@ -101,7 +101,7 @@ const personalPolicyErrors: Record<string, string> = {
   invalid_input: '选择内容无效，请调整后重试。',
   context_changed: '记忆或会话已变化，请刷新后重新操作。',
   conflict: '记忆版本已变化，请刷新。',
-  confirmation_required: '请先确认停止回复并清空本机全部模型的聊天记录。',
+  confirmation_required: '请先确认开始新对话（将停止当前回复并清理相关聊天）。',
   storage_unavailable: '本机记忆不可用，请刷新或检查数据目录。',
 };
 export function personalPolicyErrorMessage(value: unknown): string {

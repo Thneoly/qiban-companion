@@ -133,7 +133,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
         if (r.enabled && r.selectedIds.reduce((n: number, id: number) => { const record = records.find((m: any) => m.id === id); return n + (record ? [...record.content].length : 0); }, 0) > 800) throw { code: 'selection_too_large' };
         w.policyWrites.push(r);
         w.policyState = { enabled: r.enabled && r.selectedIds.length > 0, revision: w.policyState.revision + 1, selectedIds: r.selectedIds, epoch: w.policyState.epoch + 1 };
-        return { contextEpoch: w.policyState.epoch, chatCleared: removing, notificationsDelivered: true };
+        return { contextEpoch: w.policyState.epoch, chatCleared: removing, clearedTurns: removing ? 1 : 0, notificationsDelivered: true };
       }
       return baseInvoke(cmd, args);
     };

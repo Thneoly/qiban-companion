@@ -326,6 +326,7 @@ pub async fn personal_memory_policy_set(
     Ok(crate::memory::MemoryReceipt {
         context_epoch: result.context_epoch,
         chat_cleared: result.chat_cleared,
+        cleared_turns: result.cleared_turns,
         notifications_delivered: delivered,
     })
 }

@@ -1,6 +1,6 @@
 //! Host coordination for explicit manual memory mutations.
 use crate::chat::ChatState;
-use companion_core::memory::{Memory, MemoryDraft, MemoryError};
+use companion_core::memory::{Memory, MemoryDraft, MemoryError, MAX_MEMORIES};
 use companion_storage::{memory::MemoryCommit, StorageError};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -43,7 +43,7 @@ impl From<StorageError> for MemoryFailure {
                 MemoryError::ConfirmationRequired => Self {
                     affected_scopes: Vec::new(),
                     code: "confirmation_required",
-                    message: "请先确认清空本机全部聊天",
+                    message: "请先确认开始新对话（将停止当前回复并清理相关聊天）",
                 },
                 MemoryError::InvalidInput | MemoryError::UnsupportedKind => Self {
                     affected_scopes: Vec::new(),
@@ -120,6 +120,8 @@ pub struct MemoryChanged {
 pub struct MemoryReceipt {
     pub context_epoch: i64,
     pub chat_cleared: bool,
+    /// Turns the mutation actually cleared (0 = chats untouched).
+    pub cleared_turns: u64,
     pub notifications_delivered: bool,
 }
 
@@ -160,7 +162,7 @@ impl ChatState {
             return Err(MemoryFailure {
                 affected_scopes: Vec::new(),
                 code: "confirmation_required",
-                message: "请先确认停止当前回复并清空本机全部模型的聊天记录",
+                message: "请先确认开始新对话（将停止当前回复并清理相关聊天）",
             });
         }
         let mut inner = self.0.lock().map_err(|_| MemoryFailure::unavailable())?;
@@ -169,13 +171,17 @@ impl ChatState {
             .as_mut()
             .ok_or_else(MemoryFailure::unavailable)?;
         let previous_epoch = store.context_epoch()?;
-        let (context_epoch, chat_cleared) = match request {
+        let (context_epoch, chat_cleared, cleared_turns) = match request {
             MemoryMutation::Create {
                 draft,
                 expected_epoch,
             } => {
                 let result = store.memory_create(&draft, expected_epoch)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::Update {
                 id,
@@ -196,7 +202,11 @@ impl ChatState {
                     });
                 }
                 let result = store.memory_update(&id, expected_revision, expected_epoch, &draft)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::Delete {
                 id,
@@ -205,15 +215,20 @@ impl ChatState {
                 ..
             } => {
                 let result = store.memory_delete(&id, expected_revision, expected_epoch)?;
-                (result.context_epoch, result.chat_cleared)
+                (
+                    result.context_epoch,
+                    result.chat_cleared,
+                    result.cleared_turns,
+                )
             }
             MemoryMutation::DeleteAll { expected_epoch, .. } => {
                 let MemoryCommit {
                     context_epoch,
                     chat_cleared,
+                    cleared_turns,
                     ..
                 } = store.memory_delete_all(expected_epoch)?;
-                (context_epoch, chat_cleared)
+                (context_epoch, chat_cleared, cleared_turns)
             }
         };
         // An idempotent delete retry must not stop a newer conversation.
@@ -227,6 +242,7 @@ impl ChatState {
         Ok(MemoryReceipt {
             context_epoch,
             chat_cleared,
+            cleared_turns,
             notifications_delivered,
         })
     }
@@ -234,6 +250,77 @@ impl ChatState {
 #[tauri::command]
 pub fn memory_list(state: State<'_, ChatState>) -> Result<MemorySnapshot, MemoryFailure> {
     state.memory_snapshot()
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageImpactQuery {
+    app_ids: Vec<String>,
+    personal_ids: Vec<i64>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageImpactScope {
+    pub scope: companion_core::memory::MemoryScope,
+    pub affected_turns: u64,
+    pub kept_turns: u64,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageImpactReport {
+    pub scopes: Vec<UsageImpactScope>,
+    pub affected_turns_total: u64,
+}
+/// Read-only consult for confirm dialogs: what a removal would clear today.
+/// The commit-time receipt stays authoritative — turns may land in between.
+#[tauri::command]
+pub fn chat_usage_impact(
+    state: State<'_, ChatState>,
+    request: UsageImpactQuery,
+) -> Result<UsageImpactReport, MemoryFailure> {
+    let valid = request.app_ids.len() <= MAX_MEMORIES
+        && request.personal_ids.len() <= 5
+        && request
+            .app_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == request.app_ids.len()
+        && request
+            .app_ids
+            .iter()
+            .all(|id| uuid::Uuid::parse_str(id).is_ok())
+        && request
+            .personal_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == request.personal_ids.len()
+        && request.personal_ids.iter().all(|id| *id >= 1);
+    if !valid {
+        return Err(MemoryFailure {
+            affected_scopes: Vec::new(),
+            code: "invalid_input",
+            message: "影响范围查询的参数无效，请刷新后重试",
+        });
+    }
+    let inner = state.0.lock().map_err(|_| MemoryFailure::unavailable())?;
+    let store = inner
+        .store
+        .as_ref()
+        .ok_or_else(MemoryFailure::unavailable)?;
+    let report = store.usage_impact(&request.app_ids, &request.personal_ids)?;
+    Ok(UsageImpactReport {
+        scopes: report
+            .scopes
+            .into_iter()
+            .map(|entry| UsageImpactScope {
+                scope: entry.scope,
+                affected_turns: entry.affected_turns,
+                kept_turns: entry.kept_turns,
+            })
+            .collect(),
+        affected_turns_total: report.affected_turns_total,
+    })
 }
 #[tauri::command]
 pub fn memory_mutate(

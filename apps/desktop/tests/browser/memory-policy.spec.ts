@@ -20,7 +20,7 @@ test.beforeEach(async({page})=>{
         const cleared=w.policy.selectedIds.some((id:string)=>!r.selectedIds.includes(id));
         if(cleared&&!r.restartConversation)throw {code:'confirmation_required'};
         w.policy={enabled:r.enabled&&!!r.selectedIds.length,selectedIds:r.selectedIds,revision:w.policy.revision+1};w.epoch++;
-        return {contextEpoch:w.epoch,chatCleared:cleared,notificationsDelivered:true};
+        return {contextEpoch:w.epoch,chatCleared:cleared,clearedTurns:cleared?1:0,notificationsDelivered:true};
       }
       return 1;
     }}});

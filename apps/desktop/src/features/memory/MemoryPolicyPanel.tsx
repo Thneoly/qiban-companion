@@ -27,7 +27,7 @@ export function MemoryPolicyPanel({ items, epoch, locked }: { items: MemoryRecor
     acting.current=true;setBusy(true);setMessage('');
     const n=++serial.current;
     try {const receipt=decodeMemoryReceipt(await invoke('memory_policy_set',{request:{expectedScope:preview.scope,expectedEpoch:preview.contextEpoch,expectedRevision:preview.policy.revision,enabled,selectedIds:chosen,restartConversation:confirmed}}));
-      if(n===serial.current){setConfirm(false);setMessage(`使用设置已保存在本机。${receipt.chatCleared?'全部模型的聊天已清空。':''}${receipt.notificationsDelivered?'':'另一窗口待刷新。'}`);
+      if(n===serial.current){setConfirm(false);setMessage(`使用设置已保存在本机。${receipt.clearedTurns>0?`已清除使用过所移除条目的最近 ${receipt.clearedTurns} 轮对话，其余保留。`:''}${receipt.notificationsDelivered?'':'另一窗口待刷新。'}`);
         try{const next=decodeContextPreview(await invoke('chat_context_preview'));if(n===serial.current){setPreview(next);setEnabled(next.policy.enabled);setIds(next.policy.selectedIds);}}
         catch{if(n===serial.current){setPreview(null);setMessage('使用设置已保存，但暂时无法刷新；请重新打开面板，不必重复提交。');}}
       }

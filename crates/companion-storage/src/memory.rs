@@ -20,6 +20,17 @@ pub struct MemoryCommit<T> {
     pub cleared_turns: u64,
 }
 
+/// Per-scope view of what a removal would clear, for confirm dialogs.
+pub struct UsageImpactScope {
+    pub scope: MemoryScope,
+    pub affected_turns: u64,
+    pub kept_turns: u64,
+}
+pub struct UsageImpactReport {
+    pub scopes: Vec<UsageImpactScope>,
+    pub affected_turns_total: u64,
+}
+
 fn timestamp() -> Result<i64, StorageError> {
     i64::try_from(now_ms())
         .ok()
@@ -272,6 +283,53 @@ impl HistoryStore {
 
     pub fn context_epoch(&self) -> Result<i64, StorageError> {
         epoch(&self.0)
+    }
+
+    /// Consultative impact of a would-be removal, per scope: the suffix that
+    /// a commit-time prune would drop and the prefix that would survive. The
+    /// commit's cleared_turns stays authoritative (turns may land between
+    /// this read and the commit).
+    pub fn usage_impact(
+        &self,
+        app_ids: &[String],
+        personal_ids: &[i64],
+    ) -> Result<UsageImpactReport, StorageError> {
+        let count =
+            |sql: &str, base: &str, model: &str, cutoff: i64| -> Result<u64, StorageError> {
+                let value: i64 = self
+                    .0
+                    .query_row(sql, params![base, model, cutoff], |r| r.get(0))?;
+                u64::try_from(value).map_err(|_| StorageError::Unavailable)
+            };
+        let mut scopes = Vec::new();
+        let mut affected_turns_total = 0u64;
+        for ((base, model), cutoff) in usage_cutoffs(&self.0, app_ids, personal_ids)? {
+            let affected = count(
+                "SELECT count(*) FROM chat_turns WHERE base=?1 AND model=?2 AND id>=?3",
+                &base,
+                &model,
+                cutoff,
+            )?;
+            let kept = count(
+                "SELECT count(*) FROM chat_turns WHERE base=?1 AND model=?2 AND id<?3",
+                &base,
+                &model,
+                cutoff,
+            )?;
+            affected_turns_total += affected;
+            scopes.push(UsageImpactScope {
+                scope: MemoryScope {
+                    base_url: base,
+                    model,
+                },
+                affected_turns: affected,
+                kept_turns: kept,
+            });
+        }
+        Ok(UsageImpactReport {
+            scopes,
+            affected_turns_total,
+        })
     }
 
     fn read_personal_policy(
