@@ -169,7 +169,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   // Removal requires the confirm dialog; cancelling does not write.
   await section.getByText('#1 洞察一').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
-  await expect(section.getByRole('alertdialog')).toContainText('使用过所移除条目的对话');
+  await expect(section.getByRole('alertdialog')).toContainText('仍在其他模型选用的对话不动');
   await section.getByRole('button', { name: '返回，不修改' }).click();
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(1);
 
@@ -180,6 +180,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   await expect(section.getByRole('alertdialog')).toBeVisible();
   await section.getByRole('button', { name: '确认收回并开始新对话' }).click();
   await expect(section).toContainText('已保存状态：关闭');
+  await expect(section.getByRole('status')).toContainText('已清除使用过所移除条目的最近 1 轮对话');
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(2);
   expect(await page.evaluate(() => (window as any).policyWrites[1].restartConversation)).toBe(true);
 });

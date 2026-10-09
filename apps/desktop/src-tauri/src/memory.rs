@@ -270,6 +270,24 @@ pub struct UsageImpactReport {
     pub scopes: Vec<UsageImpactScope>,
     pub affected_turns_total: u64,
 }
+/// Same admission shape as the mutation paths: bounded, deduplicated, well-formed.
+fn valid_usage_query(app_ids: &[String], personal_ids: &[i64]) -> bool {
+    app_ids.len() <= MAX_MEMORIES
+        && personal_ids.len() <= 5
+        && app_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == app_ids.len()
+        && app_ids.iter().all(|id| uuid::Uuid::parse_str(id).is_ok())
+        && personal_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == personal_ids.len()
+        && personal_ids.iter().all(|id| *id >= 1)
+}
+
 /// Read-only consult for confirm dialogs: what a removal would clear today.
 /// The commit-time receipt stays authoritative — turns may land in between.
 #[tauri::command]
@@ -277,26 +295,7 @@ pub fn chat_usage_impact(
     state: State<'_, ChatState>,
     request: UsageImpactQuery,
 ) -> Result<UsageImpactReport, MemoryFailure> {
-    let valid = request.app_ids.len() <= MAX_MEMORIES
-        && request.personal_ids.len() <= 5
-        && request
-            .app_ids
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            == request.app_ids.len()
-        && request
-            .app_ids
-            .iter()
-            .all(|id| uuid::Uuid::parse_str(id).is_ok())
-        && request
-            .personal_ids
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            == request.personal_ids.len()
-        && request.personal_ids.iter().all(|id| *id >= 1);
-    if !valid {
+    if !valid_usage_query(&request.app_ids, &request.personal_ids) {
         return Err(MemoryFailure {
             affected_scopes: Vec::new(),
             code: "invalid_input",
@@ -436,6 +435,29 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
+    fn usage_query_admission_rejects_malformed_ids() {
+        let id = || uuid::Uuid::new_v4().to_string();
+        // Empty both sides is the legal "nothing selected" consult.
+        assert!(valid_usage_query(&[], &[]));
+        assert!(valid_usage_query(&[id()], &[7]));
+        let repeated = id();
+        for bad_app in [
+            vec![repeated.clone(), repeated],          // duplicate
+            vec!["not-a-uuid".into()],                 // malformed id
+            (0..31).map(|_| id()).collect::<Vec<_>>(), // over capacity
+        ] {
+            assert!(!valid_usage_query(&bad_app, &[]), "{bad_app:?}");
+        }
+        for bad_personal in [
+            vec![7, 7],             // duplicate
+            vec![0],                // non-positive
+            vec![-1],               // negative
+            vec![1, 2, 3, 4, 5, 6], // over five
+        ] {
+            assert!(!valid_usage_query(&[], &bad_personal), "{bad_personal:?}");
+        }
+    }
+    #[test]
     fn confirmation_commit_invalidation_and_notification_failure_are_distinct() {
         let path = std::env::temp_dir().join(format!("memory-host-{}.db", uuid::Uuid::new_v4()));
         let state = ChatState::open(&path);
@@ -503,18 +525,16 @@ mod tests {
         let receipt = state.change_memory(delete(true, 1), |_| false).unwrap();
         assert!(!receipt.notifications_delivered);
         assert!(receipt.chat_cleared);
+        assert_eq!(receipt.cleared_turns, 1);
         assert_eq!(receipt.context_epoch, 2);
         assert!(*cancelled.borrow_and_update());
         assert!(state.0.lock().unwrap().conversation.history().is_empty());
         assert!(state.memory_snapshot().unwrap().items.is_empty());
         let (signal, _) = tokio::sync::watch::channel(false);
         state.0.lock().unwrap().active = Some(("new".into(), signal));
-        assert!(
-            !state
-                .change_memory(delete(true, 1), |_| true)
-                .unwrap()
-                .chat_cleared
-        );
+        let retry = state.change_memory(delete(true, 1), |_| true).unwrap();
+        assert!(!retry.chat_cleared);
+        assert_eq!(retry.cleared_turns, 0);
         assert!(state.0.lock().unwrap().active.is_some());
         drop(state);
         std::fs::remove_file(path).unwrap();

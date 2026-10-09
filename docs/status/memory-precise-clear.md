@@ -6,6 +6,8 @@
 
 对每个被移除的记忆条目（应用记忆按 id，个人记忆按服务行 id、无视 seq），在各 (基地址, 模型) 对话里找到**第一个使用过它**的轮次，删除该轮及其后所有轮；之前的轮次保留。论证：turn1 注入记忆 X 后，turn2 起的模型输入包含 turn1 的对话文本，故旧措辞的影响只能从前缀截断处消除；更早的轮次从未见过该条目，保留是安全的。从未使用过该条目的模型对话完全不动。
 
+**收回选择（停用/移除勾选）有一处豁免**：仍在其他模型选用的对话不动——那些模型此后每轮仍注入该条目全文，删其历史消除不了任何暴露、只造成不可逆丢失；账本行保留，等真正删除/更正条目时再补齐截断（更正恒清全部使用过的 scope：旧措辞本身就是要消除的污染）。
+
 删除全部记忆与单条删除同构（对全部有效条目并集做截断）；N=0 时仍要求确认（仍会停止在途回复并作废预览），但不删任何轮。
 
 ## 实现
@@ -27,7 +29,7 @@
 ## 验证
 
 - Rust：companion-storage 78 / desktop 64 / core 14 / coordinator 12 全绿；fmt+clippy 干净。Vitest 90、浏览器 Playwright 55 过 1 跳（外部 Live2D 资产，与本项无关）、`npm run check`、`npm run verify:docs` 通过。
-- **Mutation 钉子**（按项目纪律摘除后必须红）：①`prune_chats` 摘 per-scope 过滤（删 WHERE base/model）→ 6 用例红；②`id>=` 改 `id=`（丢后缀语义）→ 3 用例红（含专属后缀测试）。
+- **Mutation 钉子**（按项目纪律摘除后必须红，数字为 2026-10-09 复核实测）：①`prune_chats` 摘 per-scope 过滤（删 WHERE base/model）→ 13 用例红（7 条 q6 + 6 条存储测试）；②`id>=` 改 `id=`（丢后缀语义）→ 3 用例红（含专属后缀测试）；③`append_with_usage` 摘账本写入 → 16 用例红。
 - 新增代表性测试：v3/v2 真文件迁移回填（含个人记忆 seq=NULL）、账本校验（重复/超限/坏 id）、淘汰与清空级联、前缀截断保留前缀、personal 跨 seq/scope 按 id 匹配、`usage_impact` 只读不落刀、宿主删除后重载存活前缀且重启复验、`clearedTurns` 契约必填。
 - native 验收脚本（`memory-panel.cjs`、`memory-context.cjs`、`voice-chat.cjs`、`q6/harness.cjs`、`single-instance.cjs`）已同步 user_version=4 与按钮名；**真机复核待 PR 合并后重建二进制执行**（见各脚本复现命令）。
 

@@ -22,8 +22,13 @@ CREATE TABLE chat_turn_usage (
 -- the real uniqueness guarantee. Callers dedupe as well.
 CREATE UNIQUE INDEX chat_turn_usage_unique
   ON chat_turn_usage(turn_id, memory_kind, coalesce(memory_id,''), coalesce(personal_id,0));
+-- Plain columns, not expressions: the lookup queries (usage_cutoffs) seek on
+-- bare memory_id / personal_id, and an expression index only matches queries
+-- spelling out the same expression. App rows always have memory_id set and
+-- personal rows always have personal_id set (CHECK above), so both families
+-- seek on this one index.
 CREATE INDEX chat_turn_usage_lookup
-  ON chat_turn_usage(memory_kind, coalesce(memory_id,''), coalesce(personal_id,0));
+  ON chat_turn_usage(memory_kind, memory_id, personal_id);
 -- Backfill: attribute pre-v4 turns to the selections enabled at migration
 -- time. Conservative direction (over-attribution clears more, never less);
 -- turns whose selections changed mid-history may be missed — that blind spot

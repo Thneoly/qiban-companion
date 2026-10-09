@@ -44,6 +44,7 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await panel.getByLabel('记忆内容').fill('先说结论🌱');
   await panel.getByRole('button',{name:'保存记忆',exact:true}).click();
   await expect(panel.getByRole('status')).toContainText('尚未被模型选用');
+  await expect(panel.getByRole('status')).toContainText('已有聊天记录保留');
   const card=panel.locator('article'); await expect(card).toContainText('用户在记忆面板填写'); await expect(card).toContainText('未指定日期');
   await card.getByRole('button',{name:'更正',exact:true}).click();
   await panel.getByLabel('记忆内容').fill('先说结论，再列证据');
@@ -54,6 +55,7 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await panel.getByRole('button',{name:'检查更正影响'}).click();
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(card).toContainText('先说结论，再列证据');
+  await expect(panel.getByRole('status')).toContainText('已清除使用过该记忆的最近 1 轮对话');
   await card.getByRole('button',{name:'删除',exact:true}).click();
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel).toContainText('还没有留下记忆');

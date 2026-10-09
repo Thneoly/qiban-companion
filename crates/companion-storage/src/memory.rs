@@ -2,7 +2,7 @@
 use crate::{history::HistoryStore, StorageError};
 use companion_core::{memory::*, now_ms};
 use rusqlite::{params, Connection, OptionalExtension, Statement, ToSql, TransactionBehavior};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 #[path = "memory_q6_tests.rs"]
@@ -271,7 +271,15 @@ impl HistoryStore {
             .filter(|id| !change.selected_ids.contains(id))
             .cloned()
             .collect();
-        let cleared_turns = prune_chats(&tx, &removed, &[])?;
+        // Other scopes still selecting a removed item keep injecting it every
+        // turn; pruning their history would drop data the next request carries
+        // again anyway. Their ledger rows survive for a later real delete.
+        let still = still_selecting_scopes(
+            &tx,
+            "SELECT DISTINCT base_url, model FROM memory_selection WHERE memory_id=?1",
+            &removed,
+        )?;
+        let cleared_turns = prune_chats(&tx, &removed, &[], &still)?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: policy,
@@ -442,7 +450,12 @@ impl HistoryStore {
             .collect();
         // Ledger rows record (personal_id, seq); removal matches the id and
         // ignores seq — the service may have resequenced between turns.
-        let cleared_turns = prune_chats(&tx, &[], &removed)?;
+        let still = still_selecting_scopes(
+            &tx,
+            "SELECT DISTINCT base_url, model FROM personal_memory_selection WHERE personal_memory_id=?1",
+            &removed,
+        )?;
+        let cleared_turns = prune_chats(&tx, &[], &removed, &still)?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: policy,
@@ -560,8 +573,11 @@ impl HistoryStore {
         // Revalidate every model selection, including ones not currently displayed in the UI.
         validate_schema(&tx)?;
         // The ledger keyed this id at every revision it ever carried, so one
-        // prune covers every turn the old wording reached.
-        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[])?;
+        // prune covers every turn the old wording reached. No skip here:
+        // scopes still selecting the item will send the NEW wording, but
+        // their history quoting the old one is exactly the contamination
+        // being corrected.
+        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
@@ -605,7 +621,7 @@ impl HistoryStore {
         remove_selections(&tx, Some(id))?;
         tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=?2,deleted_at=?3 WHERE id=?1", params![id,revision,timestamp()?])?;
         // Ledger rows outlive the tombstone (no FK): pruning still sees the id.
-        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[])?;
+        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
         #[cfg(test)]
         q6_tests::crash_before_commit();
         tx.commit()?;
@@ -635,7 +651,7 @@ impl HistoryStore {
         tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=revision+1,deleted_at=?1 WHERE deleted_at IS NULL", [timestamp()?])?;
         // Same precise semantics as a single delete: only turns that carried
         // one of the removed items go, scope by scope.
-        let cleared_turns = prune_chats(&tx, &active_ids, &[])?;
+        let cleared_turns = prune_chats(&tx, &active_ids, &[], &BTreeSet::new())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: (),
@@ -727,21 +743,49 @@ fn merge_cutoffs<T: ToSql>(
 
 /// Suffix-prune every affected scope from its first turn that carried any of
 /// the given items; usage rows cascade away with their turns. Runs inside the
-/// caller's transaction (after the epoch advance, before commit). Returns the
-/// number of turns removed across scopes.
+/// caller's transaction (after the epoch advance, before commit). Scopes in
+/// `skip` are left alone — deselecting an item in one scope must not prune
+/// another scope that still selects it (it keeps injecting the item every
+/// turn, so its history removes nothing the next request will not carry).
+/// Returns the number of turns removed across scopes.
 fn prune_chats(
     db: &Connection,
     app_ids: &[String],
     personal_ids: &[i64],
+    skip: &BTreeSet<(String, String)>,
 ) -> Result<u64, StorageError> {
     let mut cleared = 0usize;
     for ((base, model), cutoff) in usage_cutoffs(db, app_ids, personal_ids)? {
+        if skip.contains(&(base.clone(), model.clone())) {
+            continue;
+        }
         cleared += db.execute(
             "DELETE FROM chat_turns WHERE base=?1 AND model=?2 AND id>=?3",
             params![base, model, cutoff],
         )?;
     }
     u64::try_from(cleared).map_err(|_| StorageError::Unavailable)
+}
+
+/// Scopes whose current selection still contains one of `ids` — read after
+/// the caller's own selection rows were rewritten, so the calling scope never
+/// appears. SQL comes from the caller (app vs personal selection table).
+fn still_selecting_scopes<T: ToSql>(
+    db: &Connection,
+    sql: &str,
+    ids: &[T],
+) -> Result<BTreeSet<(String, String)>, StorageError> {
+    let mut scopes = BTreeSet::new();
+    let mut statement = db.prepare(sql)?;
+    for id in ids {
+        let rows = statement.query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            scopes.insert(row?);
+        }
+    }
+    Ok(scopes)
 }
 
 fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageError> {

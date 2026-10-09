@@ -34,9 +34,10 @@ test('requires explicit selection, enforces budgets, and confirms revocation',as
   const save=region.getByRole('button',{name:'保存此模型的记忆设置'});await expect(save).toBeDisabled();
   await checks.nth(6).uncheck();await expect(save).toBeDisabled();await checks.nth(5).uncheck();await save.click();
   await expect(region).toContainText('启用 · 4条');expect(await page.evaluate(()=>(window as any).writes[0].selectedIds.length)).toBe(4);
-  await checks.first().uncheck();await save.click();await expect(region.getByRole('alertdialog')).toContainText('使用过所移除条目的对话');
+  await checks.first().uncheck();await save.click();await expect(region.getByRole('alertdialog')).toContainText('仍在其他模型选用的对话不动');
   await region.getByRole('button',{name:'返回',exact:true}).click();expect(await page.evaluate(()=>(window as any).writes.length)).toBe(1);
   await save.click();await region.getByRole('button',{name:'确认收回并开始新对话'}).click();await expect(region).toContainText('已保存状态：关闭');
+  await expect(region).toContainText('已清除使用过所移除条目的最近 1 轮对话');
   expect(await page.evaluate(()=>(window as any).writes[1].restartConversation)).toBe(true);
 });
 test('stale model scope is rejected and failed saves retain selection',async({page})=>{

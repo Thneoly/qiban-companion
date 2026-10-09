@@ -657,6 +657,100 @@ fn personal_prune_matches_ids_across_seqs_and_scopes() {
 }
 
 #[test]
+fn deselect_spares_scopes_that_still_select_the_item() {
+    let mut s = store();
+    let shared = s.memory_create(&draft("shared"), 0).unwrap().value;
+    // Both scopes select the item and both archives carry a turn on it.
+    select(&s, "a", std::slice::from_ref(&shared));
+    select(&s, "b", std::slice::from_ref(&shared));
+    chat_using(
+        &mut s,
+        "a",
+        &[ChatTurnUsage::app(shared.id.clone(), shared.revision)],
+    );
+    chat_using(
+        &mut s,
+        "b",
+        &[ChatTurnUsage::app(shared.id.clone(), shared.revision)],
+    );
+    let scope = MemoryScope {
+        base_url: "a".into(),
+        model: "model".into(),
+    };
+    // Dropping the selection in scope "a" prunes only "a": scope "b" still
+    // injects the item every turn, so deleting its history would remove
+    // nothing the next request will not carry again.
+    let commit = s
+        .memory_policy_set(
+            &scope,
+            &MemoryPolicyChange {
+                expected_scope: scope.clone(),
+                expected_revision: 1,
+                expected_epoch: 1,
+                enabled: false,
+                selected_ids: vec![],
+                restart_conversation: true,
+            },
+        )
+        .unwrap();
+    assert!(commit.chat_cleared);
+    assert_eq!(commit.cleared_turns, 1);
+    assert!(s.load("a", "model").unwrap().is_empty());
+    assert_eq!(s.load("b", "model").unwrap(), vec![turn()]);
+    // A real delete still reaches scope "b": the ledger rows survived.
+    let removed = s.memory_delete(&shared.id, 1, 2).unwrap();
+    assert_eq!(removed.cleared_turns, 1);
+    assert!(s.load("b", "model").unwrap().is_empty());
+    validate_schema(&s.0).unwrap();
+}
+
+#[test]
+fn personal_deselect_spares_still_selecting_scopes() {
+    let mut s = store();
+    chat_using(&mut s, "a", &[ChatTurnUsage::personal(9, 1)]);
+    chat_using(&mut s, "b", &[ChatTurnUsage::personal(9, 1)]);
+    let select_both = |scope: &MemoryScope, revision: i64, epoch: i64| PersonalMemoryChange {
+        expected_scope: scope.clone(),
+        expected_revision: revision,
+        expected_epoch: epoch,
+        enabled: true,
+        selected_ids: vec![9],
+        restart_conversation: false,
+    };
+    let a = MemoryScope {
+        base_url: "a".into(),
+        model: "model".into(),
+    };
+    let b = MemoryScope {
+        base_url: "b".into(),
+        model: "model".into(),
+    };
+    s.personal_memory_policy_set(&a, &select_both(&a, 0, 0))
+        .unwrap();
+    s.personal_memory_policy_set(&b, &select_both(&b, 0, 1))
+        .unwrap();
+    let commit = s
+        .personal_memory_policy_set(
+            &a,
+            &PersonalMemoryChange {
+                expected_scope: a.clone(),
+                expected_revision: 1,
+                expected_epoch: 2,
+                enabled: false,
+                selected_ids: vec![],
+                restart_conversation: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(commit.cleared_turns, 1);
+    assert!(s.load("a", "model").unwrap().is_empty());
+    // Scope "b" still selects id 9 and keeps both the turn and the policy.
+    assert_eq!(s.load("b", "model").unwrap(), vec![turn()]);
+    assert_eq!(s.personal_memory_policy(&b).unwrap().selected_ids, vec![9]);
+    validate_schema(&s.0).unwrap();
+}
+
+#[test]
 fn usage_impact_reports_per_scope_suffix_counts_without_touching_rows() {
     let mut s = store();
     let used = s.memory_create(&draft("used"), 0).unwrap().value;

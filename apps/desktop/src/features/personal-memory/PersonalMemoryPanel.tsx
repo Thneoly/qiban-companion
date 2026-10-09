@@ -50,6 +50,7 @@ export function PersonalMemoryPanel() {
   const [ids, setIds] = useState<number[]>([]);
   const [injectionBusy, setInjectionBusy] = useState(false);
   const [injectionError, setInjectionError] = useState('');
+  const [injectionNote, setInjectionNote] = useState('');
   const [confirming, setConfirming] = useState(false);
   const injectionSerial = useRef(0);
   const injectionActing = useRef(false);
@@ -169,13 +170,14 @@ export function PersonalMemoryPanel() {
   async function saveInjection(restartConversation: boolean) {
     if (injectionActing.current || !preview) return;
     injectionActing.current = true;
-    setInjectionBusy(true); setInjectionError(''); setConfirming(false);
+    setInjectionBusy(true); setInjectionError(''); setInjectionNote(''); setConfirming(false);
     try {
-      decodeMemoryReceipt(await invoke('personal_memory_policy_set', { request: {
+      const receipt = decodeMemoryReceipt(await invoke('personal_memory_policy_set', { request: {
         expectedScope: preview.scope, expectedEpoch: preview.contextEpoch,
         expectedRevision: preview.personal.policy.revision,
         enabled, selectedIds: enabled ? ids : [], restartConversation,
       }}));
+      if (alive.current) setInjectionNote(`选择已保存在本机。${receipt.clearedTurns > 0 ? `已清除使用过所移除条目的最近 ${receipt.clearedTurns} 轮对话，其余保留。` : '已有聊天记录保留。'}`);
       await refreshInjection();
     } catch (e) {
       if (alive.current) setInjectionError(personalPolicyErrorMessage(e));
@@ -300,9 +302,10 @@ export function PersonalMemoryPanel() {
       </fieldset>
       <p className="personal-memory-help">{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送{online ? '' : ' · 离线时字数为已显示内容的下限'}</p>
       {injectionError && <p role="alert" className="personal-memory-error">{injectionError}</p>}
+      {injectionNote && <p role="status" className="personal-memory-help">{injectionNote}</p>}
       {confirming && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
         <h4 id="personal-injection-confirm-title">确认收回个人记忆使用</h4>
-        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并删除使用过所移除条目的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
+        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并删除使用过所移除条目、且此后不再使用它的对话：从第一次使用它的一轮起全部清除，之前的对话保留；仍在其他模型选用的对话不动。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
         <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并开始新对话</button>
         <button disabled={injectionBusy} onClick={() => setConfirming(false)}>返回，不修改</button>
       </div>}
