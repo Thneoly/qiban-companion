@@ -31,7 +31,7 @@
 - Rust：companion-storage 78 / desktop 64 / core 14 / coordinator 12 全绿；fmt+clippy 干净。Vitest 90、浏览器 Playwright 55 过 1 跳（外部 Live2D 资产，与本项无关）、`npm run check`、`npm run verify:docs` 通过。
 - **Mutation 钉子**（按项目纪律摘除后必须红，数字为 2026-10-09 复核实测）：①`prune_chats` 摘 per-scope 过滤（删 WHERE base/model）→ 13 用例红（7 条 q6 + 6 条存储测试）；②`id>=` 改 `id=`（丢后缀语义）→ 3 用例红（含专属后缀测试）；③`append_with_usage` 摘账本写入 → 16 用例红。
 - 新增代表性测试：v3/v2 真文件迁移回填（含个人记忆 seq=NULL）、账本校验（重复/超限/坏 id）、淘汰与清空级联、前缀截断保留前缀、personal 跨 seq/scope 按 id 匹配、`usage_impact` 只读不落刀、宿主删除后重载存活前缀且重启复验、`clearedTurns` 契约必填。
-- native 验收脚本（`memory-panel.cjs`、`memory-context.cjs`、`voice-chat.cjs`、`q6/harness.cjs`、`single-instance.cjs`）已同步 user_version=4 与按钮名；**真机复核待 PR 合并后重建二进制执行**（见各脚本复现命令）。
+- native 验收脚本已同步 user_version=4 与按钮名。**真机复核完成（2026-10-10，合并后 main 56d98f2）**：q6 runner 54/54（50 发送边界 + 4 原生删除）、audit 删除 20/20（M4 门按设计为 Hold——本地轮恒不评分模型质量与独立体验）、memory-panel 7 例全过；memory-panel.cjs 补发了 protocol v3 解析期必填的 `expectedPersonal`（v3 落地后该 opt-in 脚本未随跑，v2 形状请求被拒收）。证据在各 runId 的 gitignored `.cache/` 目录。
 
 ## 遗留
 
