@@ -37,11 +37,11 @@
 - Rust：`voice_companion.rs` 5 组测试（注册表按轮取消+在途上限、transcribe 用已存配置+错误映射、speak 后续句裁剪+trimmed 进度、turn_cancel 停在途+注册表清空、非法载荷不发任何请求）+ `voice.rs` SpeechClient 提取后既有断言逐字保留全绿；`cargo fmt`/`clippy -D warnings`/`cargo test` 通过。
 - 前端：`npm run check`（含 contracts 解码边界、`sentences.test.ts`）通过；`test:browser` 新增 `voice-chat.spec.ts` 9 例——未配置 fail-closed、录音一次上传+blur 取消+10s 上限、转写自动发送带记忆快照与 epoch、顺序播放+预取（blob URL 映射回句子序号钉死播放顺序，并用 ArrayBuffer 返回分支覆盖真机形态）、句间打断（park 时序）不残留并发播放循环、打断丢迟到+双 cancel+可开新轮、首句保留+裁剪标志+回退、单句失败不毒化下轮、字幕先于回复流。
 - 对抗审查（四维：打断/迟到/释放语义、裁剪启发式与校验、raw IPC 与注册铁律、测试真实性）后的修复：interrupt() 唤醒 park 中的播放循环（否则旧循环迟到退出清掉 driving 标志，新一轮出现并发播放与 blob 泄漏，major；已加 park 时序回归，且用「只摘除 interrupt 侧唤醒」的探针验证过可回归——用例变红于 250ms 窗口内出现第二路播放）；聊天回调绑定轮次身份（旧轮迟到 settle 不再把新轮标记完成）；`finishRecording` 加录制态守卫；英文句点+空白分句；singleShot 回退改证据驱动；`voice_turn_cancel` 补 turn_id 校验；零请求负测改用本地 listener 证明零连接；native 脚本 fixture 断言改为主流程内重抛、轮询超时显式报错、补 chat_cancel 与 progress 形状断言、采集图改为手势后惰性建立。
-- 真机：`tests/native/voice-chat.cjs` 已入库（env 门禁：`QIBAN_ACCEPTANCE_EXE` + 独立验收标识、全新 profile、`instance.lock`+db 版本校验、CDP、本机 HTTP fixture 断言无凭据、假 gUM 不碰真实硬件）。覆盖：pet 窗口 mic 可用性首断言（跨窗口权限风险）、raw IPC 真机为 ArrayBuffer 且字节精确、全链自动发送、打断（在途 speak 以「已停止」拒绝+双取消+历史为空+迟到 clip/迟到文本不浮出）、第二轮完整、轨道全 ended、无 blob 泄漏。**脚本尚未在真机运行**——验收 exe 需重建（托盘退出后），与生产重建同批执行。
+- 真机：`tests/native/voice-chat.cjs` 已入库并于 2026-10-09 **真机运行通过**（8 用例全绿，标识 `m2-20261009d`，证据落 `.cache/`：wire.json/requests.json/两截图）。env 门禁：`QIBAN_ACCEPTANCE_EXE` + 独立验收标识、全新 profile、`instance.lock`+db 版本校验、CDP、本机 HTTP fixture 断言无凭据、假 gUM 不碰真实硬件。覆盖：pet 窗口 mic 可用性首断言（权限状态非 denied）、raw IPC 真机为 ArrayBuffer 且字节精确、全链自动发送（fixture 侧可见转写 multipart 21KB/句序合成）、打断、第二轮完整（队列预取在 wire 上直接可见 `-s0`+`-s1`）、轨道全 ended、无 blob 泄漏。**观察层改版**（三次调试的教训）：真机 WebView2 上 `window.__TAURI_INTERNALS__`/`window.ipc` 均为不可写注入，页面侧 invoke tap 赋值**静默失败**（browser mock 测不出）；改为 CDP 侧 `page.on('request')` 观察 `http://ipc.localhost/<command>` fetch（命令在 URL 路径、参数 JSON 在 postData）。打断证据相应升级为传输级：wire 上 `chat_cancel` 恰一条且 requestId 与本轮 `chat_generate` 精确配对、`voice_turn_cancel` 序列恰为探针+本轮；Rust drop 在途 future → fixture 服务端两条 held 连接（chat 流式 + tts 未响应头）均观测到 close——比页面侧「已停止」拒绝字符串更强（该拒绝语义由 Rust 单测钉住）。
 
 ## 边界（沿用计划风险清单）
 
-1. **麦克风权限跨窗口继承未真机验证**（最高风险）：native 脚本第一断言就是它；同 origin 大概率继承，若拒走显式授权或降级提示，不把录音挪 main 窗口。
+1. ~~麦克风权限跨窗口继承未真机验证（最高风险）~~ **已验证**：native 首断言过——pet 窗口 `getUserMedia` 存在、权限状态 `'prompt'` 非 denied；真实授权弹窗与真实硬件录音仍留人工清单（脚本用假 gUM 不碰硬件）。
 2. 裁剪是启发式非保证，两侧都有失配面：服务商特征变化（模型/音色/版本更新后三段布局漂移）→ 保留提示音并触发整段回退；内容侧——开头连续三段平稳延音（如风格化的「啊—— 嗯—— 哦——」）会被整体当提示音裁掉，上界 1.7s 真语音（静音计入最多 ~2.5s）。失配靠 trimmed 上报与回退两态如实可见，人工听感清单复核。
 3. 取消语义有毫秒级窗口：`voice_speak` 在读取配置（凭据管理器）之后才注册进取消表，恰好在其间到达的 `voice_turn_cancel` 通知不到它——该次调用会完整跑完（≤60s、计费）后结果被前端丢弃。有界（每次竞争最多漏一个请求）；正确修复需 turn 级共享 watch（避免 subscribe-after-send 盲区），留待需要时做。
 4. 费用：每轮 1 ASR + N TTS + 1 chat；本地丢弃不退款（「在途调用可能计费」如实呈现）；不发明语音单价，`audio_cost` 恒 null。上传方向 wav 走 JSON number[]（10s 上限约 1.3MB、30s 硬顶约 4MB，Tauri 无默认上限、实测几十 ms 级）；下行已是 raw Response——上行对称改 raw payload 属优化项未排期。
@@ -56,4 +56,4 @@
 
 首句提示音「通知感」是否成立 / 裁剪成功率与回退模式听感（含延音开头是否被误裁）/ 句间停顿（预取 vs 实测每句 1.9-3.8s 合成）/ 外放回声时序残留 / 失焦时朗读随气泡收起而停止是否符合预期 / 说话中收起气泡·安静模式·托盘退出的设备释放 / 账单 N 轮核对（沿用 V5 方法）。
 
-接续：PR-B（T12）口型三提交（AnalyserNode+mouthRef、Live2D `ParamMouthOpenY` 每帧覆写、SVG 档位嘴）；验收 exe 重建后运行 native 脚本与人工清单；backlog 中 T11 标注为「工程交付，真机验收待补」。
+接续：PR-B（T12 口型）已合并（PR #48/#49）；native 脚本真机已绿（含口型增项的人工听感仍待复核）；backlog 中 T11 从「真机验收待补」改「脚本化真机验收已过，人工听感待核」。

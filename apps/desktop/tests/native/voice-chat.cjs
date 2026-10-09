@@ -9,7 +9,7 @@ assert(exe&&fs.existsSync(exe));assert(/^dev\.qiban\.companion\.acceptance\.m2-[
 const directory=path.join(process.env.LOCALAPPDATA,id); assert(!fs.existsSync(directory),'Refusing an existing profile');
 const evidence=path.resolve('.cache',id+'-'+require('node:crypto').randomUUID());fs.mkdirSync(evidence,{recursive:true});
 const port=Number(process.env.QIBAN_CDP_PORT||9442),delay=ms=>new Promise(r=>setTimeout(r,ms));
-let child,browser,pet,panel;const requests=[];let heldChat,heldSpeech,chatRequests=0,fixtureFailure=null;
+let child,browser,pet,panel;const requests=[],ipcCalls=[];let heldChat,heldSpeech,chatRequests=0,fixtureFailure=null;const speechInputs=[],closes=[];
 /** Rethrows the first fixture-side protocol violation at the next main-flow
  * checkpoint; asserts inside the http handler must not crash the harness. */
 const fixtures=()=>{if(fixtureFailure)throw fixtureFailure;};
@@ -29,11 +29,12 @@ const server=http.createServer((req,res)=>{const chunks=[];req.on('data',c=>chun
     res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({text:'本机语音测试'}));return;}
   if(req.url.endsWith('/audio/speech')){
     const input=JSON.parse(body.toString('utf8')).input;
-    if(input==='你好呀。'){heldSpeech=res;return;} // held: the interrupt case speaks this sentence
+    speechInputs.push(input);
+    if(input==='你好呀。'){heldSpeech=res;res.on('error',()=>{});res.on('close',()=>closes.push('speech'));return;} // held: the interrupt case speaks this sentence
     res.writeHead(200,{'Content-Type':'audio/wav','Content-Length':fixtureWav.length});res.end(fixtureWav);return;}
   if(req.url.endsWith('/chat/completions')){
     chatRequests++;res.writeHead(200,{'Content-Type':'text/event-stream'});
-    if(chatRequests===1){res.write('data: '+JSON.stringify({choices:[{delta:{content:'你好呀。'}}]})+'\n\n');heldChat=res;return;}
+    if(chatRequests===1){res.write('data: '+JSON.stringify({choices:[{delta:{content:'你好呀。'}}]})+'\n\n');heldChat=res;res.on('error',()=>{});res.on('close',()=>closes.push('chat'));return;}
     res.write('data: '+JSON.stringify({choices:[{delta:{content:'第二句。'}}]})+'\n\n');
     res.write('data: '+JSON.stringify({choices:[{delta:{content:'结束了。'}}]})+'\n\n');
     res.write('data: '+JSON.stringify({choices:[{finish_reason:'stop'}],usage:{total_tokens:7}})+'\n\n');
@@ -50,6 +51,16 @@ async function start(){
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
   const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);db.close();
+  // The invoke tap that works on the real machine: WebView2 exposes every
+  // tauri invoke as an http://ipc.localhost/<command> fetch with the args as
+  // the POST body. window.__TAURI_INTERNALS__ and window.ipc are injected
+  // non-writable, so in-page monkey-patching silently does nothing.
+  pet.on('request',request=>{
+    const match=request.url().match(/^http:\/\/ipc\.localhost\/([^/?]+)/);
+    if(!match)return;
+    let args;try{args=request.postData()?JSON.parse(request.postData()):{};}catch{args={};}
+    ipcCalls.push({command:decodeURIComponent(match[1]),args});
+  });
 }
 async function stop(){if(browser)await browser.close();browser=undefined;if(child){const process=child;child=undefined;const exited=new Promise(r=>process.once('exit',r));process.kill();await exited;}await delay(400);}
 const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});
@@ -65,10 +76,10 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   assert(surface.gum==='function','pet window has no getUserMedia');
   assert(surface.permission!=='denied','pet window microphone permission denied');
   // Synthetic capture device (no hardware), real MediaRecorder pipeline, a
-  // play() wrapper that cannot wedge on autoplay, blob accounting, and an
-  // invoke tap recording every voice_speak outcome and turn cancellation.
+  // play() wrapper that cannot wedge on autoplay, and blob accounting. The
+  // invoke side is observed from CDP (ipc.localhost requests), not patched.
   await pet.evaluate(()=>{
-    const w=window;w.testPlays=[];w.testBlob={created:0,revoked:0};w.testMic={tracks:[]};w.testVoice={speaks:[],cancels:[],chatCancels:[]};
+    const w=window;w.testPlays=[];w.testBlob={created:0,revoked:0};w.testMic={tracks:[]};
     const realCreate=URL.createObjectURL,realRevoke=URL.revokeObjectURL;
     URL.createObjectURL=value=>{w.testBlob.created++;return realCreate.call(URL,value);};
     URL.revokeObjectURL=value=>{w.testBlob.revoked++;return realRevoke.call(URL,value);};
@@ -89,17 +100,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
     HTMLMediaElement.prototype.play=function(){const element=this;w.testPlays.push(element.src);
       realPlay.call(element)?.catch?.(()=>{}); // autoplay denial must not wedge the queue
       setTimeout(()=>{try{element.pause();}catch{}element.dispatchEvent(new Event('ended'));},150);
-      return Promise.resolve();};
-    const internals=w.__TAURI_INTERNALS__,realInvoke=internals.invoke;
-    internals.invoke=function(command,args){
-      const pending=realInvoke.call(internals,command,args);
-      if(command==='voice_speak'){const entry={requestId:args.request.requestId,seq:args.request.seq,settled:null};
-        w.testVoice.speaks.push(entry);
-        pending.then(value=>{entry.settled={ok:true,rawType:value?.constructor?.name,bytes:value instanceof ArrayBuffer?value.byteLength:Array.isArray(value)?value.length:null};},
-          error=>{entry.settled={ok:false,error:String(error)};});}
-      if(command==='voice_turn_cancel')w.testVoice.cancels.push(args.turnId);
-      if(command==='chat_cancel')w.testVoice.chatCancels.push(args.requestId);
-      return pending;};});
+      return Promise.resolve();};});
   await invoke(panel,'model_settings_save',{config:{baseUrl:chatBase,model:'native-chat',useApiKey:false,maxOutputTokens:1024}});
   await invoke(panel,'voice_settings_save',{config:{voiceBaseUrl:voiceBase,useVoiceKey:false,asrModel:'native-asr',ttsModel:'native-tts',voice:'native-voice'}});
   // Raw IPC claim: voice_speak returns tauri::ipc::Response, which the webview
@@ -116,8 +117,14 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   assert.deepStrictEqual(probe.progress,[{requestId:'native-raw-probe',trimmed:null}],'progress channel payload shape');
   await invoke(pet,'voice_turn_cancel',{turnId:'native-raw-turn'});
   // Turn A: record, auto-send, then interrupt while chat and tts are in flight.
+  // A fresh profile may surface the first-use guide depending on when the pet
+  // window's guide_status read lands - handle either deterministically.
   await pet.getByRole('button',{name:'和栖栖互动'}).click();
-  await pet.getByRole('button',{name:'聊一聊',exact:true}).click();
+  const chatMode=pet.getByRole('button',{name:'聊一聊',exact:true});
+  const firstUse=pet.getByLabel('初次使用指南');
+  await expect(chatMode.or(firstUse)).toBeVisible({timeout:15000});
+  if(await firstUse.isVisible())await pet.getByRole('button',{name:'知道了，开始相处'}).click();
+  await chatMode.click();
   const mic=pet.locator('button.pet-voice');
   await expect(mic).toHaveText('语音说话',{timeout:15000}); // pet ACL + settings read on the real machine
   await mic.click();
@@ -126,26 +133,36 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await mic.click(); // stop -> transcribe -> auto-send
   await expect(pet.getByText('我听到：本机语音测试')).toBeVisible({timeout:15000});
   await expect(mic).toHaveText('停止朗读',{timeout:15000});
-  for(let n=0;n<100&&requests.filter(r=>r.path.endsWith('/audio/speech')).length<1;n++)await delay(100);
+  // Wait for THIS turn's first clip specifically - the raw probe's own
+  // speech request must not satisfy the wait.
+  for(let n=0;n<100&&!speechInputs.includes('你好呀。');n++)await delay(100);
   fixtures();
-  assert(requests.some(r=>r.path.endsWith('/audio/speech')),'no /audio/speech request reached the fixture');
+  assert(speechInputs.includes('你好呀。'),"the turn's first sentence never reached /audio/speech");
   await pet.screenshot({path:path.join(evidence,'voice-turn-speaking.png')});
   await mic.click(); // 停止朗读
   await expect(mic).toHaveText('语音说话');
-  const interrupted=await pet.evaluate(()=>({voice:window.testVoice,plays:window.testPlays.length}));
-  assert(interrupted.plays===0,'interrupted turn must not have played');
-  assert(interrupted.voice.chatCancels.length===1,'chat_cancel not issued with the interrupt');
-  const turnSpeak=interrupted.voice.speaks.find(s=>s.requestId!=='native-raw-probe');
-  const turn=turnSpeak?.requestId.replace(/-s\d+$/,'');
+  assert(await pet.evaluate(()=>window.testPlays.length)===0,'interrupted turn must not have played');
+  // The cancellations must reach the transport: dropping the futures on the
+  // rust side aborts both in-flight provider connections server-side.
+  for(let n=0;n<50&&!(closes.includes('speech')&&closes.includes('chat'));n++)await delay(100);
+  assert(closes.includes('speech')&&closes.includes('chat'),'cancel did not abort the in-flight tts/chat connections');
+  // The wire must show exactly one chat_cancel, tied to this turn's request.
+  const speakCall=ipcCalls.find(c=>c.command==='voice_speak'&&c.args.request?.turnId&&c.args.request.turnId!=='native-raw-turn');
+  assert(speakCall,'the turn never issued a voice_speak over ipc');
+  const turn=speakCall.args.request.turnId;
+  const chatCancels=ipcCalls.filter(c=>c.command==='chat_cancel');
+  assert(chatCancels.length===1,'chat_cancel not issued with the interrupt');
+  const chatRequestIds=ipcCalls.filter(c=>c.command==='chat_generate').map(c=>c.args.request?.requestId);
+  assert(chatCancels[0].args.requestId&&chatRequestIds.includes(chatCancels[0].args.requestId),'chat_cancel does not match the turn chat request');
   // The probe cleanup cancelled 'native-raw-turn' first; the interrupt must
   // cancel exactly this turn.
-  assert.deepStrictEqual(interrupted.voice.cancels,['native-raw-turn',turn],'unexpected voice_turn_cancel sequence');
-  const rejected=interrupted.voice.speaks.filter(s=>s.requestId!=='native-raw-probe'&&s.seq===0).find(s=>s.settled&&!s.settled.ok);
-  assert(rejected&&rejected.settled.error.includes('已停止'),'in-flight speak did not reject with 已停止');
+  assert.deepStrictEqual(ipcCalls.filter(c=>c.command==='voice_turn_cancel').map(c=>c.args.turnId),['native-raw-turn',turn],'unexpected voice_turn_cancel sequence');
   assert.deepEqual(await invoke(pet,'chat_history'),[],'interrupted turn must not enter history');
-  // The held responses land late: neither the clip nor the late chat text may surface.
-  heldSpeech.writeHead(200,{'Content-Type':'audio/wav'});heldSpeech.end(fixtureWav);
-  heldChat.end('data: '+JSON.stringify({choices:[{delta:{content:'迟到文本'}}]})+'\n\n'+'data: '+JSON.stringify({choices:[{finish_reason:'stop'}],usage:{total_tokens:5}})+'\n\n'+'data: [DONE]\n\n');
+  // The held responses land late: neither the clip nor the late chat text may
+  // surface. The sockets are already aborted, so the writes go nowhere - which
+  // is itself the point - and must not crash the fixture.
+  try{heldSpeech.writeHead(200,{'Content-Type':'audio/wav'});heldSpeech.end(fixtureWav);}catch{}
+  try{heldChat.end('data: '+JSON.stringify({choices:[{delta:{content:'迟到文本'}}]})+'\n\n'+'data: '+JSON.stringify({choices:[{finish_reason:'stop'}],usage:{total_tokens:5}})+'\n\n'+'data: [DONE]\n\n');}catch{}
   await delay(300);
   assert(await pet.evaluate(()=>window.testPlays.length)===0,'late clip played after interrupt');
   assert.deepEqual(await invoke(pet,'chat_history'),[],'late chat text entered history');
@@ -170,7 +187,11 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   fs.writeFileSync(path.join(evidence,'requests.json'),JSON.stringify(requests,null,2));
   const result={passed:true,identifier:id,micPermission:surface.permission,rawIpc:probe.rawType,requests:requests.length,
     cases:['pet mic surface available','raw wav ipc ArrayBuffer byte-exact','voice turn auto-send over the chat chain',
-      'interrupt rejects in-flight speak and cancels the turn','late clip and late text never surface',
+      'interrupt aborts in-flight chat and tts at the transport','late clip and late text never surface',
       'second turn completes with queued clips','tracks released and no blob leaks','history keeps only the completed turn']};
   fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
-}finally{await stop();server.closeAllConnections();server.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
+}finally{
+  // Evidence lands on disk even when an assert fails mid-flow.
+  try{fs.writeFileSync(path.join(evidence,'wire.json'),JSON.stringify({ipcCalls,requests,speechInputs,closes},null,2));}catch{}
+  console.error('evidence: '+evidence);
+  await stop();server.closeAllConnections();server.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
