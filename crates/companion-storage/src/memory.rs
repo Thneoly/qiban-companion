@@ -167,6 +167,17 @@ pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
             return Err(StorageError::Unavailable);
         }
     }
+    // Usage ledger mirrors the send-time limits: at most 5 app + 5 personal
+    // entries per persisted turn (orphans are caught by foreign_key_check).
+    let over_limit: i64 = db.query_row(
+        "SELECT count(*) FROM (SELECT turn_id, memory_kind FROM chat_turn_usage \
+         GROUP BY turn_id, memory_kind HAVING count(*) > 5)",
+        [],
+        |r| r.get(0),
+    )?;
+    if over_limit != 0 {
+        return Err(StorageError::Unavailable);
+    }
     if db.prepare("PRAGMA foreign_key_check")?.exists([])? {
         return Err(StorageError::Unavailable);
     }

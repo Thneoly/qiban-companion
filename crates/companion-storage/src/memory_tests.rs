@@ -1,5 +1,5 @@
 use super::*;
-use companion_core::conversation::ChatTurn;
+use companion_core::conversation::{ChatTurn, ChatTurnUsage};
 
 fn store() -> HistoryStore {
     let mut db = Connection::open_in_memory().unwrap();
@@ -8,6 +8,8 @@ fn store() -> HistoryStore {
     tx.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL);").unwrap();
     tx.execute_batch(include_str!("memory-schema.sql")).unwrap();
     tx.execute_batch(include_str!("memory-schema-v3.sql"))
+        .unwrap();
+    tx.execute_batch(include_str!("memory-schema-v4.sql"))
         .unwrap();
     tx.commit().unwrap();
     HistoryStore(db)
@@ -19,18 +21,19 @@ fn draft(body: &str) -> MemoryDraft {
         event_date: None,
     }
 }
-fn chat(s: &mut HistoryStore) {
-    for scope in ["a", "b"] {
-        s.append(
-            scope,
-            "model",
-            &ChatTurn {
-                user: "question".into(),
-                assistant: "answer".into(),
-            },
-        )
-        .unwrap();
+fn turn() -> ChatTurn {
+    ChatTurn {
+        user: "question".into(),
+        assistant: "answer".into(),
     }
+}
+fn chat(s: &mut HistoryStore) {
+    chat_using(s, "a", &[]);
+    chat_using(s, "b", &[]);
+}
+/// One turn whose ledger records the app memories it carried at send time.
+fn chat_using(s: &mut HistoryStore, base: &str, usage: &[ChatTurnUsage]) {
+    s.append_with_usage(base, "model", &turn(), usage).unwrap();
 }
 fn chats(s: &HistoryStore) -> i64 {
     s.0.query_row("SELECT count(*) FROM chat_turns", [], |r| r.get(0))
@@ -90,7 +93,17 @@ fn policy_is_explicit_scoped_versioned_and_revocation_is_atomic() {
     };
     let one = s.memory_create(&draft("one"), 0).unwrap().value;
     let two = s.memory_create(&draft("two"), 1).unwrap().value;
-    chat(&mut s);
+    // Scope "a" turns carried both selected memories at send time; scope "b"
+    // never used them — that asymmetry is what precise cleanup keys on.
+    chat_using(
+        &mut s,
+        "a",
+        &[
+            ChatTurnUsage::app(two.id.clone(), two.revision),
+            ChatTurnUsage::app(one.id.clone(), one.revision),
+        ],
+    );
+    chat_using(&mut s, "b", &[]);
     assert_eq!(s.memory_policy(&scope).unwrap(), MemoryPolicy::default());
     let mut change = MemoryPolicyChange {
         expected_scope: scope.clone(),
@@ -196,7 +209,12 @@ fn policy_budget_order_and_deleted_selections_survive_reopen() {
 fn edit_conflicts_and_clear_all_scopes_atomically() {
     let mut s = store();
     let original = s.memory_create(&draft("before"), 0).unwrap().value;
-    chat(&mut s);
+    chat_using(
+        &mut s,
+        "a",
+        &[ChatTurnUsage::app(original.id.clone(), original.revision)],
+    );
+    chat_using(&mut s, "b", &[]);
     assert!(matches!(
         s.memory_update(&original.id, 0, 1, &draft("wrong")),
         Err(StorageError::Memory(MemoryError::Conflict))
@@ -222,7 +240,12 @@ fn deletion_scrubs_content_and_retry_preserves_new_chat() {
     let mut s = store();
     let original = s.memory_create(&draft("private text"), 0).unwrap().value;
     select(&s, "a", std::slice::from_ref(&original));
-    chat(&mut s);
+    chat_using(
+        &mut s,
+        "a",
+        &[ChatTurnUsage::app(original.id.clone(), original.revision)],
+    );
+    chat_using(&mut s, "b", &[]);
     let removed = s.memory_delete(&original.id, 1, 1).unwrap();
     assert!(removed.chat_cleared);
     assert!(s.memory_list().unwrap().is_empty());
@@ -323,7 +346,12 @@ fn late_failure_rolls_back_content_epoch_selection_and_history() {
     let mut s = store();
     let original = s.memory_create(&draft("before"), 0).unwrap().value;
     select(&s, "a", std::slice::from_ref(&original));
-    chat(&mut s);
+    chat_using(
+        &mut s,
+        "a",
+        &[ChatTurnUsage::app(original.id.clone(), original.revision)],
+    );
+    chat_using(&mut s, "b", &[]);
     s.0.execute_batch("CREATE TRIGGER fail_chat_delete BEFORE DELETE ON chat_turns BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
     assert!(s
         .memory_update(&original.id, 1, 1, &draft("after"))
@@ -434,13 +462,14 @@ fn personal_policy_set_mirrors_app_policy_semantics() {
 
     // Enabling with selections bumps epoch, keeps chats.
     store
-        .append(
+        .append_with_usage(
             &scope.base_url,
             &scope.model,
             &ChatTurn {
                 user: "你好".into(),
                 assistant: "在".into(),
             },
+            &[ChatTurnUsage::personal(9, 1), ChatTurnUsage::personal(4, 1)],
         )
         .unwrap();
     let commit = store
@@ -462,13 +491,18 @@ fn personal_policy_set_mirrors_app_policy_semantics() {
 
     // Adding to the selection also keeps chats.
     store
-        .append(
+        .append_with_usage(
             &scope.base_url,
             &scope.model,
             &ChatTurn {
                 user: "二".into(),
                 assistant: "轮".into(),
             },
+            &[
+                ChatTurnUsage::personal(9, 1),
+                ChatTurnUsage::personal(4, 1),
+                ChatTurnUsage::personal(7, 1),
+            ],
         )
         .unwrap();
     let commit = store
@@ -489,13 +523,15 @@ fn personal_policy_set_mirrors_app_policy_semantics() {
         model: "m2".into(),
     };
     store
-        .append(
+        .append_with_usage(
             &other.base_url,
             &other.model,
             &ChatTurn {
                 user: "别".into(),
                 assistant: "家".into(),
             },
+            // m2 has no personal policy: this turn carried nothing.
+            &[],
         )
         .unwrap();
     let commit = store

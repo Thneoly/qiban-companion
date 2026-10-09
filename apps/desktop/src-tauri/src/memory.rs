@@ -305,13 +305,14 @@ mod tests {
                 .store
                 .as_mut()
                 .unwrap()
-                .append(
+                .append_with_usage(
                     "https://q6.invalid",
                     "fixture",
                     &ChatTurn {
                         user: "old".into(),
                         assistant: "old".into(),
                     },
+                    &[],
                 )
                 .unwrap();
         }

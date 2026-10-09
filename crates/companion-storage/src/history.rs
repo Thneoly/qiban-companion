@@ -1,8 +1,47 @@
 //! One local archive, globally bounded; model context is scoped by endpoint and model.
 use crate::StorageError;
-use companion_core::conversation::ChatTurn;
+use companion_core::conversation::{ChatTurn, ChatTurnUsage, TurnUsageKind};
+use companion_core::memory::MAX_COUNTER;
 use rusqlite::{params, Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
+
+/// The ledger accepts at most one app and one personal selection set per turn
+/// (mirrors the send-time admission limits); anything else is refused whole.
+fn validate_usage(usage: &[ChatTurnUsage]) -> Result<(), StorageError> {
+    let mut app = 0usize;
+    let mut personal = 0usize;
+    for (index, entry) in usage.iter().enumerate() {
+        match entry.kind {
+            TurnUsageKind::App => {
+                app += 1;
+                if uuid::Uuid::parse_str(&entry.memory_id).is_err()
+                    || entry.memory_id.contains('\0')
+                    || !(1..=MAX_COUNTER).contains(&entry.revision)
+                {
+                    return Err(StorageError::Unavailable);
+                }
+            }
+            TurnUsageKind::Personal => {
+                personal += 1;
+                if entry.personal_id < 1 || !(1..=MAX_COUNTER).contains(&entry.personal_seq) {
+                    return Err(StorageError::Unavailable);
+                }
+            }
+        }
+        // Duplicate rows would fight the unique index; reject before the INSERT.
+        if usage[..index].iter().any(|other| {
+            other.kind == entry.kind
+                && other.memory_id == entry.memory_id
+                && other.personal_id == entry.personal_id
+        }) {
+            return Err(StorageError::Unavailable);
+        }
+    }
+    if app > 5 || personal > 5 {
+        return Err(StorageError::Unavailable);
+    }
+    Ok(())
+}
 
 pub struct HistoryStore(pub(crate) Connection);
 impl HistoryStore {
@@ -17,7 +56,7 @@ impl HistoryStore {
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(StorageError::NewerSchema);
         }
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -46,6 +85,11 @@ impl HistoryStore {
         if version < 3 {
             tx.execute_batch(include_str!("memory-schema-v3.sql"))?;
         }
+        // v4 adds the chat_turn_usage ledger and backfills pre-v4 turns from
+        // the selections enabled at migration time (conservative direction).
+        if version < 4 {
+            tx.execute_batch(include_str!("memory-schema-v4.sql"))?;
+        }
         crate::memory::validate_schema(&tx)?;
         tx.commit()?;
         Ok(Self(connection))
@@ -71,11 +115,12 @@ impl HistoryStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(turns)
     }
-    pub fn append(
+    pub fn append_with_usage(
         &mut self,
         base: &str,
         model: &str,
         turn: &ChatTurn,
+        usage: &[ChatTurnUsage],
     ) -> Result<Vec<ChatTurn>, StorageError> {
         // Oversized complete pairs are not archived; preserve previous history.
         if turn.user.is_empty()
@@ -86,11 +131,31 @@ impl HistoryStore {
         {
             return Err(StorageError::Unavailable);
         }
+        validate_usage(usage)?;
         let tx = self.0.transaction()?;
         tx.execute(
             "INSERT INTO chat_turns(base,model,user,assistant) VALUES(?1,?2,?3,?4)",
             params![base, model, turn.user, turn.assistant],
         )?;
+        let turn_id = tx.last_insert_rowid();
+        for entry in usage {
+            match entry.kind {
+                TurnUsageKind::App => {
+                    tx.execute(
+                        "INSERT INTO chat_turn_usage(turn_id,memory_kind,memory_id,revision,personal_id,personal_seq)
+                         VALUES(?1,'app',?2,?3,NULL,NULL)",
+                        params![turn_id, entry.memory_id, entry.revision],
+                    )?;
+                }
+                TurnUsageKind::Personal => {
+                    tx.execute(
+                        "INSERT INTO chat_turn_usage(turn_id,memory_kind,memory_id,revision,personal_id,personal_seq)
+                         VALUES(?1,'personal',NULL,NULL,?2,?3)",
+                        params![turn_id, entry.personal_id, entry.personal_seq],
+                    )?;
+                }
+            }
+        }
         loop {
             let (count, size): (i64, i64) = tx.query_row(
                 "SELECT count(*), coalesce(sum(length(user)+length(assistant)),0) FROM chat_turns",
@@ -148,11 +213,17 @@ mod tests {
         {
             let mut store = HistoryStore::open(&path).unwrap();
             for n in 0..8 {
-                store.append("https://a", "a", &turn(n)).unwrap();
+                store
+                    .append_with_usage("https://a", "a", &turn(n), &[])
+                    .unwrap();
             }
             assert_eq!(store.load("https://a", "a").unwrap()[0].user, "问题2");
-            store.append("https://b", "a", &turn(8)).unwrap();
-            store.append("https://a", "b", &turn(9)).unwrap();
+            store
+                .append_with_usage("https://b", "a", &turn(8), &[])
+                .unwrap();
+            store
+                .append_with_usage("https://a", "b", &turn(9), &[])
+                .unwrap();
         }
         {
             let mut store = HistoryStore::open(&path).unwrap();
@@ -160,24 +231,26 @@ mod tests {
             assert_eq!(store.load("https://b", "a").unwrap(), vec![turn(8)]);
             assert_eq!(store.load("https://a", "b").unwrap(), vec![turn(9)]);
             store
-                .append(
+                .append_with_usage(
                     "https://a",
                     "b",
                     &ChatTurn {
                         user: "新".into(),
                         assistant: "字".repeat(11999),
                     },
+                    &[],
                 )
                 .unwrap();
             assert!(store.load("https://a", "a").unwrap().is_empty());
             assert!(store
-                .append(
+                .append_with_usage(
                     "https://a",
                     "b",
                     &ChatTurn {
                         user: "超".into(),
                         assistant: "字".repeat(12000)
-                    }
+                    },
+                    &[],
                 )
                 .is_err());
             assert_eq!(store.load("https://a", "b").unwrap().len(), 1);
@@ -194,7 +267,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 4).unwrap();
+        connection.pragma_update(None, "user_version", 5).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -204,13 +277,147 @@ mod tests {
         assert!(HistoryStore::from_connection(connection).is_err());
     }
     #[test]
+    fn usage_ledger_validates_rows_and_cascades_on_eviction_and_clear() {
+        let mut store =
+            HistoryStore::from_connection(Connection::open_in_memory().unwrap()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        // Duplicates, non-UUID ids, out-of-range revisions and non-positive
+        // personal ids are refused whole, before any turn is written.
+        let dup = [
+            ChatTurnUsage::app(id.clone(), 1),
+            ChatTurnUsage::app(id.clone(), 1),
+        ];
+        assert!(store.append_with_usage("a", "m", &turn(1), &dup).is_err());
+        assert!(store
+            .append_with_usage(
+                "a",
+                "m",
+                &turn(1),
+                &[ChatTurnUsage::app("not-a-uuid".into(), 1)]
+            )
+            .is_err());
+        assert!(store
+            .append_with_usage("a", "m", &turn(1), &[ChatTurnUsage::app(id.clone(), 0)])
+            .is_err());
+        assert!(store
+            .append_with_usage("a", "m", &turn(1), &[ChatTurnUsage::personal(0, 1)])
+            .is_err());
+        let six_app: Vec<_> = (0..6)
+            .map(|_| ChatTurnUsage::app(uuid::Uuid::new_v4().to_string(), 1))
+            .collect();
+        assert!(store
+            .append_with_usage("a", "m", &turn(1), &six_app)
+            .is_err());
+        // App and personal entries coexist on one turn.
+        store
+            .append_with_usage(
+                "a",
+                "m",
+                &turn(1),
+                &[ChatTurnUsage::app(id, 1), ChatTurnUsage::personal(5, 2)],
+            )
+            .unwrap();
+        let usage: i64 = store
+            .0
+            .query_row("SELECT count(*) FROM chat_turn_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(usage, 2);
+        // Evicting the ledgered turn (9 turns keep the last 6) cascades its rows away.
+        for n in 2..10 {
+            store.append_with_usage("a", "m", &turn(n), &[]).unwrap();
+        }
+        let usage: i64 = store
+            .0
+            .query_row("SELECT count(*) FROM chat_turn_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(usage, 0);
+        // A manual clear cascades too, and the archive stays valid.
+        store
+            .append_with_usage("a", "m", &turn(10), &[ChatTurnUsage::personal(7, 1)])
+            .unwrap();
+        store.clear().unwrap();
+        let usage: i64 = store
+            .0
+            .query_row("SELECT count(*) FROM chat_turn_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(usage, 0);
+        crate::memory::validate_schema(&store.0).unwrap();
+    }
+
+    #[test]
+    fn migrates_real_v3_file_backfilling_both_usage_families() {
+        // A genuine v3 archive the way a v3 binary would have left it: turns,
+        // an enabled app policy with one selection, an enabled personal policy
+        // with one selection, stamped user_version=3 (no usage table).
+        let path = std::env::temp_dir().join(format!("history-v3-{}.db", uuid::Uuid::new_v4()));
+        let memory_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch("CREATE TABLE chat_turns(id INTEGER PRIMARY KEY,base TEXT NOT NULL,model TEXT NOT NULL,user TEXT NOT NULL,assistant TEXT NOT NULL);").unwrap();
+            db.execute_batch(include_str!("memory-schema.sql")).unwrap();
+            db.execute_batch(include_str!("memory-schema-v3.sql"))
+                .unwrap();
+            db.execute(
+                "INSERT INTO chat_turns(base,model,user,assistant) VALUES('https://a','m','旧问题','旧回答')",
+                [],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO memories(id,kind,body,source_kind,source_label,event_date,created_at,confirmed_at,updated_at,revision) \
+                 VALUES(?1,'preference','正文','user_manual','用户在记忆面板填写',NULL,10,10,10,1)",
+                [&memory_id],
+            )
+            .unwrap();
+            db.execute_batch(
+                "INSERT INTO memory_policy VALUES('https://a','m',1,1);                          INSERT INTO personal_memory_policy VALUES('https://a','m',1,1);                          INSERT INTO personal_memory_selection VALUES('https://a','m',5,0);                          PRAGMA user_version=3;",
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO memory_selection VALUES('https://a','m',?1,0)",
+                [&memory_id],
+            )
+            .unwrap();
+        }
+        {
+            let store = HistoryStore::open(&path).unwrap();
+            assert_eq!(
+                store
+                    .0
+                    .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                    .unwrap(),
+                4
+            );
+            let app: (i64, i64) = store
+                .0
+                .query_row(
+                    "SELECT count(*), coalesce(sum(revision),0) FROM chat_turn_usage WHERE memory_kind='app'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(app, (1, 1)); // one row, carrying the send-time revision
+            let personal: (i64, i64) = store
+                .0
+                .query_row(
+                    "SELECT count(*), coalesce(sum(personal_id),0) FROM chat_turn_usage WHERE memory_kind='personal' AND personal_seq IS NULL",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(personal, (1, 5)); // seq is not recoverable for backfilled rows
+            crate::memory::validate_schema(&store.0).unwrap();
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn failed_writes_keep_previous_history() {
         let mut store =
             HistoryStore::from_connection(Connection::open_in_memory().unwrap()).unwrap();
-        store.append("a", "a", &turn(1)).unwrap();
+        store.append_with_usage("a", "a", &turn(1), &[]).unwrap();
         store.0.pragma_update(None, "query_only", true).unwrap();
         assert!(store.clear().is_err());
-        assert!(store.append("a", "a", &turn(2)).is_err());
+        assert!(store.append_with_usage("a", "a", &turn(2), &[]).is_err());
         assert_eq!(store.load("a", "a").unwrap(), vec![turn(1)]);
     }
 
@@ -235,8 +442,14 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                3
+                4
             );
+            // Pre-v4 turns had no selections to backfill from: empty ledger.
+            let usage: i64 = store
+                .0
+                .query_row("SELECT count(*) FROM chat_turn_usage", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(usage, 0);
             assert_eq!(store.context_epoch().unwrap(), 0);
             assert!(store.memory_list().unwrap().is_empty());
             let policies: i64 = store
@@ -326,7 +539,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(marker, 1);
-            s.0.pragma_update(None, "user_version", 4).unwrap();
+            s.0.pragma_update(None, "user_version", 5).unwrap();
         }
         let before = std::fs::read(&path).unwrap();
         assert!(matches!(
@@ -356,7 +569,7 @@ mod tests {
         {
             let mut store = HistoryStore::open(&path).unwrap();
             for t in &turns {
-                store.append("https://a", "m", t).unwrap();
+                store.append_with_usage("https://a", "m", t, &[]).unwrap();
             }
             for n in 0..2 {
                 memories.push(
@@ -387,11 +600,12 @@ mod tests {
                 )
                 .unwrap();
             drop(store);
-            // Rewind the file to a true v2 archive: drop the additive v3 tables
-            // and stamp user_version=2, exactly what a v2 binary would leave.
+            // Rewind the file to a true v2 archive: drop the additive v3/v4
+            // tables and stamp user_version=2, exactly what a v2 binary
+            // would leave.
             let db = Connection::open(&path).unwrap();
             db.execute_batch(
-            "DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              PRAGMA user_version=2;",
+            "DROP TABLE chat_turn_usage;              DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              PRAGMA user_version=2;",
         )
         .unwrap();
             let v3_tables: i64 = db.query_row(
@@ -408,8 +622,26 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                3
+                4
             );
+            // Backfill: 3 turns x 2 selected app memories = 6 ledger rows,
+            // attributed to the migration-time selection with send-time
+            // revisions; personal policy was empty, so no personal rows.
+            let usage: i64 = store
+                .0
+                .query_row("SELECT count(*) FROM chat_turn_usage", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(usage, 6);
+            let backfilled = store
+                .0
+                .query_row(
+                    "SELECT count(*) FROM chat_turn_usage u JOIN memories m ON m.id=u.memory_id \
+                     WHERE u.memory_kind='app' AND u.revision=m.revision",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap();
+            assert_eq!(backfilled, 6);
             assert_eq!(store.load("https://a", "m").unwrap(), turns);
             assert_eq!(store.memory_list().unwrap().len(), 2);
             assert_eq!(

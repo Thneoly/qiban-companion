@@ -90,7 +90,7 @@ impl ChatInner {
         let Some(store) = self.store.as_mut() else {
             return false;
         };
-        match store.append(base, model, &turn) {
+        match store.append_with_usage(base, model, &turn, &[]) {
             Ok(turns) => {
                 self.conversation.restore(base, model, turns);
                 true

@@ -1,6 +1,6 @@
 //! Fixed Q6 storage cases. Crash injection is compiled only in test binaries.
 use super::*;
-use companion_core::conversation::ChatTurn;
+use companion_core::conversation::{ChatTurn, ChatTurnUsage};
 fn draft(body: &str) -> MemoryDraft {
     MemoryDraft {
         kind: MemoryKind::Preference,
@@ -14,6 +14,12 @@ fn scope() -> MemoryScope {
         model: "fixture".into(),
     }
 }
+fn q6_turn() -> ChatTurn {
+    ChatTurn {
+        user: "Q6 合成问题".into(),
+        assistant: "Q6 合成旧回答".into(),
+    }
+}
 fn fixture() -> (HistoryStore, Memory) {
     let mut db = Connection::open_in_memory().unwrap();
     db.pragma_update(None, "foreign_keys", true).unwrap();
@@ -22,24 +28,33 @@ fn fixture() -> (HistoryStore, Memory) {
     tx.execute_batch(include_str!("memory-schema.sql")).unwrap();
     tx.execute_batch(include_str!("memory-schema-v3.sql"))
         .unwrap();
+    tx.execute_batch(include_str!("memory-schema-v4.sql"))
+        .unwrap();
     tx.commit().unwrap();
     let mut store = HistoryStore(db);
     let memory = store.memory_create(&draft("Q6 合成正文"), 0).unwrap().value;
     policy(&mut store, vec![memory.id.clone()], true);
-    append(&mut store);
+    append_using(&mut store, &memory);
     (store, memory)
+}
+/// One q6-scope turn that carried the selected memory at send time, plus one
+/// foreign-scope turn that carried nothing — the asymmetry precise cleanup
+/// keys on.
+fn append_using(s: &mut HistoryStore, m: &Memory) {
+    s.append_with_usage(
+        "https://q6.invalid",
+        "fixture",
+        &q6_turn(),
+        &[ChatTurnUsage::app(m.id.clone(), m.revision)],
+    )
+    .unwrap();
+    s.append_with_usage("https://other.invalid", "fixture", &q6_turn(), &[])
+        .unwrap();
 }
 fn append(s: &mut HistoryStore) {
     for base in ["https://q6.invalid", "https://other.invalid"] {
-        s.append(
-            base,
-            "fixture",
-            &ChatTurn {
-                user: "Q6 合成问题".into(),
-                assistant: "Q6 合成旧回答".into(),
-            },
-        )
-        .unwrap();
+        s.append_with_usage(base, "fixture", &q6_turn(), &[])
+            .unwrap();
     }
 }
 fn chats(s: &HistoryStore) -> i64 {
@@ -182,7 +197,7 @@ fn q6_del13_crash_before_commit_rolls_back() {
     let mut s = HistoryStore::open(&path).unwrap();
     let m = s.memory_create(&draft("survives crash"), 0).unwrap().value;
     policy(&mut s, vec![m.id.clone()], true);
-    append(&mut s);
+    append_using(&mut s, &m);
     let epoch = s.context_epoch().unwrap();
     drop(s);
     let result = std::process::Command::new(std::env::current_exe().unwrap())
