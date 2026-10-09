@@ -1,6 +1,6 @@
 # 精准清聊天：按使用账本的前缀截断
 
-2026-10-09。M4 准出评审[张力点 1](../quality/m4-exit-review.md) 的销项交付：更正/删除记忆或收回选择时，不再清空全部模型的聊天，改为按每轮发送时落账的使用记录做**逐 scope 前缀截断**。分支 `feat/memory-precise-clear`（合并后回填 PR 号）。
+2026-10-09。M4 准出评审[张力点 1](../quality/m4-exit-review.md) 的销项交付：更正/删除记忆或收回选择时，不再清空全部模型的聊天，改为按每轮发送时落账的使用记录做**逐 scope 前缀截断**。[PR #52](https://github.com/Thneoly/qiban-companion/pull/52)（squash 合并）。
 
 ## 语义
 
