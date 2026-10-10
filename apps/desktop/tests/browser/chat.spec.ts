@@ -47,6 +47,8 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   });
   await page.goto('/');await page.getByRole('button',{name:'和栖栖互动'}).click();
   await page.getByRole('button',{name:'聊一聊',exact:true}).click();
+  // Empty history and no selection: the persistent boundary names the service, no turn or memory segment.
+  await expect(page.locator('.chat-boundary')).toContainText('发送将把本条消息发往模型服务 fixture.test · glm-test-fixture');
   await page.getByLabel('和栖栖说句话',{exact:true}).fill('测试取消');
   await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('第一段');
@@ -58,6 +60,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.waitForTimeout(80);
   await expect(page.getByText('迟到旧文本',{exact:false})).toHaveCount(0);
   await expect(page.getByText('最近 1 轮',{exact:true})).toBeVisible();
+  await expect(page.locator('.chat-boundary')).toContainText('本条消息、最近 1 轮对话发往模型服务');
   await page.getByRole('button',{name:'收起气泡'}).click();
   await page.getByRole('button',{name:'和栖栖互动'}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('新的回答');
@@ -66,6 +69,7 @@ test('mocked native stream stops late text and permits a fresh request',async({p
   await page.getByRole('button',{name:'清空对话',exact:true}).click();
   await expect(page.getByLabel('栖栖的回复')).toHaveText('想聊点什么？');
   await expect(page.getByText('最近 0 轮',{exact:true})).toBeVisible();
+  await expect(page.locator('.chat-boundary')).not.toContainText('最近');
 });
 
 test('chat passes expectedPersonal and renders two-family preview and receipt', async ({ page }) => {
@@ -108,11 +112,37 @@ test('chat passes expectedPersonal and renders two-family preview and receipt', 
   const bubble = page.locator('.chat-bubble');
   // Offline personal preview: the preview summary says 未连接 and send passes null.
   await expect(bubble.locator('.chat-memory-preview')).toContainText('个人未启用');
+  // No selection anywhere: the boundary line carries no memory segment.
+  await expect(bubble.locator('.chat-boundary')).toContainText('发送将把本条消息发往模型服务 fixture.test · glm-test-fixture');
   await page.getByLabel('和栖栖说句话').fill('你好');
   await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect(bubble.locator('.chat-memory-receipt')).toContainText('个人未含（服务未连接）');
   const first = await page.evaluate(() => (window as any).generateRequests.at(-1));
   expect(first.expectedPersonal).toBeNull();
+
+  // Enabled but offline: the boundary keeps the plain message and says
+  // honestly that nothing personal is carried this turn.
+  await page.evaluate(() => {
+    const inner = (window as any).__TAURI_INTERNALS__;
+    const baseInvoke = inner.invoke;
+    inner.invoke = async (cmd: string, args: any) => {
+      if (cmd === 'chat_context_preview') {
+        return {
+          scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: 1,
+          policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], bodyChars: 0, contextChars: 0,
+          personal: { status: 'offline', policy: { enabled: true, revision: 1, selectedIds: [9] }, items: [], inactiveSelectedIds: [], bodyChars: 0, contextChars: 0 },
+        };
+      }
+      return baseInvoke(cmd, args);
+    };
+  });
+  await page.evaluate(() => {
+    const w = window as any;
+    const handler = w.memoryListener as number | undefined;
+    const callbacks = w.__callbacks as Map<number, (payload: unknown) => void>;
+    callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 2 } });
+  });
+  await expect(bubble.locator('.chat-boundary')).toContainText('发往模型服务 fixture.test · glm-test-fixture；个人记忆服务未连接，本次不携带');
 
   // Flip the personal family online with one item: the preview summary
   // counts it, send passes the ordered (id, seq) pair, and the receipt
@@ -152,11 +182,13 @@ test('chat passes expectedPersonal and renders two-family preview and receipt', 
     const callbacks = w.__callbacks as Map<number, (payload: unknown) => void>;
     // Bumped epoch forces reconcileMemory -> invalidate -> bracketed reload,
     // exactly what a personal policy save does in production.
-    callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 2 } });
+    callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 3 } });
   });
   const previewDetails = bubble.locator('details.chat-memory-preview:not(.chat-memory-receipt)');
   await expect(previewDetails).toContainText('个人1条');
   await expect(previewDetails).toContainText('洞察');
+  // One active personal item: the boundary line names both families.
+  await expect(bubble.locator('.chat-boundary')).toContainText('和已选记忆（应用 0 条 · 个人 1 条）发往模型服务');
   await page.getByLabel('和栖栖说句话').fill('再聊');
   await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect(bubble.locator('.chat-memory-receipt')).toContainText('个人1条');
