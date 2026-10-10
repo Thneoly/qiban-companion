@@ -7,6 +7,7 @@ test.beforeEach(async ({ page }) => {
     const callbacks = new Map(); const events = new Map(); let sequence = 0;
     w.memoryItems = []; w.memoryEpoch = 0; w.memoryMutations = [];
     w.memoryFail = ''; w.exportOutcome = {status: 'cancelled'};
+    w.impactCalls = []; w.impactTurns = 1; w.impactFail = false;
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
       transformCallback: (callback: any) => { callbacks.set(++sequence, callback); return sequence; }, unregisterCallback: () => {},
@@ -18,6 +19,11 @@ test.beforeEach(async ({ page }) => {
         if (cmd === 'chat_context_preview') return {scope:{baseUrl:'https://fixture.test',model:'fixture'},contextEpoch:w.memoryEpoch,policy:{enabled:false,revision:0,selectedIds:[]},items:[],bodyChars:0,contextChars:0,personal:{status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0}};
         if (cmd === 'memory_list') { if (w.failRead) throw {code:'storage_unavailable'}; return {items:structuredClone(w.memoryItems),contextEpoch:w.memoryEpoch,modelUseEnabled:false}; }
         if (cmd === 'memory_export') { if (w.memoryFail) throw {code:w.memoryFail}; return w.exportOutcome; }
+        if (cmd === 'chat_usage_impact') {
+          w.impactCalls.push(args.request);
+          if (w.impactFail) throw {code:'storage_unavailable'};
+          return {scopes:[{scope:{baseUrl:'https://fixture.test',model:'fixture'},affectedTurns:w.impactTurns,keptTurns:0}],affectedTurnsTotal:w.impactTurns};
+        }
         if (cmd === 'memory_mutate') {
           w.memoryMutations.push(args.request);
           if (w.memoryFail) throw {code:w.memoryFail};
@@ -50,6 +56,10 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await panel.getByLabel('记忆内容').fill('先说结论，再列证据');
   await panel.getByRole('button',{name:'检查更正影响'}).click();
   await expect(panel.getByRole('alertdialog')).toContainText('使用过这条记忆的对话');
+  // The dialog consults the impact precount for exactly this entry.
+  await expect(panel.getByRole('alertdialog')).toContainText('预计清除最近 1 轮');
+  const itemId = await page.evaluate(()=>(window as any).memoryItems[0].id);
+  expect(await page.evaluate(()=>(window as any).impactCalls[0])).toEqual({appIds:[itemId],personalIds:[]});
   await panel.getByRole('button',{name:'返回，不修改'}).click();
   expect(await page.evaluate(()=>(window as any).memoryMutations.length)).toBe(1);
   await panel.getByRole('button',{name:'检查更正影响'}).click();
@@ -57,6 +67,9 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await expect(card).toContainText('先说结论，再列证据');
   await expect(panel.getByRole('status')).toContainText('已清除使用过该记忆的最近 1 轮对话');
   await card.getByRole('button',{name:'删除',exact:true}).click();
+  await expect(panel.getByRole('alertdialog')).toContainText('预计清除最近 1 轮');
+  expect(await page.evaluate(()=>(window as any).impactCalls.length)).toBe(3);
+  expect(await page.evaluate(()=>(window as any).impactCalls[2])).toEqual({appIds:[itemId],personalIds:[]});
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel).toContainText('还没有留下记忆');
 });
@@ -76,7 +89,11 @@ test('keeps drafts and records on failure, and distinguishes cancelled exports a
   await page.evaluate(()=>{(window as any).exportOutcome={status:'saved',count:1};});
   await panel.getByRole('button',{name:'导出 JSON'}).click();
   await expect(panel.getByRole('status')).toContainText('已导出1条');
+  // A failing precount fails open: the dialog keeps its static wording.
+  await page.evaluate(()=>{(window as any).impactFail=true;});
   await panel.getByRole('button',{name:'删除全部记忆'}).click();
+  await expect(panel.getByRole('alertdialog')).toContainText('从各模型对话中第一次使用它的一轮起全部清除');
+  await expect(panel.getByRole('alertdialog')).not.toContainText('预计清除');
   await page.evaluate(()=>{(window as any).memoryEpoch++;});
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel.getByRole('alert')).toContainText('已变化');

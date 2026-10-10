@@ -4,9 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { decodeMemorySnapshot, decodeMemoryReceipt, decodeMemoryExport, memoryErrorMessage, type MemoryDraft, type MemoryRecord, type MemorySnapshot } from '@companion/contracts';
 import { nativeDesktop } from '../../lib/surface';
+import { useUsageImpact } from '../../lib/usage-impact';
 import './memory.css';
 
-type Pending = { action: 'update' | 'delete' | 'delete_all'; expectedEpoch: number; id?: string; expectedRevision?: number; draft?: MemoryDraft };
+type Pending = { action: 'update' | 'delete' | 'delete_all'; expectedEpoch: number; id?: string; expectedRevision?: number; draft?: MemoryDraft; impactIds: string[] };
 const empty: MemoryDraft = { kind: 'preference', body: '', eventDate: null };
 const formatTime = (value: number) => new Date(value).toLocaleString();
 export function MemoryPanel() {
@@ -60,7 +61,7 @@ export function MemoryPanel() {
     event.preventDefault();
     if (!snapshot || busy) return;
     if (!draft.body.trim() || [...draft.body.trim()].length > 200) { setError('正文需要包含1～200个字符，表情按Unicode字符计数。'); return; }
-    if (editing) setPending({ action: 'update', id: editing.id, expectedRevision: editing.revision, expectedEpoch: snapshot.contextEpoch, draft: { ...draft } });
+    if (editing) setPending({ action: 'update', id: editing.id, expectedRevision: editing.revision, expectedEpoch: snapshot.contextEpoch, draft: { ...draft }, impactIds: [editing.id] });
     else void mutate({ action: 'create', draft, expectedEpoch: snapshot.contextEpoch }, '记忆已保存在本机，新增条目尚未被模型选用。');
   }
   async function exportMemories() {
@@ -73,16 +74,25 @@ export function MemoryPanel() {
     finally { acting.current = false; if (alive.current) setBusy(false); }
   }
   const count = [...draft.body].length;
+  // Consultative precount while the dialog is open. Update/delete/delete_all
+  // have no still-selecting exemption, so the number is a plain estimate; the
+  // static wording stays while it loads or fails (receipt is authoritative).
+  const impact = useUsageImpact(pending !== null, pending?.impactIds ?? [], []);
+  const impactDescription = !pending ? '' : !impact
+    ? `这会停止正在生成的回复，并删除使用过${pending.action === 'delete_all' ? '这些' : '这条'}记忆的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。`
+    : impact.affectedTurnsTotal > 0
+      ? `这会停止正在生成的回复，并删除使用过${pending.action === 'delete_all' ? '这些' : '这条'}记忆的对话：从各模型对话中第一次使用它的一轮起，预计清除最近 ${impact.affectedTurnsTotal} 轮，之前的对话保留；没有使用记录的模型对话不变。实际以提交后的回执为准。`
+      : `这会停止正在生成的回复。目前没有本机对话使用过${pending.action === 'delete_all' ? '这些' : '这条'}记忆，预计聊天记录保持不变；实际以提交后的回执为准。`;
   return <section className="memory-panel" aria-labelledby="memories-title">
     <div className="memory-heading"><div><span className="eyebrow">LITTLE THINGS WE KEEP</span><h2 id="memories-title">我们的记忆</h2></div><span className="memory-badge">本机记忆 · 模型使用需单独授权</span></div>
     <p>把希望留下的小事亲自写在这里。保存聊天不会自动生成记忆；是否随对话发送，由下方每个模型的使用设置决定。</p>
     {!nativeDesktop && <p className="memory-notice">浏览器仅预览界面，不保存或导出记忆。请在桌面版使用。</p>}
-    <div className="memory-toolbar"><span>{snapshot ? `${snapshot.items.length} / 30 条` : nativeDesktop ? '记录尚未载入' : '桌面功能预览'}</span><button disabled={busy || !nativeDesktop} onClick={() => void refresh()}>刷新记忆</button><button disabled={busy || !snapshot} onClick={() => void exportMemories()}>导出 JSON</button><button className="memory-danger" disabled={busy || !snapshot?.items.length} onClick={() => snapshot && setPending({ action: 'delete_all', expectedEpoch: snapshot.contextEpoch })}>删除全部记忆</button></div>
+    <div className="memory-toolbar"><span>{snapshot ? `${snapshot.items.length} / 30 条` : nativeDesktop ? '记录尚未载入' : '桌面功能预览'}</span><button disabled={busy || !nativeDesktop} onClick={() => void refresh()}>刷新记忆</button><button disabled={busy || !snapshot} onClick={() => void exportMemories()}>导出 JSON</button><button className="memory-danger" disabled={busy || !snapshot?.items.length} onClick={() => snapshot && setPending({ action: 'delete_all', expectedEpoch: snapshot.contextEpoch, impactIds: snapshot.items.map(item => item.id) })}>删除全部记忆</button></div>
     {error && <p role="alert" className="memory-error">{error}</p>}
     {note && <p role="status" className="memory-notice">{note}</p>}
     {pending && <div className="memory-confirm" role="alertdialog" aria-labelledby="memory-confirm-title" aria-describedby="memory-confirm-description">
       <h3 id="memory-confirm-title">{pending.action === 'update' ? '确认更正记忆' : pending.action === 'delete_all' ? '确认删除全部记忆' : '确认删除这条记忆'}</h3>
-      <p id="memory-confirm-description">这会停止正在生成的回复，并删除使用过{pending.action === 'delete_all' ? '这些' : '这条'}记忆的对话：从各模型对话中第一次使用它的一轮起全部清除，之前的对话保留；没有使用记录的模型对话不变。{pending.action === 'delete_all' ? '全部记忆正文将删除。' : pending.action === 'delete' ? '此条记忆正文将删除。' : '原正文将被替换。'}已发给服务商的内容和已导出的文件不能撤回。</p>
+      <p id="memory-confirm-description">{impactDescription}{pending.action === 'delete_all' ? '全部记忆正文将删除。' : pending.action === 'delete' ? '此条记忆正文将删除。' : '原正文将被替换。'}已发给服务商的内容和已导出的文件不能撤回。</p>
       <button autoFocus disabled={busy} onClick={() => pending && void mutate({ ...pending, restartConversation: true }, pending.action === 'update' ? '记忆已更正。' : '记忆已删除。')}>确认并开始新对话</button><button disabled={busy} onClick={() => setPending(null)}>返回，不修改</button>
     </div>}
     <div className="memory-layout">
@@ -100,7 +110,7 @@ export function MemoryPanel() {
       </form>
       <div className="memory-list" aria-label="本机记忆列表">
         {snapshot?.items.length === 0 && <div className="memory-empty"><span>✧</span><h3>还没有留下记忆</h3><p>你亲自保存的偏好和经历，会出现在这里。</p></div>}
-        {snapshot?.items.map(item => <article key={item.id} className="memory-card"><span className="memory-kind">{item.kind === 'preference' ? '我的偏好' : '共同经历'}</span><p className="memory-body">{item.body}</p><small>{item.sourceLabel}<br/>经历日期：{item.eventDate ?? '未指定日期'}<br/>创建：{formatTime(item.createdAt)}<br/>确认／更正：{formatTime(item.confirmedAt)}</small><div><button disabled={busy || !!pending} onClick={() => { setEditing(item); setDraft({ kind: item.kind, body: item.body, eventDate: item.eventDate }); setError(''); }}>更正</button><button disabled={busy || !!pending} onClick={() => snapshot && setPending({ action: 'delete', id: item.id, expectedRevision: item.revision, expectedEpoch: snapshot.contextEpoch })}>删除</button></div></article>)}
+        {snapshot?.items.map(item => <article key={item.id} className="memory-card"><span className="memory-kind">{item.kind === 'preference' ? '我的偏好' : '共同经历'}</span><p className="memory-body">{item.body}</p><small>{item.sourceLabel}<br/>经历日期：{item.eventDate ?? '未指定日期'}<br/>创建：{formatTime(item.createdAt)}<br/>确认／更正：{formatTime(item.confirmedAt)}</small><div><button disabled={busy || !!pending} onClick={() => { setEditing(item); setDraft({ kind: item.kind, body: item.body, eventDate: item.eventDate }); setError(''); }}>更正</button><button disabled={busy || !!pending} onClick={() => snapshot && setPending({ action: 'delete', id: item.id, expectedRevision: item.revision, expectedEpoch: snapshot.contextEpoch, impactIds: [item.id] })}>删除</button></div></article>)}
       </div>
     </div>
     <MemoryPolicyPanel items={snapshot?.items ?? []} epoch={snapshot?.contextEpoch ?? -1} locked={busy || !snapshot || !!pending}/>

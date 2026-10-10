@@ -99,7 +99,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   await page.addInitScript(([records]) => {
     const w = window as any;
     w.policyState = { enabled: false, revision: 0, selectedIds: [] as number[], epoch: 1 };
-    w.policyWrites = [];
+    w.policyWrites = []; w.impactCalls = []; w.impactTurns = 1;
     w.personalResults = { count: records.length, memories: records };
     const preview = () => ({
       scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' },
@@ -122,6 +122,10 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
     const baseInvoke = inner.invoke;
     inner.invoke = async (cmd: string, args: any) => {
       if (cmd === 'chat_context_preview') return structuredClone(preview());
+      if (cmd === 'chat_usage_impact') {
+        w.impactCalls.push(args.request);
+        return { scopes: [{ scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, affectedTurns: w.impactTurns, keptTurns: 0 }], affectedTurnsTotal: w.impactTurns };
+      }
       if (cmd === 'personal_memory_policy_set') {
         const r = args.request;
         if (r.expectedRevision !== w.policyState.revision || r.expectedEpoch !== w.policyState.epoch) {
@@ -170,6 +174,9 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   await section.getByText('#1 洞察一').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
   await expect(section.getByRole('alertdialog')).toContainText('仍在其他模型选用的对话不动');
+  // Upper-bound precount for the removed personal id, app side empty.
+  await expect(section.getByRole('alertdialog')).toContainText('预计最多清除最近 1 轮');
+  expect(await page.evaluate(() => (window as any).impactCalls[0])).toEqual({ appIds: [], personalIds: [1] });
   await section.getByRole('button', { name: '返回，不修改' }).click();
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(1);
 
@@ -178,6 +185,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   await section.getByText('允许此模型使用所选个人记忆').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
   await expect(section.getByRole('alertdialog')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).impactCalls[1])).toEqual({ appIds: [], personalIds: [1, 2] });
   await section.getByRole('button', { name: '确认收回并开始新对话' }).click();
   await expect(section).toContainText('已保存状态：关闭');
   await expect(section.getByRole('status')).toContainText('已清除使用过所移除条目的最近 1 轮对话');
