@@ -19,6 +19,8 @@ pub enum StorageError {
     #[error(transparent)]
     Memory(#[from] companion_core::memory::MemoryError),
     #[error(transparent)]
+    MemorySync(#[from] companion_core::memory::MemorySyncError),
+    #[error(transparent)]
     Execution(#[from] companion_core::execution::ExecutionError),
     #[error(transparent)]
     Identity(#[from] companion_core::identity::IdentityError),

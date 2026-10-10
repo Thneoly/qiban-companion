@@ -31,6 +31,19 @@ pub enum MemoryError {
     ConfirmationRequired,
 }
 
+/// Server-side sync write conflicts. Kept distinct from [`MemoryError`] so the
+/// coordinator can answer with a stable machine code instead of a generic 409
+/// and peers know the exact convergence step (refresh, drop, or snapshot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MemorySyncError {
+    #[error("记忆版本已变化，请刷新后再试")]
+    RevisionConflict,
+    #[error("记忆已在其他设备删除，不能复活")]
+    Resurrection,
+    #[error("账号的有效记忆已达上限")]
+    Capacity,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MemoryScope {
@@ -93,27 +106,46 @@ impl MemoryDraft {
         if self.kind == MemoryKind::TaskFact {
             return Err(MemoryError::UnsupportedKind);
         }
-        // Validate before trimming so an illegal trailing control cannot disappear.
-        if self
-            .body
-            .chars()
-            .any(|c| c.is_control() && c != '\n' && c != '\t')
-        {
-            return Err(MemoryError::InvalidInput);
-        }
-        let body = self.body.trim();
-        if body.is_empty() || body.chars().count() > MAX_BODY_CHARS {
-            return Err(MemoryError::InvalidInput);
-        }
-        if let Some(date) = &self.event_date {
-            validate_event_date(date)?;
-        }
+        let (body, event_date) = validate_body_and_date(&self.body, self.event_date.as_deref())?;
         Ok(Self {
             kind: self.kind,
-            body: body.into(),
-            event_date: self.event_date.clone(),
+            body,
+            event_date,
         })
     }
+}
+
+/// Shape validation shared by manual creation and cross-device sync. Returns
+/// the normalized (trimmed) body plus the untouched event date.
+fn validate_body_and_date(
+    body: &str,
+    event_date: Option<&str>,
+) -> Result<(String, Option<String>), MemoryError> {
+    // Validate before trimming so an illegal trailing control cannot disappear.
+    if body
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(MemoryError::InvalidInput);
+    }
+    let body = body.trim();
+    if body.is_empty() || body.chars().count() > MAX_BODY_CHARS {
+        return Err(MemoryError::InvalidInput);
+    }
+    if let Some(date) = event_date {
+        validate_event_date(date)?;
+    }
+    Ok((body.into(), event_date.map(Into::into)))
+}
+
+/// Cross-device sync revalidates the stored shape only. Unlike manual creation
+/// it accepts every stored kind: a desktop database may already hold task_fact
+/// rows, and a peer editing them must not be rejected on shape grounds.
+pub fn validate_synced_body(
+    body: &str,
+    event_date: Option<&str>,
+) -> Result<(String, Option<String>), MemoryError> {
+    validate_body_and_date(body, event_date)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

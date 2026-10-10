@@ -8,7 +8,12 @@ use companion_core::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{path::Path, sync::Mutex, time::Duration};
 mod authorization;
+mod memory_sync;
 mod native_auth;
+pub use memory_sync::{
+    MemorySnapshotItem, MemorySyncEvent, MemorySyncOp, MemorySyncResponse, MemoryWrite,
+    MemoryWriteReceipt,
+};
 pub use native_auth::{NativeLogin, NATIVE_ISSUER};
 
 pub struct AccountStore {
@@ -27,7 +32,7 @@ impl AccountStore {
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", true)?;
         let version: u32 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(StorageError::NewerSchema);
         }
         // Fail closed on another store's schema rather than adopting local data.
@@ -79,6 +84,9 @@ impl AccountStore {
         }
         if version < 6 {
             authorization::migrate_presence(&mut c)?;
+        }
+        if version < 7 {
+            memory_sync::migrate(&mut c)?;
         }
         Ok(Self {
             connection: Mutex::new(c),
@@ -240,9 +248,22 @@ impl AccountStore {
                 tx.execute("UPDATE native_codes SET state='invalid',mac=NULL WHERE state IN ('pending','ready')
                     AND email IN (SELECT u.email FROM native_users u JOIN accounts a ON a.subject=u.subject
                     WHERE a.id=?1 AND a.issuer=?2)", params![profile.account_id,NATIVE_ISSUER])?;
+                // Every session is revoked, so no device of this account can
+                // gate memory-event compaction anymore.
+                tx.execute(
+                    "DELETE FROM memory_devices WHERE account_id=?1",
+                    [&profile.account_id],
+                )?;
             } else {
                 tx.execute(
                     "UPDATE account_sessions SET revoked=1 WHERE account_id=?1 AND session_id=?2",
+                    params![profile.account_id, identity.session_id()],
+                )?;
+                // A revoked session is no longer a device whose deletion
+                // acknowledgment can gate compaction; dropping the row
+                // unblocks it immediately.
+                tx.execute(
+                    "DELETE FROM memory_devices WHERE account_id=?1 AND device_id=?2",
                     params![profile.account_id, identity.session_id()],
                 )?;
             }
@@ -460,7 +481,7 @@ mod tests {
     #[test]
     fn refuses_newer_or_unrelated_database_without_migrating_local_data() {
         let c = Connection::open_in_memory().unwrap();
-        c.pragma_update(None, "user_version", 7).unwrap();
+        c.pragma_update(None, "user_version", 8).unwrap();
         assert!(matches!(
             AccountStore::from_connection(c),
             Err(StorageError::NewerSchema)
