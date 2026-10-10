@@ -57,7 +57,9 @@ async function exportFile(destination,overwrite=false){
   const requestContext=await invoke(pet,'chat_context_preview');
   await pet.evaluate(requestContext=>{const native=window.__TAURI_INTERNALS__;window.testDeltas=[];window.testResult=null;
     const callback=native.transformCallback(raw=>{if(raw.message)window.testDeltas.push(raw.message);});
-    native.invoke('chat_generate',{request:{requestId:'m2-stream',prompt:'本机测试',expectedScope:requestContext.scope,expectedContextEpoch:requestContext.contextEpoch},onDelta:`__CHANNEL__:${callback}`}).then(value=>{window.testResult={ok:true,value};},error=>{window.testResult={ok:false,error};});
+    // Protocol v3: expectedPersonal is required at parse time. null = the
+    // personal-memory service is offline here, so no personal block is sent.
+    native.invoke('chat_generate',{request:{requestId:'m2-stream',prompt:'本机测试',expectedScope:requestContext.scope,expectedContextEpoch:requestContext.contextEpoch,expectedPersonal:null},onDelta:`__CHANNEL__:${callback}`}).then(value=>{window.testResult={ok:true,value};},error=>{window.testResult={ok:false,error};});
   },requestContext);
   for(let n=0;n<100&&!requests.length;n++)await delay(100);assert.equal(requests.length,1);
   assert(!JSON.stringify(requests[0]).includes('合成经历'),'M2 must not inject memory');
