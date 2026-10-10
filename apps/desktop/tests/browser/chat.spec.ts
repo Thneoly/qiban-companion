@@ -142,7 +142,9 @@ test('chat passes expectedPersonal and renders two-family preview and receipt', 
     const callbacks = w.__callbacks as Map<number, (payload: unknown) => void>;
     callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 2 } });
   });
-  await expect(bubble.locator('.chat-boundary')).toContainText('发往模型服务 fixture.test · glm-test-fixture；个人记忆服务未连接，本次不携带');
+  // Full string across the message→service junction: pins that no memory
+  // segment (which would self-contradict the "not carried" note) renders here.
+  await expect(bubble.locator('.chat-boundary')).toContainText('发送将把本条消息发往模型服务 fixture.test · glm-test-fixture；个人记忆服务未连接，本次不携带');
 
   // Flip the personal family online with one item: the preview summary
   // counts it, send passes the ordered (id, seq) pair, and the receipt
@@ -187,8 +189,10 @@ test('chat passes expectedPersonal and renders two-family preview and receipt', 
   const previewDetails = bubble.locator('details.chat-memory-preview:not(.chat-memory-receipt)');
   await expect(previewDetails).toContainText('个人1条');
   await expect(previewDetails).toContainText('洞察');
-  // One active personal item: the boundary line names both families.
+  // One active personal item: the boundary line names both families, and the
+  // offline note must be absent — carried and not-carried cannot coexist.
   await expect(bubble.locator('.chat-boundary')).toContainText('和已选记忆（应用 0 条 · 个人 1 条）发往模型服务');
+  await expect(bubble.locator('.chat-boundary')).not.toContainText('未连接');
   await page.getByLabel('和栖栖说句话').fill('再聊');
   await page.getByRole('button',{name:'发送',exact:true}).click();
   await expect(bubble.locator('.chat-memory-receipt')).toContainText('个人1条');
