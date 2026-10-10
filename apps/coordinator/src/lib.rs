@@ -1,6 +1,7 @@
 pub mod auth;
 mod devices;
 mod documents;
+mod memories;
 mod pairing;
 
 use auth::{AuthError, NativeAuth};
@@ -61,6 +62,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/documents/{id}/cancel", post(documents::cancel))
         .route("/v1/documents/{id}/delete", post(documents::delete))
         .route("/v1/documents/{id}/receipt", post(documents::receipt))
+        .route("/v1/memories", get(memories::list).post(memories::push))
+        .route("/v1/memories/sync", get(memories::sync))
+        .route("/v1/memories/{id}/update", post(memories::update))
+        .route("/v1/memories/{id}/delete", post(memories::delete))
         .layer(DefaultBodyLimit::max(16384))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -128,6 +133,24 @@ impl From<StorageError> for ApiError {
                 }
             }
             StorageError::NotFound => Self(StatusCode::NOT_FOUND, "not_found"),
+            StorageError::Memory(error) => match error {
+                companion_core::memory::MemoryError::InvalidInput
+                | companion_core::memory::MemoryError::UnsupportedKind => {
+                    Self(StatusCode::BAD_REQUEST, "invalid_request")
+                }
+                _ => Self(StatusCode::CONFLICT, "memory_conflict"),
+            },
+            StorageError::MemorySync(error) => match error {
+                companion_core::memory::MemorySyncError::RevisionConflict => {
+                    Self(StatusCode::CONFLICT, "memory_revision_conflict")
+                }
+                companion_core::memory::MemorySyncError::Resurrection => {
+                    Self(StatusCode::CONFLICT, "memory_resurrection")
+                }
+                companion_core::memory::MemorySyncError::Capacity => {
+                    Self(StatusCode::CONFLICT, "memory_capacity")
+                }
+            },
             StorageError::Identity(IdentityError::SessionEnded | IdentityError::InvalidSession) => {
                 Self(StatusCode::UNAUTHORIZED, "authentication_required")
             }

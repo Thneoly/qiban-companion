@@ -1218,3 +1218,204 @@ async fn documents_http_enforce_roles_transitions_cancel_and_unknown() {
         json!([])
     );
 }
+
+#[tokio::test]
+async fn memory_sync_http_roundtrip_conflict_codes_and_shape_strictness() {
+    let f = Fixture::new();
+    let app = f.app();
+    let desktop = login(&f, &app, "alice@example.com").await;
+    // Same-email code requests are throttled to one per minute.
+    tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+    let phone = login(&f, &app, "alice@example.com").await;
+    let id = uuid::Uuid::new_v4().to_string();
+
+    // Unauthenticated access never reaches the store.
+    for path in ["/v1/memories", "/v1/memories/sync?cursor=0&generation=0"] {
+        assert_eq!(
+            call(&app, "GET", path, None, Value::Null).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        call(&app, "POST", "/v1/memories", None, json!({"requestId":"x","id":id,"op":"create","baseRevision":0,"kind":"preference","body":"x"})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Desktop creates through the push route.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (status, receipt) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":request_id,"id":id,"op":"create","baseRevision":0,
+               "kind":"preference","body":"prefer tea","eventDate":"2026-01-02"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(receipt, json!({"memoryId":id,"revision":1,"deleted":false}));
+
+    // Same request id replays the identical receipt (idempotent push).
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/memories",
+            Some(&desktop),
+            json!({"requestId":request_id,"id":id,"op":"create","baseRevision":0,
+                   "kind":"preference","body":"prefer tea","eventDate":"2026-01-02"})
+        )
+        .await
+        .1,
+        receipt
+    );
+
+    // The phone list shows the active entry; a cross-account token sees none.
+    let (_, listed) = call(&app, "GET", "/v1/memories", Some(&phone), Value::Null).await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["body"], "prefer tea");
+    assert_eq!(listed[0]["kind"], "preference");
+    let bob = login(&f, &app, "bob@example.com").await;
+    assert_eq!(
+        call(&app, "GET", "/v1/memories", Some(&bob), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+
+    // Desktop's first pull gets the snapshot; the phone's update then delete
+    // arrive as ordered events.
+    let (status, page) = call(
+        &app,
+        "GET",
+        "/v1/memories/sync?cursor=0&generation=0",
+        Some(&desktop),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["generation"], 1);
+    let snapshot = page["snapshot"].as_array().unwrap();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0]["id"], id);
+    let cursor = page["cursor"].as_i64().unwrap();
+    let generation = page["generation"].as_i64().unwrap();
+
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/v1/memories/{id}/update"),
+        Some(&phone),
+        json!({"revision":1,"requestId":uuid::Uuid::new_v4().to_string(),
+               "kind":"preference","body":"prefer coffee"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/v1/memories/{id}/delete"),
+        Some(&phone),
+        json!({"revision":2,"requestId":uuid::Uuid::new_v4().to_string()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, next) = call(
+        &app,
+        "GET",
+        &format!("/v1/memories/sync?cursor={cursor}&generation={generation}"),
+        Some(&desktop),
+        Value::Null,
+    )
+    .await;
+    let events = next["events"].as_array().unwrap();
+    // The create event precedes the snapshot cursor only when compaction has
+    // run; here it is still in the window, so all three events replay.
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["op"], "upsert");
+    assert_eq!(events[0]["body"], "prefer tea");
+    assert_eq!(events[1]["op"], "upsert");
+    assert_eq!(events[1]["body"], "prefer coffee");
+    assert_eq!(events[2]["op"], "delete");
+
+    // The phone list no longer shows the tombstone.
+    let (_, listed) = call(&app, "GET", "/v1/memories", Some(&phone), Value::Null).await;
+    assert_eq!(listed.as_array().unwrap().len(), 0);
+
+    // Conflict codes are machine-stable, not a generic 409.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/v1/memories/{id}/update"),
+        Some(&phone),
+        json!({"revision":1,"requestId":uuid::Uuid::new_v4().to_string(),
+               "kind":"preference","body":"stale edit"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "memory_resurrection");
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":id,"op":"create","baseRevision":0,
+               "kind":"preference","body":"resurrect"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "memory_resurrection");
+
+    // Shape strictness: unknown fields, missing query params, mismatched op
+    // field combinations, and malformed ids all fail as invalid_request.
+    assert_eq!(
+        call(&app, "POST", "/v1/memories", Some(&desktop),
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+                   "op":"create","baseRevision":0,"kind":"preference","body":"x","extra":1})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/v1/memories/sync?cursor=0",
+            Some(&desktop),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(&app, "POST", "/v1/memories", Some(&desktop),
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+                   "op":"create","baseRevision":3,"kind":"preference","body":"x"})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/v1/memories",
+            Some(&desktop),
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":"not-a-uuid",
+                   "op":"create","baseRevision":0,"kind":"preference","body":"x"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/memories/{id}/delete"),
+            Some(&phone),
+            json!({"revision":9,"requestId":uuid::Uuid::new_v4().to_string()})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+}
