@@ -9,6 +9,8 @@ import type { ConversationPhase as Phase } from '../companion/presentation';
 
 const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等待回复', streaming: '正在回复', complete: '已完成', stopped: '已停止', error: '未完成' };
 const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
+/** Hostname only for the persistent boundary line; the full base URL stays in the expandable preview. */
+const hostOf = (baseUrl: string): string => { try { return new URL(baseUrl).host; } catch { return baseUrl; } };
 export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; /** Reports whether a voice turn is under way (transcribing or speaking). The pet surface uses it to keep the bubble alive across window blur — cutting speech because the user looked elsewhere reads as the companion stopping mid-sentence. */ onVoiceActive?: (active: boolean) => void; mouth?: { current: number } }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
@@ -222,6 +224,12 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     } catch (error) { if (alive.current) setStatus(typeof error === 'string' ? error : '清空会话失败'); }
     finally { if (alive.current) setBusy(false); }
   }
+  // Persistent send-boundary line: what a send will carry and to which service.
+  // Counts mirror the preview the send is actually admitted against.
+  const boundaryPersonal = preview && preview.personal.policy.enabled && preview.personal.status === 'online' ? preview.personal.items.length : 0;
+  const boundaryMemory = preview && (preview.items.length > 0 || boundaryPersonal > 0)
+    ? `和已选记忆（应用 ${preview.items.length} 条 · 个人 ${boundaryPersonal} 条）` : '';
+  const boundaryOffline = preview && preview.personal.policy.enabled && preview.personal.status !== 'online' ? '；个人记忆服务未连接，本次不携带' : '';
   return <div className={reading ? 'chat-bubble chat-bubble-reading' : 'chat-bubble'}>
     <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span>{voice.speaking && <span className="chat-speaking">栖栖正在说</span>}</div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
@@ -242,6 +250,7 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     </div></details>}
     {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 · 应用{memoryUsage.memories.length}条 · 个人{memoryUsage.personal.status === 'offline' ? '未含（服务未连接）' : memoryUsage.personal.memories.length + '条'}</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}{memoryUsage.personal.status === 'sent' && memoryUsage.personal.memories.map(item=><p key={item.id}>{preview?.personal.items.find(m=>m.id===item.id&&m.seq===item.seq)?.title ?? '条目已变化或服务暂不可查，请刷新预览'}<br/>seq {item.seq}</p>)}<small>附加字符：应用{memoryUsage.contextChars} · 个人{memoryUsage.personal.status === 'sent' ? memoryUsage.personal.contextChars : 0}；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
     {voice.transcript ? <p className="chat-subtitle" aria-live="polite">我听到：{voice.transcript}</p> : voice.notice ? <p className="chat-subtitle" role="status">{voice.notice}</p> : null}
+    {preview && <p className="chat-boundary">发送将把本条消息{history.length ? `、最近 ${history.length} 轮对话` : ''}{boundaryMemory}发往模型服务 <span className="chat-boundary-host" title={preview.scope.baseUrl}>{hostOf(preview.scope.baseUrl)}</span> · {preview.scope.model}{boundaryOffline}</p>}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
       <input id="chat-draft" maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder="和我说说…" disabled={busy}/>
