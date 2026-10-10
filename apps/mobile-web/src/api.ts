@@ -7,6 +7,13 @@ export type Task = {
   createdAt: number;
   updatedAt: number;
 };
+export type RemoteMemory = {
+  id: string;
+  kind: string;
+  body: string;
+  eventDate: string | null;
+  revision: number;
+};
 export class ApiError extends Error {
   constructor(
     public code: string,
@@ -66,6 +73,9 @@ export function message(error: unknown) {
     rate_limited: "请求较频繁，请稍后再试。验证码每分钟最多请求一次。",
     conflict: "这条待办已在其他设备更新，已重新获取列表。",
     capacity: "待办数量已达上限。",
+    memory_revision_conflict: "这条记忆已在其他设备修改，已重新获取列表。",
+    memory_resurrection: "这条记忆已在其他设备删除，无法恢复或再编辑。",
+    memory_capacity: "记忆数量已达上限。",
     invalid_request: "请检查填写内容。待办最多 200 字。",
     busy: "服务繁忙，请稍后重试。",
   };
