@@ -19,11 +19,12 @@ test.beforeEach(async ({ page }) => {
     const callbacks = new Map(); const events = new Map(); let sequence = 0;
     w.personalOverview = { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' };
     w.personalResults = null; w.personalDetail = null; w.personalCalls = [];
+    w.__callbacks = callbacks; w.memoryListeners = [];
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
       transformCallback: (callback: any) => { callbacks.set(++sequence, callback); return sequence; }, unregisterCallback: () => {},
       invoke: async (cmd: string, args: any) => {
-        if (cmd === 'plugin:event|listen') { events.set(args.event, callbacks.get(args.handler)); return ++sequence; }
+        if (cmd === 'plugin:event|listen') { events.set(args.event, callbacks.get(args.handler)); w.memoryListeners.push(args.handler); return ++sequence; }
         if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') { w.personalCalls.push(['overview']); return structuredClone(w.personalOverview); }
@@ -177,15 +178,39 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
   // Upper-bound precount for the removed personal id, app side empty.
   await expect(section.getByRole('alertdialog')).toContainText('预计最多清除最近 1 轮');
   expect(await page.evaluate(() => (window as any).impactCalls[0])).toEqual({ appIds: [], personalIds: [1] });
+  // While the dialog is open the choices and the save button are locked, so
+  // the confirm can only commit the exact set the precount describes.
+  await expect(section.locator('label.personal-memory-choice', { hasText: '允许此模型使用所选个人记忆' }).locator('input')).toBeDisabled();
+  await expect(section.locator('label.personal-memory-choice', { hasText: '#1 洞察一' }).locator('input')).toBeDisabled();
+  await expect(section.getByRole('button', { name: '保存选择' })).toBeDisabled();
   await section.getByRole('button', { name: '返回，不修改' }).click();
   expect(await page.evaluate(() => (window as any).policyWrites.length)).toBe(1);
+
+  // Zero recorded usage flips the dialog to the no-usage wording (no
+  // degenerate "最多清除最近 0 轮").
+  await page.evaluate(() => { (window as any).impactTurns = 0; });
+  await section.getByRole('button', { name: '保存选择' }).click();
+  await expect(section.getByRole('alertdialog')).toContainText('目前没有本机对话使用过所移除条目');
+  await expect(section.getByRole('alertdialog')).toContainText('预计聊天记录保持不变');
+  await expect(section.getByRole('alertdialog')).not.toContainText('最多清除');
+  expect(await page.evaluate(() => (window as any).impactCalls[1])).toEqual({ appIds: [], personalIds: [1] });
+  // A background refresh (memory-changed) closes the dialog and restores the
+  // saved selection instead of letting a later commit diverge from the
+  // precount it showed.
+  await page.evaluate(() => {
+    const w = window as any;
+    const callbacks = w.__callbacks as Map<number, (payload: unknown) => void>;
+    for (const handler of w.memoryListeners ?? []) callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: {} });
+  });
+  await expect(section.getByRole('alertdialog')).toBeHidden();
+  await expect(section.getByText('#1 洞察一')).toBeChecked();
 
   // Disable: clearing the master checkbox empties the selection, which is a
   // removal — the same confirm dialog applies, then the write clears chats.
   await section.getByText('允许此模型使用所选个人记忆').uncheck();
   await section.getByRole('button', { name: '保存选择' }).click();
   await expect(section.getByRole('alertdialog')).toBeVisible();
-  expect(await page.evaluate(() => (window as any).impactCalls[1])).toEqual({ appIds: [], personalIds: [1, 2] });
+  expect(await page.evaluate(() => (window as any).impactCalls[2])).toEqual({ appIds: [], personalIds: [1, 2] });
   await section.getByRole('button', { name: '确认收回并开始新对话' }).click();
   await expect(section).toContainText('已保存状态：关闭');
   await expect(section.getByRole('status')).toContainText('已清除使用过所移除条目的最近 1 轮对话');

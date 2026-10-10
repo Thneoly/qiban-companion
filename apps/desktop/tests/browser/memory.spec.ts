@@ -66,12 +66,17 @@ test('saves explicit memories, confirms corrections and deletes without claiming
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(card).toContainText('先说结论，再列证据');
   await expect(panel.getByRole('status')).toContainText('已清除使用过该记忆的最近 1 轮对话');
+  // The confirmed request carries exactly the host's accepted fields — the
+  // host enum is deny_unknown_fields, so a leaked dialog-only field (e.g.
+  // impactIds) would fail deserialization on the real backend.
+  expect(await page.evaluate(()=>(window as any).memoryMutations[1])).toEqual({action:'update',id:itemId,expectedRevision:1,expectedEpoch:1,draft:{kind:'preference',body:'先说结论，再列证据',eventDate:null},restartConversation:true});
   await card.getByRole('button',{name:'删除',exact:true}).click();
   await expect(panel.getByRole('alertdialog')).toContainText('预计清除最近 1 轮');
   expect(await page.evaluate(()=>(window as any).impactCalls.length)).toBe(3);
   expect(await page.evaluate(()=>(window as any).impactCalls[2])).toEqual({appIds:[itemId],personalIds:[]});
   await panel.getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(panel).toContainText('还没有留下记忆');
+  expect(await page.evaluate(()=>(window as any).memoryMutations[2])).toEqual({action:'delete',id:itemId,expectedRevision:2,expectedEpoch:2,restartConversation:true});
 });
 
 test('keeps drafts and records on failure, and distinguishes cancelled exports and notification failures', async ({ page }) => {

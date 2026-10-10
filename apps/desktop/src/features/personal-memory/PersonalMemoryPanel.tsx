@@ -138,6 +138,7 @@ export function PersonalMemoryPanel() {
         setPreview(next);
         setEnabled(next.personal.policy.enabled);
         setIds(next.personal.policy.selectedIds);
+        setConfirmIds(null);
         setInjectionError('');
       }
     } catch (e) {
@@ -288,7 +289,7 @@ export function PersonalMemoryPanel() {
       <p className="personal-memory-help">为当前模型勾选发送时携带的个人记忆；按勾选顺序注入，与应用记忆分开计数（各 5 条 / 800 字）。发送前可在聊天气泡预览，发送后回执如实记录。</p>
       <p>当前服务：{preview!.scope.baseUrl} · 模型：{preview!.scope.model} · 已保存状态：{injection.policy.enabled ? `启用 · ${injection.policy.selectedIds.length}条` : '关闭'}</p>
       {!online && <p role="status" className="personal-memory-notice">个人记忆服务未连接：无法新增或保留勾选（需核对内容与预算）；可移除全部勾选或关闭注入，保存时会如实提示。</p>}
-      <fieldset disabled={injectionBusy} className="personal-memory-choice-set">
+      <fieldset disabled={injectionBusy || confirmIds !== null} className="personal-memory-choice-set">
         <label className="personal-memory-choice">
           <input type="checkbox" checked={enabled} onChange={e => { setEnabled(e.target.checked); if (!e.target.checked) setIds([]); }}/>
           <span>允许此模型使用所选个人记忆（发送时携带）</span>
@@ -315,7 +316,7 @@ export function PersonalMemoryPanel() {
         <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并开始新对话</button>
         <button disabled={injectionBusy} onClick={() => setConfirmIds(null)}>返回，不修改</button>
       </div>}
-      <button disabled={injectionBusy || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirmIds(removingIds); else void saveInjection(false); }}>保存选择</button>
+      <button disabled={injectionBusy || confirmIds !== null || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirmIds(removingIds); else void saveInjection(false); }}>保存选择</button>
       {!online && <p className="personal-memory-help">服务未连接时保存不可用；如需临时停用注入，请启动服务后操作。</p>}
     </div>}
   </section>;

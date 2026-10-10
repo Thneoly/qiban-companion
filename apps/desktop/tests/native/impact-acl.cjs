@@ -72,15 +72,22 @@ const denyOnPet=async request=>{try{await invoke(pet,'chat_usage_impact',{reques
   assert.equal(impact.scopes[0].affectedTurns,1);assert.equal(impact.scopes[0].scope.model,'b2-fixture');
   // The dialog renders the precomputed count from the real command.
   await memory().locator('article').getByRole('button',{name:'更正',exact:true}).click();
+  await memory().getByLabel('记忆内容').fill('合成偏好：先说结论，再列证据');
   await memory().getByRole('button',{name:'检查更正影响'}).click();
   await expect(memory().getByRole('alertdialog')).toContainText('预计清除最近 1 轮');
   await panel.screenshot({path:path.join(evidence,'impact-dialog.png')});
-  await memory().getByRole('button',{name:'返回，不修改'}).click();
+  // Confirm through the real backend: the request must survive the host's
+  // deny_unknown_fields deserialization, the receipt reports the prune, and
+  // the recorded turn is gone.
+  await memory().getByRole('button',{name:'确认并开始新对话'}).click();
+  await expect(memory().locator('article')).toContainText('先说结论，再列证据');
+  await expect(memory().getByRole('status')).toContainText('已清除使用过该记忆的最近 1 轮对话');
+  assert.equal((await invoke(pet,'chat_history')).length,0);
   const deniedIds=await denyOnPet({appIds:[itemId],personalIds:[]});
   assert(deniedIds,'pet window must not reach chat_usage_impact');
   await stop();assert.equal(requests.length,1);
   const result={passed:true,identifier:id,localhostRequests:requests.length,impact,
     petDenials:{empty:String(deniedEmpty&&deniedEmpty.message||deniedEmpty),ids:String(deniedIds&&deniedIds.message||deniedIds)},
-    cases:['empty consult and pet ACL denial','zero dialog before usage','ledger attribution after one turn','precomputed dialog count','pet ACL denial with ids']};
+    cases:['empty consult and pet ACL denial','zero dialog before usage','ledger attribution after one turn','precomputed dialog count','confirmed update through the real backend','pet ACL denial with ids']};
   fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await stop();server.closeAllConnections();server.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
