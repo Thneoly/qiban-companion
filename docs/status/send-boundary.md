@@ -16,7 +16,7 @@
 ## 实现
 
 - 共享 hook `apps/desktop/src/lib/usage-impact.ts`：`useUsageImpact(active, appIds, personalIds)`——`active` 只在弹窗打开时发起 invoke，id 变化（换条目/重开）自动重取；数组以 join 键做稳定依赖，避免每次渲染重取。
-- 两处 policy 面板把 confirm 布尔改为**打开时捕获被收回的 id 集合**（`confirmIds`），后台刷新移动快照也不改变弹窗咨询的 id；MemoryPanel 的 `Pending` 增 `impactIds` 字段同理。
+- 两处 policy 面板把 confirm 布尔改为**打开时捕获被收回的 id 集合**（`confirmIds`），后台刷新移动快照也不改变弹窗咨询的 id；MemoryPanel 的 `Pending` 同理拆为宿主形状的 `request` 与弹窗专用 `impactIds`，确认按钮只提交前者（宿主枚举 `deny_unknown_fields`，见下节）。PersonalMemoryPanel 补齐与 MemoryPolicyPanel 一致的两个守卫：弹窗打开时锁定勾选与保存按钮，后台刷新（memory-changed / focus）关闭弹窗并恢复已保存选择——确认提交的集合恒等于弹窗预计数描述的集合。
 - ACL 与精准清交付时一致：`chat_usage_impact` 只授予主窗（capabilities/main.json），pet 窗不授予（三处弹窗都在主窗）。
 - 浏览器 mock 三处（memory / memory-policy / personal-memory spec）补 `chat_usage_impact` handler 并记录请求，spec 断言 `{appIds, personalIds}` 请求形状、重开重取、N=0 分支与 fail-open 回落。
 
@@ -31,6 +31,17 @@
 
 - `npm run check`（typecheck、Vitest、双端构建）与浏览器 Playwright 55 过 1 跳（外部 Live2D 资产）通过。chat.spec 新增常驻边界行断言（空态、带轮次、带记忆、启用但离线四态）；三记忆 spec 断言弹窗预计轮数、请求形状与两种报告分支。
 - **Native CDP 真机验证（2026-10-10，验收构建 `b2-20261010a-8f3c21e4`，`tests/native/impact-acl.cjs`）**：空咨询返回 `{scopes:[],affectedTurnsTotal:0}`；pet 窗 invoke 被 ACL 拒绝（空 id 与带 id 两态）；新建记忆→启用选择→本地夹具真实发送一轮后，咨询按账本归因（`affectedTurnsTotal=1`、scope 为夹具模型）；确认弹窗真机渲染"预计清除最近 1 轮"，发送前为"预计聊天记录保持不变"。证据在 gitignored `.cache/b2-20261010a-*/`。
+
+## 对抗审查（2026-10-10，PR 前）
+
+四维审查（React 正确性 / 语义措辞 / 测试真实性 / 边界与 ACL）+ 逐条对抗验证，8 条发现 7 条确认，全部当场修复：
+
+- **HIGH**：确认按钮曾把整个 `Pending`（含 `impactIds`）spread 进 `memory_mutate` 请求，宿主 `#[serde(deny_unknown_fields)]` 拒收——真机上所有更正/删除/删除全部的**确认操作**会反序列化失败。门禁全盲的原因：浏览器 mock 形状无关、native 脚本只点过"返回，不修改"。修复 = 上述 `request`/`impactIds` 拆分；浏览器 spec 对两个确认请求做精确形状断言，验收脚本改为**真实点下确认按钮**（更正成功、回执报清 1 轮、`chat_history` 归零——修复前此步必然失败）。
+- **MEDIUM**：PersonalMemoryPanel 弹窗打开时勾选仍可交互、后台刷新重置选择不关弹窗 → 确认提交的集合可能偏离弹窗预计数描述的集合。修复 = 移植 MemoryPolicyPanel 的两个守卫；spec 断言弹窗打开时 fieldset/保存按钮锁定、memory-changed 关闭弹窗并恢复已保存选择。
+- **LOW**：删除全部按钮在单条弹窗打开时可点，切换首帧短暂复用上一条目的预计数。修复 = 补 `!!pending` 守卫。
+- **测试盲区**（均经变异复现：改坏文案后全套件仍绿）：chat.spec 离线态断言未跨"本条消息→记忆段"接缝、在线态未钉"未连接"注记缺席、personal-memory spec 未覆盖 N=0 分支。修复 = 跨接缝全串断言、`not.toContainText('未连接')`、N=0 弹窗分支断言。
+
+修复后门禁重跑全绿（check / browser 55 过 1 跳），native 验收在 `b2-20261010b-4d7e93f1` 重新通过（新增 `confirmed update through the real backend` 一例）。
 
 ## 遗留
 
