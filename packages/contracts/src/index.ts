@@ -134,3 +134,5 @@ export function decodeChatHistory(value:unknown):ChatTurn[] {
 export * from "./pairing";
 
 export * from "./remote-documents";
+
+export * from "./remote-memories";
