@@ -415,18 +415,41 @@ impl HistoryStore {
         Ok(())
     }
 
-    /// A rejected push (409): drop the row for good. The next pull converges
-    /// the local state; the change is never rebased onto a newer base.
-    pub fn memory_outbox_drop(&mut self, request_id: &str) -> Result<bool, StorageError> {
+    /// A rejected push (409): drop the row for good, clear the entry's mirror
+    /// row, and reset the owner's pull position so the next tick takes the
+    /// snapshot path. The dropped edit may have been the only thing keeping a
+    /// pending-skipped server wording unapplied — the event stream will not
+    /// resend it, and a mirror equal to the snapshot's revision would skip
+    /// the very wording that needs to land, so the cursor AND the mirror both
+    /// go. The change itself is never rebased onto a newer base.
+    pub fn memory_outbox_drop(
+        &mut self,
+        owner: &str,
+        request_id: &str,
+    ) -> Result<bool, StorageError> {
         let tx = self
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute(
-            "DELETE FROM memory_outbox WHERE request_id=?1",
-            [request_id],
-        )?;
+        let memory_id: Option<String> = tx
+            .query_row(
+                "SELECT memory_id FROM memory_outbox WHERE request_id=?1",
+                [request_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = memory_id.as_deref() {
+            tx.execute(
+                "DELETE FROM memory_outbox WHERE request_id=?1",
+                [request_id],
+            )?;
+            tx.execute(
+                "DELETE FROM memory_server_mirror WHERE owner=?1 AND memory_id=?2",
+                params![owner, id],
+            )?;
+            persist_cursor(&tx, owner, 0, 0)?;
+        }
         tx.commit()?;
-        Ok(changed == 1)
+        Ok(memory_id.is_some())
     }
 
     /// The owner's persisted pull position; (0, 0) forces the snapshot path.
@@ -443,8 +466,11 @@ impl HistoryStore {
     }
 
     /// Apply one pull's events and persist the new cursor atomically: either
-    /// every event lands plus the cursor moves, or nothing does. Events whose
-    /// revision equals the mirror are our own pushed changes echoing back.
+    /// every event lands plus the cursor moves, or nothing does. Upserts
+    /// whose revision equals the mirror are our own pushes echoing back, but
+    /// a delete is never skipped that way: a snapshot may have recorded the
+    /// tombstone revision while this store had no row to delete, and the
+    /// replayed delete is exactly what converges such a row.
     pub fn memory_apply_remote(
         &mut self,
         owner: &str,
@@ -457,7 +483,14 @@ impl HistoryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut report = RemoteApplyReport::default();
         for event in events {
-            if mirror_revision(&tx, owner, &event.memory_id)? == Some(event.revision) {
+            // Upserts at or below the mirror are history: our own push
+            // echoing back, or an older event replayed after a snapshot
+            // already carried a newer wording — applying it would roll the
+            // entry backwards. Deletes are never skipped this way.
+            if event.op == MemorySyncOp::Upsert
+                && mirror_revision(&tx, owner, &event.memory_id)?
+                    .is_some_and(|mirrored| mirrored >= event.revision)
+            {
                 continue;
             }
             apply_remote_entry(
@@ -495,7 +528,11 @@ impl HistoryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut report = RemoteApplyReport::default();
         for item in items {
-            if mirror_revision(&tx, owner, &item.id)? == Some(item.revision) {
+            // Same monotonic guard as events: a snapshot item at or below the
+            // mirror carries nothing newer than what already landed.
+            if mirror_revision(&tx, owner, &item.id)?
+                .is_some_and(|mirrored| mirrored >= item.revision)
+            {
                 continue;
             }
             apply_remote_entry(
@@ -907,7 +944,7 @@ mod tests {
             Some(1),
             "late ack of a folded-away request must not move the mirror"
         );
-        assert!(s.memory_outbox_drop(&folded.request_id).unwrap());
+        assert!(s.memory_outbox_drop(owner, &folded.request_id).unwrap());
         assert!(row(&s, &m.id).is_none());
     }
 
