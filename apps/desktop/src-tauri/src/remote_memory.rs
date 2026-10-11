@@ -45,8 +45,82 @@ async fn tick(app: &AppHandle) {
             Err(_) => return,
         }
     };
+    settle_task_facts(app);
     pull(app, &owner).await;
     push(app, &owner).await;
+}
+
+/// Drain the execution store's fact ledger into the memory store. Runs every
+/// tick (idempotent, cheap when empty) so a crash between the execution
+/// commit and the deposit — the two-database two-phase window — closes on
+/// the next tick without a dedicated startup path. Locks are taken one at a
+/// time: read the ledger, deposit, then clear the row.
+fn settle_task_facts(app: &AppHandle) {
+    // ExecutionStore serializes on its own connection mutex — the long-op
+    // `operation` lock is for file work, not for these short ledger queries.
+    let pending = {
+        let state = app.state::<crate::execution::ExecutionState>();
+        match state.store.fact_pending() {
+            Ok(pending) => pending,
+            Err(_) => return,
+        }
+    };
+    if pending.is_empty() {
+        return;
+    }
+    let chat = app.state::<ChatState>();
+    for (fingerprint, task_id, task) in pending {
+        // The projection is the ONLY fact source; only terminal statuses
+        // register, so None here means a projection rule changed under old
+        // ledger rows — settle them without depositing.
+        let Some((body, event_date)) = companion_core::execution::task_fact_projection(&task)
+        else {
+            let state = app.state::<crate::execution::ExecutionState>();
+            let _ = state.store.fact_settled(&task_id);
+            continue;
+        };
+        let deposited = {
+            let Ok(mut inner) = chat.0.lock() else {
+                return;
+            };
+            let Some(store) = inner.store.as_mut() else {
+                return;
+            };
+            store
+                .task_fact_deposit(&fingerprint, &body, event_date.as_deref())
+                .is_ok()
+        };
+        if deposited {
+            let state = app.state::<crate::execution::ExecutionState>();
+            let _ = state.store.fact_settled(&task_id);
+            // The deposit bumped the epoch: emit like a local mutation so
+            // panels refresh and in-flight completions die.
+            notify_changed(app);
+        }
+    }
+}
+
+fn notify_changed(app: &AppHandle) {
+    let state = app.state::<ChatState>();
+    let Ok(inner) = state.0.lock() else {
+        return;
+    };
+    let Some(store) = inner.store.as_ref() else {
+        return;
+    };
+    let Ok(context_epoch) = store.context_epoch() else {
+        return;
+    };
+    drop(inner);
+    let _ = tauri::Emitter::emit(
+        app,
+        "memory-changed",
+        crate::memory::MemoryChanged {
+            context_epoch,
+            chat_cleared: false,
+            remote: false,
+        },
+    );
 }
 
 /// Pull until drained. The server keeps events for us until we report the new

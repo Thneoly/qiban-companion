@@ -1,14 +1,19 @@
 /** Manual memory DTOs and management IPC receipts. */
 export type MemoryKind = 'preference' | 'experience' | 'task_fact';
+export type MemorySourceKind = 'user_manual' | 'executor';
+export const TASK_FACT_SOURCE_LABEL = '来自电脑上的文档任务';
 export interface MemoryDraft {
   kind: Exclude<MemoryKind, 'task_fact'>;
   body: string;
   eventDate: string | null;
 }
-export interface MemoryRecord extends MemoryDraft {
+export interface MemoryRecord {
   id: string;
-  sourceKind: 'user_manual';
-  sourceLabel: '用户在记忆面板填写';
+  kind: MemoryKind;
+  body: string;
+  sourceKind: MemorySourceKind;
+  sourceLabel: string;
+  eventDate: string | null;
   createdAt: number;
   confirmedAt: number;
   updatedAt: number;
@@ -26,21 +31,29 @@ function validDate(value: unknown): value is string | null {
 export function decodeMemory(value: unknown): MemoryRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return incompatible();
   const v = value as Record<string, unknown>;
+  // Kind/source pairing mirrors the Rust row CHECK: manual rows are
+  // preference/experience with the manual label; executor rows are task
+  // facts with the executor label.
+  const manual = v.kind === 'preference' || v.kind === 'experience';
+  const executor = v.kind === 'task_fact';
   if (typeof v.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.id) ||
-      !['preference', 'experience'].includes(v.kind as string) || typeof v.body !== 'string' ||
+      (!manual && !executor) || typeof v.body !== 'string' ||
       [...v.body].length < 1 || [...v.body].length > 200 ||
       /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\ud800-\udfff]/u.test(v.body) ||
       // Match Rust str::trim's Unicode whitespace, not JS's additional BOM removal.
       /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/u.test(v.body) ||
-      v.sourceKind !== 'user_manual' || v.sourceLabel !== '用户在记忆面板填写' || !validDate(v.eventDate) ||
+      (manual && (v.sourceKind !== 'user_manual' || v.sourceLabel !== '用户在记忆面板填写')) ||
+      (executor && (v.sourceKind !== 'executor' || v.sourceLabel !== TASK_FACT_SOURCE_LABEL)) ||
+      !validDate(v.eventDate) ||
       !integer(v.createdAt) || !integer(v.confirmedAt) || !integer(v.updatedAt) || !integer(v.revision) || v.revision < 1 ||
       v.confirmedAt < v.createdAt || v.updatedAt !== v.confirmedAt || 'deletedAt' in v) return incompatible();
-  return { id: v.id, kind: v.kind as MemoryDraft['kind'], body: v.body, sourceKind: v.sourceKind,
-    sourceLabel: v.sourceLabel, eventDate: v.eventDate, createdAt: v.createdAt, confirmedAt: v.confirmedAt,
+  return { id: v.id, kind: v.kind as MemoryKind, body: v.body, sourceKind: v.sourceKind as MemorySourceKind,
+    sourceLabel: v.sourceLabel as string, eventDate: v.eventDate, createdAt: v.createdAt, confirmedAt: v.confirmedAt,
     updatedAt: v.updatedAt, revision: v.revision };
 }
 export function decodeMemories(value: unknown): MemoryRecord[] {
-  if (!Array.isArray(value) || value.length > 30) return incompatible();
+  // 30 manual + 50 task facts — the kind-split caps, mirrored.
+  if (!Array.isArray(value) || value.length > 80) return incompatible();
   const memories = value.map(decodeMemory);
   if (new Set(memories.map(m => m.id)).size !== memories.length) return incompatible();
   return memories;

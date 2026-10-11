@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_MEMORIES: usize = 30;
+/// Independent cap for executor-sourced task facts; FIFO eviction touches
+/// only task facts and never a manual memory.
+pub const MAX_TASK_FACTS: usize = 50;
 pub const MAX_BODY_CHARS: usize = 200;
 pub const MAX_SELECTION: usize = 5;
 pub const MAX_CONTEXT_CHARS: usize = 800;
@@ -160,6 +163,8 @@ impl MemoryKind {
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
     UserManual,
+    /// Executor-sourced task fact: read-only origin, never manually created.
+    Executor,
 }
 
 /// User-editable fields only. IDs, provenance, timestamps and versions are host-owned.

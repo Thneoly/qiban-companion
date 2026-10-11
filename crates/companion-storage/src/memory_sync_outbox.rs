@@ -75,7 +75,7 @@ fn now() -> Result<i64, StorageError> {
 /// absorbs it. Folding always rewrites the request id so an in-flight push of
 /// the old payload cannot ack away the folded-in newer change.
 pub(crate) fn enqueue(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     op: OutboxOp,
     memory_id: &str,
     kind: Option<&MemoryKind>,
@@ -292,10 +292,25 @@ fn apply_remote_entry(
         .optional()?;
     if entry.deleted {
         if let (Some((_, false)), false) = (local, pending) {
-            let cleared = tombstone_and_prune(tx, id)?;
-            advance(tx, epoch(tx)?)?;
-            report.changed = true;
-            report.cleared_turns += cleared;
+            // A task fact's "delete" from the server is the replacement or
+            // eviction half of a redo — a system action that must NOT prune
+            // the chats quoting the old wording (that gate belongs to user
+            // deletes). Manual memories keep the precise prune.
+            let is_fact: bool = tx.query_row(
+                "SELECT kind='task_fact' FROM memories WHERE id=?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get(0),
+            )?;
+            if is_fact {
+                crate::task_facts::retire_fact(tx, id)?;
+                advance(tx, epoch(tx)?)?;
+                report.changed = true;
+            } else {
+                let cleared = tombstone_and_prune(tx, id)?;
+                advance(tx, epoch(tx)?)?;
+                report.changed = true;
+                report.cleared_turns += cleared;
+            }
         }
     } else {
         let (Some(kind), Some(body)) = (entry.kind, entry.body) else {
@@ -303,22 +318,45 @@ fn apply_remote_entry(
         };
         match local {
             None => {
-                // The local domain stores only user-editable kinds; a
-                // task_fact entry is mirrored (so it never resurrects here)
-                // but not materialized. A full local capacity skips the
-                // materialization the same way: the mirror still records the
-                // revision so this pull's cursor advances and the loop never
-                // wedges — the entry catches up on a later snapshot once
-                // room exists locally.
-                let active: usize = tx.query_row(
-                    "SELECT count(*) FROM memories WHERE deleted_at IS NULL",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )? as usize;
-                if kind == MemoryKind::TaskFact {
-                    report.skipped_kind += 1;
-                } else if active >= MAX_MEMORIES {
+                // Kind-split materialization with kind-split capacity: a full
+                // local side skips the insert but still records the mirror so
+                // this pull's cursor advances and the loop never wedges — the
+                // entry catches up on a later snapshot once room exists.
+                // Older binaries (pre-task-fact) keep their mirror-only skip;
+                // this build materializes executor facts as read-only rows.
+                let (manual, facts) = crate::memory::active_counts(tx)?;
+                let full = if kind == MemoryKind::TaskFact {
+                    facts >= MAX_TASK_FACTS
+                } else {
+                    manual >= MAX_MEMORIES
+                };
+                if full {
                     report.skipped_capacity += 1;
+                } else if kind == MemoryKind::TaskFact {
+                    let body_text: String = body.into();
+                    if body_text.trim().is_empty()
+                        || body_text.chars().count() > MAX_BODY_CHARS
+                        || body_text
+                            .chars()
+                            .any(|c| c.is_control() && c != '\n' && c != '\t')
+                    {
+                        return Err(StorageError::Unavailable);
+                    }
+                    let now = now()?;
+                    advance(tx, epoch(tx)?)?;
+                    tx.execute(
+                        "INSERT INTO memories(id,kind,body,source_kind,source_label,event_date,created_at,confirmed_at,updated_at,revision)
+                         VALUES(?1,'task_fact',?2,'executor',?3,?4,?5,?5,?5,1)",
+                        params![
+                            id,
+                            body_text,
+                            companion_core::execution::TASK_FACT_SOURCE_LABEL,
+                            entry.event_date,
+                            now
+                        ],
+                    )?;
+                    validate_schema(tx)?;
+                    report.changed = true;
                 } else {
                     let draft = MemoryDraft {
                         kind,
@@ -839,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn task_fact_entries_are_mirrored_but_never_materialized() {
+    fn remote_task_facts_materialize_as_executor_rows_and_retire_without_prune() {
         let owner = "4318-task-fact";
         let mut s = store();
         let id = uuid::Uuid::new_v4().to_string();
@@ -852,7 +890,7 @@ mod tests {
                     op: MemorySyncOp::Upsert,
                     revision: 1,
                     kind: Some(MemoryKind::TaskFact),
-                    body: Some("task fact body".into()),
+                    body: Some("把《笔记》的摘录保存为草稿：已核验完成".into()),
                     event_date: None,
                     occurred_at: 1,
                 }],
@@ -860,12 +898,48 @@ mod tests {
                 1,
             )
             .unwrap();
-        assert_eq!(report.skipped_kind, 1);
-        assert!(!report.changed);
+        assert!(report.changed, "this build materializes executor facts");
+        let active = list_active(&s);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].kind, MemoryKind::TaskFact);
+        assert_eq!(active[0].source_kind, MemorySource::Executor);
+        assert_eq!(
+            s.memory_push_base(owner, &id).unwrap(),
+            Some(1),
+            "the mirror records the applied revision"
+        );
+        // A later remote delete of a fact is the replacement/eviction half —
+        // retire WITHOUT the precise prune (no chat cleanup from a system
+        // action). There are no turns here; the prune distinction is pinned
+        // by the task_facts suite; here we pin the retire itself.
+        let report = s
+            .memory_apply_remote(
+                owner,
+                &[MemorySyncEvent {
+                    seq: 2,
+                    memory_id: id.clone(),
+                    op: MemorySyncOp::Delete,
+                    revision: 2,
+                    kind: None,
+                    body: None,
+                    event_date: None,
+                    occurred_at: 2,
+                }],
+                1,
+                2,
+            )
+            .unwrap();
+        assert!(report.changed);
         assert!(list_active(&s).is_empty());
-        // The mirror still records it: a local create push for this id will
-        // simply be rejected by the server instead of looping.
-        assert_eq!(s.memory_push_base(owner, &id).unwrap(), Some(1));
+        let tombstone: i64 =
+            s.0.query_row(
+                "SELECT count(*) FROM memories WHERE id=?1 AND deleted_at IS NOT NULL
+                 AND body IS NULL AND source_kind IS NULL",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstone, 1);
     }
 
     #[test]

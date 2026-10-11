@@ -6,7 +6,7 @@
 use super::*;
 use companion_core::memory::{
     validate_synced_body, MemoryKind, MemorySnapshotItem, MemorySyncError, MemorySyncEvent,
-    MemorySyncOp, MemorySyncResponse, MemoryWriteReceipt, MAX_MEMORIES,
+    MemorySyncOp, MemorySyncResponse, MemoryWriteReceipt, MAX_MEMORIES, MAX_TASK_FACTS,
 };
 use serde::Serialize;
 
@@ -279,12 +279,21 @@ fn apply_write(
             let (body, event_date) = validate_synced_body(body, event_date.as_deref())?;
             match row {
                 None => {
-                    let active: i64 = tx.query_row(
-                        "SELECT COUNT(*) FROM account_memories WHERE account_id=?1 AND deleted=0",
-                        [account],
+                    // Kind-split capacity mirrors the desktop split: manual
+                    // entries cap at MAX_MEMORIES, executor task facts at
+                    // MAX_TASK_FACTS; neither evicts the other.
+                    let same_kind: i64 = tx.query_row(
+                        "SELECT COUNT(*) FROM account_memories
+                         WHERE account_id=?1 AND deleted=0 AND kind=?2",
+                        params![account, kind.as_str()],
                         |r| r.get(0),
                     )?;
-                    if active >= MAX_MEMORIES as i64 {
+                    let cap = if *kind == MemoryKind::TaskFact {
+                        MAX_TASK_FACTS
+                    } else {
+                        MAX_MEMORIES
+                    } as i64;
+                    if same_kind >= cap {
                         return Err(MemorySyncError::Capacity.into());
                     }
                     tx.execute(

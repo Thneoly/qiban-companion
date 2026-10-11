@@ -235,9 +235,11 @@ export function MemoryPanel({ onExpired }: { onExpired: () => void }) {
                 </div>
               ) : (
                 <div>
-                  <button disabled={busy} onClick={() => openEdit(item)}>
-                    更正内容
-                  </button>
+                  {item.kind !== 'task_fact' && (
+                    <button disabled={busy} onClick={() => openEdit(item)}>
+                      更正内容
+                    </button>
+                  )}
                   <button
                     disabled={busy}
                     onClick={() => {
