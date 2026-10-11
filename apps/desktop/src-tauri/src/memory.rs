@@ -114,6 +114,11 @@ pub enum MemoryMutation {
 pub struct MemoryChanged {
     pub context_epoch: i64,
     pub chat_cleared: bool,
+    /// True when the change arrived from another device through the sync
+    /// loop rather than from this window. `default` keeps old UI payloads
+    /// decoding as local changes.
+    #[serde(default)]
+    pub remote: bool,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +243,7 @@ impl ChatState {
         let notifications_delivered = notify(MemoryChanged {
             context_epoch,
             chat_cleared,
+            remote: false,
         });
         Ok(MemoryReceipt {
             context_epoch,

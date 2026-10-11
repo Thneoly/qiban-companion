@@ -215,6 +215,9 @@ impl AccountClient {
                 (403, Some("pairing_denied")) => "pairing_denied",
                 (409, Some("pairing_conflict")) => "pairing_conflict",
                 (409, Some("pairing_capacity")) => "pairing_capacity",
+                (409, Some("memory_revision_conflict")) => "memory_revision_conflict",
+                (409, Some("memory_resurrection")) => "memory_resurrection",
+                (409, Some("memory_capacity")) => "memory_capacity",
                 (429, Some("pairing_rate_limited")) => "pairing_rate_limited",
                 (429, _) => "rate_limited",
                 (409, Some("capacity")) => "capacity",
@@ -458,6 +461,54 @@ impl AccountClient {
         )
         .await?;
         Ok(())
+    }
+    /// Memory sync pull: ordered events since the cursor, or a full snapshot
+    /// when this device fell behind the retention window.
+    pub(crate) async fn memory_pull(
+        &self,
+        generation: i64,
+        cursor: i64,
+    ) -> Result<companion_core::memory::MemorySyncResponse> {
+        let secret = self.active_secret()?;
+        serde_json::from_value(
+            self.request(
+                Method::GET,
+                &format!("/v1/memories/sync?cursor={cursor}&generation={generation}"),
+                Some(&secret.token),
+                None,
+            )
+            .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))
+    }
+    /// Memory outbox push; idempotent by requestId on the server. `op` and
+    /// `base_revision` are resolved by the sync loop against the current
+    /// owner's mirror (an update may degrade to a create).
+    pub(crate) async fn memory_push(
+        &self,
+        entry: &companion_storage::memory_sync_outbox::OutboxEntry,
+        op: &str,
+        base_revision: i64,
+    ) -> Result<companion_core::memory::MemoryWriteReceipt> {
+        let secret = self.active_secret()?;
+        serde_json::from_value(
+            self.request(
+                Method::POST,
+                "/v1/memories",
+                Some(&secret.token),
+                Some(json!({
+                    "requestId": entry.request_id,
+                    "id": entry.memory_id,
+                    "op": op,
+                    "baseRevision": base_revision,
+                    "kind": entry.kind.map(|k| k.as_str()),
+                    "body": entry.body,
+                    "eventDate": entry.event_date,
+                })),
+            )
+            .await?,
+        )
+        .map_err(|_| AccountError::new("unavailable"))
     }
     pub async fn logout(&mut self, all_sessions: bool) -> Result<Snapshot> {
         self.challenge = None;

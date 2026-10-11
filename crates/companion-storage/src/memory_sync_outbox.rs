@@ -158,7 +158,11 @@ fn parse_kind(value: &str) -> Option<MemoryKind> {
     }
 }
 
-fn mirror_revision(tx: &Connection, owner: &str, memory_id: &str) -> Result<Option<i64>, StorageError> {
+fn mirror_revision(
+    tx: &Connection,
+    owner: &str,
+    memory_id: &str,
+) -> Result<Option<i64>, StorageError> {
     Ok(tx
         .query_row(
             "SELECT server_revision FROM memory_server_mirror WHERE owner=?1 AND memory_id=?2",
@@ -256,20 +260,26 @@ fn prune_chats_pub(tx: &Connection, ids: &[String]) -> Result<u64, StorageError>
     crate::memory::prune_chats(tx, ids, &[], &BTreeSet::new())
 }
 
+/// One remote entry (event or snapshot item) in translation-ready form.
+struct RemoteEntry<'a> {
+    id: &'a str,
+    kind: Option<MemoryKind>,
+    body: Option<&'a str>,
+    event_date: Option<&'a str>,
+    server_revision: i64,
+    deleted: bool,
+}
+
 /// Shared translation of one remote entry (event or snapshot item). The
 /// pending check runs first: an in-flight local op will win over the server
 /// wording, so only the mirror moves.
 fn apply_remote_entry(
     tx: &Connection,
     owner: &str,
-    id: &str,
-    kind: Option<MemoryKind>,
-    body: Option<&str>,
-    event_date: Option<&str>,
-    server_revision: i64,
-    deleted: bool,
+    entry: &RemoteEntry<'_>,
     report: &mut RemoteApplyReport,
 ) -> Result<(), StorageError> {
+    let id = entry.id;
     let pending = outbox_pending(tx, id)?;
     let local: Option<(i64, bool)> = tx
         .query_row(
@@ -278,17 +288,15 @@ fn apply_remote_entry(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    if deleted {
-        if let Some((_, false)) = local {
-            if !pending {
-                let cleared = tombstone_and_prune(tx, id)?;
-                advance(tx, epoch(tx)?)?;
-                report.changed = true;
-                report.cleared_turns += cleared;
-            }
+    if entry.deleted {
+        if let (Some((_, false)), false) = (local, pending) {
+            let cleared = tombstone_and_prune(tx, id)?;
+            advance(tx, epoch(tx)?)?;
+            report.changed = true;
+            report.cleared_turns += cleared;
         }
     } else {
-        let (Some(kind), Some(body)) = (kind, body) else {
+        let (Some(kind), Some(body)) = (entry.kind, entry.body) else {
             return Err(StorageError::Unavailable);
         };
         match local {
@@ -302,7 +310,7 @@ fn apply_remote_entry(
                     let draft = MemoryDraft {
                         kind,
                         body: body.into(),
-                        event_date: event_date.map(Into::into),
+                        event_date: entry.event_date.map(Into::into),
                     }
                     .validate()?;
                     let now = now()?;
@@ -318,21 +326,22 @@ fn apply_remote_entry(
             }
             Some((_, false)) => {
                 if !pending && kind != MemoryKind::TaskFact {
-                    let cleared = apply_remote_update(tx, id, kind, body, event_date)?;
+                    let cleared = apply_remote_update(tx, id, kind, body, entry.event_date)?;
                     report.changed = true;
                     report.cleared_turns += cleared;
                 }
             }
             Some((_, true)) => {
-                if !pending && kind != MemoryKind::TaskFact {
-                    if resurrect(tx, id, kind, body, event_date)? {
-                        report.changed = true;
-                    }
+                if !pending
+                    && kind != MemoryKind::TaskFact
+                    && resurrect(tx, id, kind, body, entry.event_date)?
+                {
+                    report.changed = true;
                 }
             }
         }
     }
-    set_mirror(tx, owner, id, server_revision)
+    set_mirror(tx, owner, id, entry.server_revision)
 }
 
 impl HistoryStore {
@@ -369,7 +378,11 @@ impl HistoryStore {
 
     /// Resolve the push base for the current owner; None means the owner's
     /// server has never seen the entry.
-    pub fn memory_push_base(&self, owner: &str, memory_id: &str) -> Result<Option<i64>, StorageError> {
+    pub fn memory_push_base(
+        &self,
+        owner: &str,
+        memory_id: &str,
+    ) -> Result<Option<i64>, StorageError> {
         mirror_revision(&self.0, owner, memory_id)
     }
 
@@ -392,7 +405,10 @@ impl HistoryStore {
             )
             .optional()?;
         if let Some(id) = memory_id {
-            tx.execute("DELETE FROM memory_outbox WHERE request_id=?1", [request_id])?;
+            tx.execute(
+                "DELETE FROM memory_outbox WHERE request_id=?1",
+                [request_id],
+            )?;
             set_mirror(&tx, owner, &id, server_revision)?;
         }
         tx.commit()?;
@@ -405,7 +421,10 @@ impl HistoryStore {
         let tx = self
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute("DELETE FROM memory_outbox WHERE request_id=?1", [request_id])?;
+        let changed = tx.execute(
+            "DELETE FROM memory_outbox WHERE request_id=?1",
+            [request_id],
+        )?;
         tx.commit()?;
         Ok(changed == 1)
     }
@@ -444,12 +463,14 @@ impl HistoryStore {
             apply_remote_entry(
                 &tx,
                 owner,
-                &event.memory_id,
-                event.kind,
-                event.body.as_deref(),
-                event.event_date.as_deref(),
-                event.revision,
-                event.op == MemorySyncOp::Delete,
+                &RemoteEntry {
+                    id: &event.memory_id,
+                    kind: event.kind,
+                    body: event.body.as_deref(),
+                    event_date: event.event_date.as_deref(),
+                    server_revision: event.revision,
+                    deleted: event.op == MemorySyncOp::Delete,
+                },
                 &mut report,
             )?;
         }
@@ -480,19 +501,19 @@ impl HistoryStore {
             apply_remote_entry(
                 &tx,
                 owner,
-                &item.id,
-                Some(item.kind),
-                item.body.as_deref(),
-                item.event_date.as_deref(),
-                item.revision,
-                item.deleted,
+                &RemoteEntry {
+                    id: &item.id,
+                    kind: Some(item.kind),
+                    body: item.body.as_deref(),
+                    event_date: item.event_date.as_deref(),
+                    server_revision: item.revision,
+                    deleted: item.deleted,
+                },
                 &mut report,
             )?;
         }
         for memory in read_active(&tx)? {
-            if !items.iter().any(|item| item.id == memory.id)
-                && !outbox_pending(&tx, &memory.id)?
-            {
+            if !items.iter().any(|item| item.id == memory.id) && !outbox_pending(&tx, &memory.id)? {
                 enqueue(
                     &tx,
                     OutboxOp::Create,
@@ -526,13 +547,11 @@ fn persist_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemoryCommit;
 
     fn store() -> HistoryStore {
-        HistoryStore::open(&std::env::temp_dir().join(format!(
-            "qiban-outbox-{}.db",
-            uuid::Uuid::new_v4()
-        )))
+        HistoryStore::open(
+            &std::env::temp_dir().join(format!("qiban-outbox-{}.db", uuid::Uuid::new_v4())),
+        )
         .unwrap()
     }
     fn draft(body: &str) -> MemoryDraft {
@@ -544,7 +563,10 @@ mod tests {
     }
     fn create(store: &mut HistoryStore) -> Memory {
         let epoch = store.context_epoch().unwrap();
-        store.memory_create(&draft("prefer tea"), epoch).unwrap().value
+        store
+            .memory_create(&draft("prefer tea"), epoch)
+            .unwrap()
+            .value
     }
     fn rows(store: &HistoryStore) -> Vec<OutboxEntry> {
         store.memory_outbox_peek().unwrap()
@@ -552,7 +574,13 @@ mod tests {
     fn row(store: &HistoryStore, id: &str) -> Option<OutboxEntry> {
         rows(store).into_iter().find(|e| e.memory_id == id)
     }
-    fn event(seq: i64, id: &str, op: MemorySyncOp, revision: i64, body: Option<&str>) -> MemorySyncEvent {
+    fn event(
+        seq: i64,
+        id: &str,
+        op: MemorySyncOp,
+        revision: i64,
+        body: Option<&str>,
+    ) -> MemorySyncEvent {
         MemorySyncEvent {
             seq,
             memory_id: id.into(),
@@ -567,11 +595,9 @@ mod tests {
     fn local_revision(store: &HistoryStore, id: &str) -> Option<i64> {
         store.context_epoch().ok()?;
         let c = &store.0;
-        c.query_row(
-            "SELECT revision FROM memories WHERE id=?1",
-            [id],
-            |r| r.get(0),
-        )
+        c.query_row("SELECT revision FROM memories WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
         .optional()
         .unwrap()
     }
@@ -594,8 +620,13 @@ mod tests {
         assert_ne!(folded.request_id, first.request_id);
         // update + update keeps one row, newest wording.
         let epoch = s.context_epoch().unwrap();
-        s.memory_update(&m.id, local_revision(&s, &m.id).unwrap(), epoch, &draft("espresso"))
-            .unwrap();
+        s.memory_update(
+            &m.id,
+            local_revision(&s, &m.id).unwrap(),
+            epoch,
+            &draft("espresso"),
+        )
+        .unwrap();
         assert_eq!(rows(&s).len(), 1);
         assert_eq!(row(&s, &m.id).unwrap().body.as_deref(), Some("espresso"));
         // Once the server has seen the entry, update + delete folds into a
@@ -604,8 +635,13 @@ mod tests {
         s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
         assert!(row(&s, &m.id).is_none());
         let epoch = s.context_epoch().unwrap();
-        s.memory_update(&m.id, local_revision(&s, &m.id).unwrap(), epoch, &draft("v3"))
-            .unwrap();
+        s.memory_update(
+            &m.id,
+            local_revision(&s, &m.id).unwrap(),
+            epoch,
+            &draft("v3"),
+        )
+        .unwrap();
         let update_row = row(&s, &m.id).expect("update enqueues post-ack");
         assert_eq!(update_row.op, OutboxOp::Update);
         let epoch = s.context_epoch().unwrap();
@@ -617,14 +653,17 @@ mod tests {
         assert_ne!(deleted.request_id, update_row.request_id);
         // Repeating the committed delete enqueues nothing new.
         let epoch = s.context_epoch().unwrap();
-        s.memory_delete(&m.id, deleted_next(&s, &m.id), epoch).unwrap();
+        s.memory_delete(&m.id, deleted_next(&s, &m.id), epoch)
+            .unwrap();
         assert_eq!(rows(&s).len(), 1);
     }
 
     fn deleted_next(store: &HistoryStore, id: &str) -> i64 {
         let c = &store.0;
-        c.query_row("SELECT revision FROM memories WHERE id=?1", [id], |r| r.get(0))
-            .unwrap()
+        c.query_row("SELECT revision FROM memories WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
     }
 
     #[test]
@@ -685,15 +724,36 @@ mod tests {
         assert_eq!(s.memory_sync_state(owner).unwrap(), (1, 2));
         // Our own echo: the same revision is already in the mirror.
         let report = s
-            .memory_apply_remote(owner, &[event(2, &id, MemorySyncOp::Upsert, 2, Some("prefer coffee"))], 1, 2)
+            .memory_apply_remote(
+                owner,
+                &[event(
+                    2,
+                    &id,
+                    MemorySyncOp::Upsert,
+                    2,
+                    Some("prefer coffee"),
+                )],
+                1,
+                2,
+            )
             .unwrap();
         assert!(!report.changed);
         // A pending local edit defers to itself: only the mirror moves.
         let epoch = s.context_epoch().unwrap();
-        s.memory_update(&id, local_revision(&s, &id).unwrap(), epoch, &draft("local edit"))
-            .unwrap();
-        s.memory_apply_remote(owner, &[event(3, &id, MemorySyncOp::Upsert, 3, Some("server edit"))], 1, 3)
-            .unwrap();
+        s.memory_update(
+            &id,
+            local_revision(&s, &id).unwrap(),
+            epoch,
+            &draft("local edit"),
+        )
+        .unwrap();
+        s.memory_apply_remote(
+            owner,
+            &[event(3, &id, MemorySyncOp::Upsert, 3, Some("server edit"))],
+            1,
+            3,
+        )
+        .unwrap();
         assert!(list_active(&s)
             .iter()
             .any(|m| m.id == id && m.body == "local edit"));
@@ -708,11 +768,14 @@ mod tests {
             .unwrap();
         assert!(report.changed);
         assert!(local_revision(&s, &id).is_some()); // tombstoned row persists
-        assert!(list_active(&s)
-            .iter()
-            .all(|m| m.id != id));
+        assert!(list_active(&s).iter().all(|m| m.id != id));
         let report = s
-            .memory_apply_remote(owner, &[event(5, &id, MemorySyncOp::Upsert, 5, Some("back again"))], 1, 5)
+            .memory_apply_remote(
+                owner,
+                &[event(5, &id, MemorySyncOp::Upsert, 5, Some("back again"))],
+                1,
+                5,
+            )
             .unwrap();
         assert!(report.changed);
         assert!(list_active(&s)
@@ -828,8 +891,13 @@ mod tests {
         // of the old id is a no-op — it must neither drop the folded row nor
         // pollute the mirror with a revision the folded push does not know.
         let epoch = s.context_epoch().unwrap();
-        s.memory_update(&m.id, local_revision(&s, &m.id).unwrap(), epoch, &draft("v2"))
-            .unwrap();
+        s.memory_update(
+            &m.id,
+            local_revision(&s, &m.id).unwrap(),
+            epoch,
+            &draft("v2"),
+        )
+        .unwrap();
         let folded = row(&s, &m.id).unwrap();
         assert_ne!(folded.request_id, entry.request_id);
         s.memory_outbox_ack(owner, &entry.request_id, 2).unwrap();
@@ -848,4 +916,3 @@ mod tests {
         read_active(&store.0).unwrap()
     }
 }
-

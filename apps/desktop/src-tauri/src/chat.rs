@@ -154,6 +154,7 @@ pub fn chat_clear(app: AppHandle, state: State<'_, ChatState>) -> Result<(), Str
             crate::memory::MemoryChanged {
                 context_epoch: epoch,
                 chat_cleared: true,
+                remote: false,
             },
         );
     }
