@@ -131,9 +131,10 @@ async fn push(app: &AppHandle, owner: &str) {
                     "memory_revision_conflict" | "memory_resurrection" | "memory_capacity"
                 ) {
                     // Another device won. Drop the change for good — never
-                    // rebase onto the newer base — and let the next pull
-                    // converge; the panel refresh is the user-visible signal.
-                    let _ = drop_row(app, &entry.request_id);
+                    // rebase onto the newer base — and reset the pull
+                    // position: the snapshot diff on the next tick is what
+                    // converges the wording this pending row had skipped.
+                    let _ = drop_row(app, owner, &entry.request_id);
                     continue;
                 }
                 // Network or server trouble: leave the row for the next tick.
@@ -193,10 +194,14 @@ fn ack(app: &AppHandle, owner: &str, request_id: &str, server_revision: i64) {
     }
 }
 
-fn drop_row(app: &AppHandle, request_id: &str) -> Option<bool> {
+fn drop_row(app: &AppHandle, owner: &str, request_id: &str) -> Option<bool> {
     let state = app.state::<ChatState>();
     let mut inner = state.0.lock().ok()?;
-    inner.store.as_mut()?.memory_outbox_drop(request_id).ok()
+    inner
+        .store
+        .as_mut()?
+        .memory_outbox_drop(owner, request_id)
+        .ok()
 }
 
 fn notify(app: &AppHandle, report: &RemoteApplyReport) {
