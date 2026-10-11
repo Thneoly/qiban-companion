@@ -696,3 +696,336 @@ async fn heartbeat_requires_an_active_session() {
     // Never logged in: no secret → Err, and no network request is made.
     assert!(c.heartbeat(&[]).await.is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Cross-device memory sync: real HTTP against the coordinator router, a real
+// AccountClient, and a real HistoryStore. The phone peer is driven through
+// the same routes via raw requests (a second login would sit in the 61s code
+// throttle), and "another desktop" is a second HistoryStore resolving through
+// the same session — the server sees one device, which only shares the pull
+// cursor, not the local stores' convergence.
+use companion_core::memory::{MemoryDraft, MemoryKind};
+use companion_storage::history::HistoryStore;
+use companion_storage::memory_sync_outbox::{OutboxOp, RemoteApplyReport};
+
+fn memory_draft(body: &str) -> MemoryDraft {
+    MemoryDraft {
+        kind: MemoryKind::Preference,
+        body: body.into(),
+        event_date: None,
+    }
+}
+
+/// One iteration of the sync loop's core sequence (pull -> apply -> push ->
+/// ack/drop), against real components. Returns what the pull applied. The
+/// pull loop re-reads the persisted cursor every round exactly like the real
+/// loop — reusing a stale cursor would re-serve the same page forever.
+async fn sync_tick(c: &AccountClient, store: &mut HistoryStore) -> RemoteApplyReport {
+    let owner = c.remote_owner().await.unwrap();
+    let mut total = RemoteApplyReport::default();
+    loop {
+        let (generation, cursor) = store.memory_sync_state(&owner).unwrap();
+        let response = c.memory_pull(generation, cursor).await.unwrap();
+        let pending = response.pending;
+        let report = if let Some(items) = &response.snapshot {
+            store
+                .memory_apply_snapshot(&owner, items, response.generation, response.cursor)
+                .unwrap()
+        } else {
+            store
+                .memory_apply_remote(
+                    &owner,
+                    &response.events,
+                    response.generation,
+                    response.cursor,
+                )
+                .unwrap()
+        };
+        total.changed |= report.changed;
+        total.cleared_turns += report.cleared_turns;
+        total.skipped_kind += report.skipped_kind;
+        if !pending {
+            break;
+        }
+    }
+    for entry in store.memory_outbox_peek().unwrap() {
+        let base = store.memory_push_base(&owner, &entry.memory_id).unwrap();
+        let (op, base) = match entry.op {
+            OutboxOp::Create => ("create", 0i64),
+            OutboxOp::Update => match base {
+                Some(base) => ("update", base),
+                None => ("create", 0),
+            },
+            OutboxOp::Delete => match base {
+                Some(base) => ("delete", base),
+                None => {
+                    store
+                        .memory_outbox_ack(&owner, &entry.request_id, &entry.memory_id, 0)
+                        .unwrap();
+                    continue;
+                }
+            },
+        };
+        match c.memory_push(&entry, op, base).await {
+            Ok(receipt) => store
+                .memory_outbox_ack(
+                    &owner,
+                    &entry.request_id,
+                    &entry.memory_id,
+                    receipt.revision,
+                )
+                .unwrap(),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.code,
+                        "memory_revision_conflict" | "memory_resurrection" | "memory_capacity"
+                    ),
+                    "unexpected push error: {}",
+                    error.code
+                );
+                store.memory_outbox_drop(&owner, &entry.request_id).unwrap();
+            }
+        }
+    }
+    total
+}
+
+async fn phone_write(
+    c: &AccountClient,
+    path: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let secret = c.active_secret().unwrap();
+    let url = format!("http://127.0.0.1:{}{path}", c_port(c));
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&secret.token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}
+
+fn c_port(c: &AccountClient) -> u16 {
+    // Tests live inside the account module, so the private field is visible.
+    c.port
+}
+
+#[tokio::test]
+async fn memory_sync_end_to_end_create_push_peer_delete_and_resurrect() {
+    let f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let mut c = f.client(vault.clone());
+    c.request_code("alice@example.com".into()).await.unwrap();
+    c.login(f.code("alice@example.com")).await.unwrap();
+
+    let mut desktop = HistoryStore::open(
+        &std::env::temp_dir().join(format!("qiban-desktop-sync-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    // A local create lands in the outbox and reaches the server on the next
+    // tick; the peer list then sees it.
+    let epoch = desktop.context_epoch().unwrap();
+    let memory = desktop
+        .memory_create(&memory_draft("prefer tea"), epoch)
+        .unwrap()
+        .value;
+    assert_eq!(desktop.memory_outbox_peek().unwrap().len(), 1);
+    sync_tick(&c, &mut desktop).await;
+    assert!(desktop.memory_outbox_peek().unwrap().is_empty());
+
+    // The phone corrects the entry through the peer route; the desktop's
+    // next tick converges its local wording through the domain update path.
+    let (status, _) = phone_write(
+        &c,
+        &format!("/v1/memories/{}/update", memory.id),
+        serde_json::json!({
+            "revision": 1,
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "kind": "preference",
+            "body": "prefer coffee"
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    let report = sync_tick(&c, &mut desktop).await;
+    assert!(report.changed);
+    let view = desktop.memory_list().unwrap();
+    assert_eq!(view.len(), 1);
+    assert_eq!(view[0].body, "prefer coffee");
+
+    // The phone deletes; the desktop tombstones locally and its chats that
+    // quoted the entry are pruned precisely (none here — no turns yet).
+    let (status, _) = phone_write(
+        &c,
+        &format!("/v1/memories/{}/delete", memory.id),
+        serde_json::json!({
+            "revision": 2,
+            "requestId": uuid::Uuid::new_v4().to_string()
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    let report = sync_tick(&c, &mut desktop).await;
+    assert!(report.changed);
+    assert!(desktop.memory_list().unwrap().is_empty());
+
+    // A second desktop (a second HistoryStore) converges from the snapshot
+    // and sees the same tombstone — it can no longer resurrect the id either.
+    let mut laptop = HistoryStore::open(
+        &std::env::temp_dir().join(format!("qiban-desktop-sync-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    sync_tick(&c, &mut laptop).await;
+    assert!(laptop.memory_list().unwrap().is_empty());
+    let epoch = laptop.context_epoch().unwrap();
+    let replaced = laptop
+        .memory_create(&memory_draft("fresh entry"), epoch)
+        .unwrap()
+        .value;
+    sync_tick(&c, &mut laptop).await;
+    // The second store converges to the tombstone-only world: it cannot
+    // resurrect the deleted id either (the server's resurrection rejection is
+    // asserted at the coordinator layer), and its own fresh entry simply
+    // round-trips.
+    assert!(laptop
+        .memory_list()
+        .unwrap()
+        .iter()
+        .all(|m| m.id != memory.id));
+    assert!(laptop
+        .memory_list()
+        .unwrap()
+        .iter()
+        .any(|m| m.id == replaced.id));
+    assert!(laptop.memory_outbox_peek().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn memory_sync_conflict_drops_local_edit_and_converges_to_server() {
+    let f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let mut c = f.client(vault.clone());
+    c.request_code("alice@example.com".into()).await.unwrap();
+    c.login(f.code("alice@example.com")).await.unwrap();
+
+    let mut desktop = HistoryStore::open(
+        &std::env::temp_dir().join(format!("qiban-desktop-sync-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let epoch = desktop.context_epoch().unwrap();
+    let memory = desktop
+        .memory_create(&memory_draft("prefer tea"), epoch)
+        .unwrap()
+        .value;
+    sync_tick(&c, &mut desktop).await;
+
+    // The phone wins revision 2 while the desktop's edit sits unpushed with
+    // base 1. A normal pull-first tick would rebase that pending row onto 2
+    // and let the later local write win (last-writer-wins per revision); the
+    // 409/drop path covers the race window where the push leaves BEFORE the
+    // pull applies the phone's event — pushed here directly.
+    let (status, _) = phone_write(
+        &c,
+        &format!("/v1/memories/{}/update", memory.id),
+        serde_json::json!({
+            "revision": 1,
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "kind": "preference",
+            "body": "phone wins"
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    let epoch = desktop.context_epoch().unwrap();
+    desktop
+        .memory_update(
+            &memory.id,
+            memory.revision,
+            epoch,
+            &memory_draft("desktop edit"),
+        )
+        .unwrap();
+    let owner = c.remote_owner().await.unwrap();
+    let entry = desktop.memory_outbox_peek().unwrap().remove(0);
+    let Err(error) = c.memory_push(&entry, "update", 1).await else {
+        panic!("stale base must be rejected");
+    };
+    assert_eq!(error.code, "memory_revision_conflict");
+    // Drop clears the row, the entry's mirror, and the pull position; the
+    // next tick's snapshot diff is what lands the phone's wording.
+    desktop
+        .memory_outbox_drop(&owner, &entry.request_id)
+        .unwrap()
+        .then_some(())
+        .expect("row dropped");
+    assert_eq!(
+        desktop.memory_push_base(&owner, &memory.id).unwrap(),
+        None,
+        "mirror cleared for the dropped entry"
+    );
+    sync_tick(&c, &mut desktop).await;
+    let converged = desktop.memory_list().unwrap();
+    assert_eq!(converged[0].body, "phone wins");
+    assert!(desktop.memory_outbox_peek().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn memory_sync_offline_delete_replays_and_is_idempotent_on_the_wire() {
+    let mut f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let mut c = f.client(vault.clone());
+    c.request_code("alice@example.com".into()).await.unwrap();
+    c.login(f.code("alice@example.com")).await.unwrap();
+
+    let mut desktop = HistoryStore::open(
+        &std::env::temp_dir().join(format!("qiban-desktop-sync-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let epoch = desktop.context_epoch().unwrap();
+    let memory = desktop
+        .memory_create(&memory_draft("offline delete me"), epoch)
+        .unwrap()
+        .value;
+    sync_tick(&c, &mut desktop).await;
+
+    // The coordinator goes away: the local delete still commits (outbox
+    // row), and the restart replays it exactly once semantically.
+    f.stop().await;
+    let epoch = desktop.context_epoch().unwrap();
+    desktop
+        .memory_delete(&memory.id, memory.revision, epoch)
+        .unwrap();
+    assert_eq!(desktop.memory_list().unwrap().len(), 0);
+    f.restart().await;
+    sync_tick(&c, &mut desktop).await;
+    assert!(desktop.memory_outbox_peek().unwrap().is_empty());
+
+    // The phone list no longer carries the entry; a second push of the same
+    // request replays the stored receipt (lost-response recovery).
+    let (_, listed) = list_remote(&c).await;
+    assert!(listed.as_array().unwrap().is_empty());
+    let owner = c.remote_owner().await.unwrap();
+    let receipt = desktop.memory_push_base(&owner, &memory.id).unwrap();
+    assert_eq!(
+        receipt,
+        Some(2),
+        "mirror advanced to the tombstone revision"
+    );
+}
+
+async fn list_remote(c: &AccountClient) -> (reqwest::StatusCode, serde_json::Value) {
+    let secret = c.active_secret().unwrap();
+    let url = format!("http://127.0.0.1:{}/v1/memories", c_port(c));
+    let response = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&secret.token)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}

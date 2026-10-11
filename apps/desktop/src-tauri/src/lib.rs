@@ -14,6 +14,7 @@ mod personal_memory_context;
 mod pet;
 mod placement;
 mod remote_documents;
+mod remote_memory;
 mod tray;
 mod voice;
 mod voice_companion;
@@ -69,6 +70,7 @@ pub fn run() {
                     }
                 };
             remote_documents::start(app.handle().clone());
+            remote_memory::start(app.handle().clone());
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;

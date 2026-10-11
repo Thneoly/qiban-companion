@@ -5,10 +5,10 @@
 //! follows for free and watermarks stay unique after compaction.
 use super::*;
 use companion_core::memory::{
-    validate_synced_body, MemoryKind, MemorySyncError, MemorySyncEvent, MemorySyncOp,
-    MemorySyncResponse, MemorySnapshotItem, MemoryWriteReceipt, MAX_MEMORIES,
+    validate_synced_body, MemoryKind, MemorySnapshotItem, MemorySyncError, MemorySyncEvent,
+    MemorySyncOp, MemorySyncResponse, MemoryWriteReceipt, MAX_MEMORIES,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Event retention window. Beyond it the account enters a new sync
 /// generation: pending events are dropped and lagging devices resync from a
@@ -426,11 +426,10 @@ impl AccountStore {
             // trusted (client bug or corruption); the snapshot is the only
             // safe recovery. The same branch catches generation rollovers
             // and cursors behind the retention watermark.
-            let max_seq: i64 = tx.query_row(
-                "SELECT COALESCE(MAX(seq),0) FROM memory_events",
-                [],
-                |r| r.get(0),
-            )?;
+            let max_seq: i64 =
+                tx.query_row("SELECT COALESCE(MAX(seq),0) FROM memory_events", [], |r| {
+                    r.get(0)
+                })?;
             if generation != server_generation || cursor < watermark || cursor > max_seq {
                 upsert_device(tx, account, device, server_generation, watermark, now)?;
                 let pending: bool = tx.query_row(
@@ -819,7 +818,10 @@ mod tests {
             .unwrap();
         // Exactly the bound: under-eviction grows past it, over-eviction
         // loses replayable retries.
-        assert_eq!(count, MEMORY_REQUEST_JOURNAL, "journal must hold exactly the bound");
+        assert_eq!(
+            count, MEMORY_REQUEST_JOURNAL,
+            "journal must hold exactly the bound"
+        );
     }
 
     #[test]
@@ -922,9 +924,16 @@ mod tests {
         let mut last_seq = 0i64;
         loop {
             let page = store.pull_memories(&desktop, 1, cursor).unwrap();
-            assert!(page.snapshot.is_none(), "in-window cursor must replay events");
+            assert!(
+                page.snapshot.is_none(),
+                "in-window cursor must replay events"
+            );
             if page.pending {
-                assert_eq!(page.events.len(), MEMORY_PULL_LIMIT, "full pages while pending");
+                assert_eq!(
+                    page.events.len(),
+                    MEMORY_PULL_LIMIT,
+                    "full pages while pending"
+                );
             }
             for event in &page.events {
                 assert!(event.seq > last_seq, "events must arrive strictly ordered");

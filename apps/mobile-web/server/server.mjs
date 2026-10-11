@@ -11,6 +11,7 @@ const routes = new Set([
   "GET /api/tasks",
   "GET /api/pairings",
   "GET /api/documents",
+  "GET /api/memories",
   "POST /api/pairings/preview",
   "POST /api/pairings/accept",
   "POST /api/tasks",
@@ -31,6 +32,9 @@ const knownErrors = new Set([
   "pairing_rate_limited",
   "pairing_conflict",
   "pairing_capacity",
+  "memory_revision_conflict",
+  "memory_resurrection",
+  "memory_capacity",
 ]);
 
 // The public origin is explicit. Neither Host nor forwarded headers select a backend.
@@ -105,7 +109,7 @@ export function createWebServer({
             /^\/api\/pairings\/[0-9a-f-]{36}\/revoke$/.test(path) ||
             /^\/api\/documents\/[0-9a-f-]{36}\/(confirm|cancel|delete)$/.test(
               path,
-            ))
+            ) || /^\/api\/memories\/[0-9a-f-]{36}\/(update|delete)$/.test(path))
         )
       )
         return fail(404, "not_found");

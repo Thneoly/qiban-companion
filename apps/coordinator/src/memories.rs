@@ -73,11 +73,7 @@ impl MemoryWriteRequest {
             }),
             // A delete carrying kind/body/eventDate is a reused template, not
             // a delete: drop nothing silently, reject the shape.
-            "delete"
-                if self.kind.is_none()
-                    && self.body.is_none()
-                    && self.event_date.is_none() =>
-            {
+            "delete" if self.kind.is_none() && self.body.is_none() && self.event_date.is_none() => {
                 Ok(MemoryWrite::Delete {
                     base_revision: self.base_revision,
                 })
