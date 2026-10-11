@@ -533,8 +533,14 @@ impl HistoryStore {
         };
         tx.execute("INSERT INTO memories(id,kind,body,source_kind,source_label,event_date,created_at,confirmed_at,updated_at,revision) VALUES(?1,?2,?3,'user_manual',?4,?5,?6,?6,?6,1)",
             params![memory.id,memory.kind.as_str(),memory.body,memory.source_label,memory.event_date,now])?;
-        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Create,
-            &memory.id, Some(&memory.kind), Some(&memory.body), memory.event_date.as_deref())?;
+        crate::memory_sync_outbox::enqueue(
+            &tx,
+            crate::memory_sync_outbox::OutboxOp::Create,
+            &memory.id,
+            Some(&memory.kind),
+            Some(&memory.body),
+            memory.event_date.as_deref(),
+        )?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
@@ -580,8 +586,14 @@ impl HistoryStore {
         // their history quoting the old one is exactly the contamination
         // being corrected.
         let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
-        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Update,
-            id, Some(&memory.kind), Some(&memory.body), memory.event_date.as_deref())?;
+        crate::memory_sync_outbox::enqueue(
+            &tx,
+            crate::memory_sync_outbox::OutboxOp::Update,
+            id,
+            Some(&memory.kind),
+            Some(&memory.body),
+            memory.event_date.as_deref(),
+        )?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
@@ -622,8 +634,14 @@ impl HistoryStore {
         }
         let context_epoch = advance(&tx, expected_epoch)?;
         let cleared_turns = tombstone_and_prune(&tx, id)?;
-        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Delete,
-            id, None, None, None)?;
+        crate::memory_sync_outbox::enqueue(
+            &tx,
+            crate::memory_sync_outbox::OutboxOp::Delete,
+            id,
+            None,
+            None,
+            None,
+        )?;
         #[cfg(test)]
         q6_tests::crash_before_commit();
         tx.commit()?;
@@ -655,8 +673,14 @@ impl HistoryStore {
         // one of the removed items go, scope by scope.
         let cleared_turns = prune_chats(&tx, &active_ids, &[], &BTreeSet::new())?;
         for id in &active_ids {
-            crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Delete,
-                id, None, None, None)?;
+            crate::memory_sync_outbox::enqueue(
+                &tx,
+                crate::memory_sync_outbox::OutboxOp::Delete,
+                id,
+                None,
+                None,
+                None,
+            )?;
         }
         tx.commit()?;
         Ok(MemoryCommit {

@@ -350,8 +350,7 @@ mod tests {
         // but a stored row of that kind must pass shape validation on the
         // sync path instead of wedging convergence.
         let body = "every stored kind syncs".to_string();
-        let (normalized, date) =
-            validate_synced_body(&body, Some("2026-02-28")).unwrap();
+        let (normalized, date) = validate_synced_body(&body, Some("2026-02-28")).unwrap();
         assert_eq!(normalized, body);
         assert_eq!(date.as_deref(), Some("2026-02-28"));
         // The shape rules are shared with manual validation otherwise.
