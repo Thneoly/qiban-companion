@@ -31,6 +31,88 @@ pub enum MemoryError {
     ConfirmationRequired,
 }
 
+/// Server-side sync write conflicts. Kept distinct from [`MemoryError`] so the
+/// coordinator can answer with a stable machine code instead of a generic 409
+/// and peers know the exact convergence step (refresh, drop, or snapshot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MemorySyncError {
+    #[error("记忆版本已变化，请刷新后再试")]
+    RevisionConflict,
+    #[error("记忆已在其他设备删除，不能复活")]
+    Resurrection,
+    #[error("账号的有效记忆已达上限")]
+    Capacity,
+}
+
+/// Snapshot/list item shared by the coordinator responses and the desktop
+/// sync engine. Active entries carry the full body; tombstones carry only id
+/// and revision so a peer can refuse to resurrect them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySnapshotItem {
+    pub id: String,
+    pub kind: MemoryKind,
+    pub body: Option<String>,
+    pub event_date: Option<String>,
+    pub revision: i64,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySyncOp {
+    Upsert,
+    Delete,
+}
+impl MemorySyncOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Upsert => "upsert",
+            Self::Delete => "delete",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "upsert" => Some(Self::Upsert),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncEvent {
+    pub seq: i64,
+    pub memory_id: String,
+    pub op: MemorySyncOp,
+    pub revision: i64,
+    pub kind: Option<MemoryKind>,
+    pub body: Option<String>,
+    pub event_date: Option<String>,
+    pub occurred_at: i64,
+}
+
+/// Pull answer. `snapshot` is set when the caller's generation or cursor fell
+/// behind the retention window — the client rebuilds from it wholesale.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncResponse {
+    pub generation: i64,
+    pub cursor: i64,
+    pub pending: bool,
+    pub events: Vec<MemorySyncEvent>,
+    pub snapshot: Option<Vec<MemorySnapshotItem>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryWriteReceipt {
+    pub memory_id: String,
+    pub revision: i64,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MemoryScope {
@@ -93,27 +175,46 @@ impl MemoryDraft {
         if self.kind == MemoryKind::TaskFact {
             return Err(MemoryError::UnsupportedKind);
         }
-        // Validate before trimming so an illegal trailing control cannot disappear.
-        if self
-            .body
-            .chars()
-            .any(|c| c.is_control() && c != '\n' && c != '\t')
-        {
-            return Err(MemoryError::InvalidInput);
-        }
-        let body = self.body.trim();
-        if body.is_empty() || body.chars().count() > MAX_BODY_CHARS {
-            return Err(MemoryError::InvalidInput);
-        }
-        if let Some(date) = &self.event_date {
-            validate_event_date(date)?;
-        }
+        let (body, event_date) = validate_body_and_date(&self.body, self.event_date.as_deref())?;
         Ok(Self {
             kind: self.kind,
-            body: body.into(),
-            event_date: self.event_date.clone(),
+            body,
+            event_date,
         })
     }
+}
+
+/// Shape validation shared by manual creation and cross-device sync. Returns
+/// the normalized (trimmed) body plus the untouched event date.
+fn validate_body_and_date(
+    body: &str,
+    event_date: Option<&str>,
+) -> Result<(String, Option<String>), MemoryError> {
+    // Validate before trimming so an illegal trailing control cannot disappear.
+    if body
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(MemoryError::InvalidInput);
+    }
+    let body = body.trim();
+    if body.is_empty() || body.chars().count() > MAX_BODY_CHARS {
+        return Err(MemoryError::InvalidInput);
+    }
+    if let Some(date) = event_date {
+        validate_event_date(date)?;
+    }
+    Ok((body.into(), event_date.map(Into::into)))
+}
+
+/// Cross-device sync revalidates the stored shape only. Unlike manual creation
+/// it accepts every stored kind: a desktop database may already hold task_fact
+/// rows, and a peer editing them must not be rejected on shape grounds.
+pub fn validate_synced_body(
+    body: &str,
+    event_date: Option<&str>,
+) -> Result<(String, Option<String>), MemoryError> {
+    validate_body_and_date(body, event_date)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -243,6 +344,26 @@ pub fn validate_personal_selection(ids: &[i64]) -> Result<(), MemoryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sync_validation_accepts_task_fact_where_manual_creation_rejects_it() {
+        // Manual creation refuses task_fact (no user-facing writer for it),
+        // but a stored row of that kind must pass shape validation on the
+        // sync path instead of wedging convergence.
+        let body = "every stored kind syncs".to_string();
+        let (normalized, date) =
+            validate_synced_body(&body, Some("2026-02-28")).unwrap();
+        assert_eq!(normalized, body);
+        assert_eq!(date.as_deref(), Some("2026-02-28"));
+        // The shape rules are shared with manual validation otherwise.
+        assert_eq!(
+            validate_synced_body(" \t", None).unwrap_err(),
+            MemoryError::InvalidInput
+        );
+        assert_eq!(
+            validate_synced_body(&"x".repeat(201), None).unwrap_err(),
+            MemoryError::InvalidInput
+        );
+    }
     #[test]
     fn serializes_shared_typescript_contract_fixture() {
         let memory = Memory {

@@ -188,7 +188,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
             },
         )
         .unwrap();
-        s.connection.lock().unwrap().execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
+        s.connection.lock().unwrap().execute_batch("DROP TABLE IF EXISTS memory_requests;DROP TABLE IF EXISTS memory_devices;DROP TABLE IF EXISTS memory_events;DROP TABLE IF EXISTS memory_accounts;DROP TABLE IF EXISTS account_memories;DROP TABLE pairing_code_limits;DROP TABLE shared_documents;DROP TABLE paired_devices;DROP TABLE device_pairings;DROP TABLE action_authorizations;DROP TABLE authorized_resources;PRAGMA user_version=2;").unwrap();
     }
     {
         let mut s = AccountStore::open(&path).unwrap();
@@ -203,7 +203,7 @@ fn migration_preserves_identity_tasks_and_pairing_survives_reopen() {
         s.connection
             .lock()
             .unwrap()
-            .execute_batch("DROP TABLE pairing_code_limits;DROP TABLE shared_documents;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=3;")
+            .execute_batch("DROP TABLE IF EXISTS memory_requests;DROP TABLE IF EXISTS memory_devices;DROP TABLE IF EXISTS memory_events;DROP TABLE IF EXISTS memory_accounts;DROP TABLE IF EXISTS account_memories;DROP TABLE pairing_code_limits;DROP TABLE shared_documents;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=3;")
             .unwrap();
     }
     {
@@ -544,7 +544,7 @@ fn v4_migration_invalidates_pending_long_codes_but_keeps_active_pair_and_documen
         ],
     )
     .unwrap();
-    c.execute_batch("DROP TABLE pairing_code_limits;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=4;")
+    c.execute_batch("DROP TABLE IF EXISTS memory_requests;DROP TABLE IF EXISTS memory_devices;DROP TABLE IF EXISTS memory_events;DROP TABLE IF EXISTS memory_accounts;DROP TABLE IF EXISTS account_memories;DROP TABLE pairing_code_limits;CREATE TABLE paired_devices_old AS SELECT account_id,id,session_id,name,expires_at FROM paired_devices;DROP TABLE paired_devices;ALTER TABLE paired_devices_old RENAME TO paired_devices;PRAGMA user_version=4;")
         .unwrap();
     let mut migrated = AccountStore::from_connection(c).unwrap();
     migrated.clock = || 1000;
@@ -628,6 +628,11 @@ fn v5_archive_migrates_to_v6_preserving_pairings_with_null_lease() {
              SELECT account_id,id,session_id,name,expires_at FROM paired_devices;\
              DROP TABLE paired_devices;\
              ALTER TABLE paired_devices_v5 RENAME TO paired_devices;\
+             DROP TABLE IF EXISTS memory_requests;\
+             DROP TABLE IF EXISTS memory_devices;\
+             DROP TABLE IF EXISTS memory_events;\
+             DROP TABLE IF EXISTS memory_accounts;\
+             DROP TABLE IF EXISTS account_memories;\
              PRAGMA user_version=5;",
         )
         .unwrap();
