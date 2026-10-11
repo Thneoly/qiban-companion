@@ -7,6 +7,7 @@ import {
   type ContextPreview, type PersonalMemoryDetail, type PersonalMemoryList, type PersonalMemoryOverview, type PersonalMemoryRecord,
 } from '@companion/contracts';
 import { nativeDesktop } from '../../lib/surface';
+import { useUsageImpact } from '../../lib/usage-impact';
 import './personal-memory.css';
 
 const SEARCH_LIMIT = 20;
@@ -51,7 +52,9 @@ export function PersonalMemoryPanel() {
   const [injectionBusy, setInjectionBusy] = useState(false);
   const [injectionError, setInjectionError] = useState('');
   const [injectionNote, setInjectionNote] = useState('');
-  const [confirming, setConfirming] = useState(false);
+  // Non-null while the revocation dialog is open: the removed service ids
+  // captured at open time (see MemoryPolicyPanel.confirmIds).
+  const [confirmIds, setConfirmIds] = useState<number[] | null>(null);
   const injectionSerial = useRef(0);
   const injectionActing = useRef(false);
   // Separate serial spaces: a search must never invalidate a concurrent
@@ -135,6 +138,7 @@ export function PersonalMemoryPanel() {
         setPreview(next);
         setEnabled(next.personal.policy.enabled);
         setIds(next.personal.policy.selectedIds);
+        setConfirmIds(null);
         setInjectionError('');
       }
     } catch (e) {
@@ -170,7 +174,7 @@ export function PersonalMemoryPanel() {
   async function saveInjection(restartConversation: boolean) {
     if (injectionActing.current || !preview) return;
     injectionActing.current = true;
-    setInjectionBusy(true); setInjectionError(''); setInjectionNote(''); setConfirming(false);
+    setInjectionBusy(true); setInjectionError(''); setInjectionNote(''); setConfirmIds(null);
     try {
       const receipt = decodeMemoryReceipt(await invoke('personal_memory_policy_set', { request: {
         expectedScope: preview.scope, expectedEpoch: preview.contextEpoch,
@@ -202,7 +206,10 @@ export function PersonalMemoryPanel() {
   const resultsById = new Map((results?.memories ?? []).map(m => [m.id, m]));
   const chosen = enabled ? ids : [];
   const chars = chosen.reduce((sum, id) => sum + [...(resultsById.get(id)?.content ?? preview?.personal.items.find(m => m.id === id)?.content ?? '')].length, 0);
-  const removing = !!preview && preview.personal.policy.selectedIds.some(id => !chosen.includes(id));
+  const removingIds = preview ? preview.personal.policy.selectedIds.filter(id => !chosen.includes(id)) : [];
+  const removing = removingIds.length > 0;
+  // Upper-bound consult (see MemoryPolicyPanel): the receipt is authoritative.
+  const impact = useUsageImpact(confirmIds !== null, [], confirmIds ?? []);
   const changed = !!preview && (enabled !== preview.personal.policy.enabled || ids.join(',') !== preview.personal.policy.selectedIds.join(','));
 
   const online = overview?.online === true;
@@ -282,7 +289,7 @@ export function PersonalMemoryPanel() {
       <p className="personal-memory-help">为当前模型勾选发送时携带的个人记忆；按勾选顺序注入，与应用记忆分开计数（各 5 条 / 800 字）。发送前可在聊天气泡预览，发送后回执如实记录。</p>
       <p>当前服务：{preview!.scope.baseUrl} · 模型：{preview!.scope.model} · 已保存状态：{injection.policy.enabled ? `启用 · ${injection.policy.selectedIds.length}条` : '关闭'}</p>
       {!online && <p role="status" className="personal-memory-notice">个人记忆服务未连接：无法新增或保留勾选（需核对内容与预算）；可移除全部勾选或关闭注入，保存时会如实提示。</p>}
-      <fieldset disabled={injectionBusy} className="personal-memory-choice-set">
+      <fieldset disabled={injectionBusy || confirmIds !== null} className="personal-memory-choice-set">
         <label className="personal-memory-choice">
           <input type="checkbox" checked={enabled} onChange={e => { setEnabled(e.target.checked); if (!e.target.checked) setIds([]); }}/>
           <span>允许此模型使用所选个人记忆（发送时携带）</span>
@@ -303,13 +310,13 @@ export function PersonalMemoryPanel() {
       <p className="personal-memory-help">{chosen.length} / 5 条 · {chars} / 800 字 · 按勾选顺序发送{online ? '' : ' · 离线时字数为已显示内容的下限'}</p>
       {injectionError && <p role="alert" className="personal-memory-error">{injectionError}</p>}
       {injectionNote && <p role="status" className="personal-memory-help">{injectionNote}</p>}
-      {confirming && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
+      {confirmIds && <div className="personal-memory-confirm" role="alertdialog" aria-labelledby="personal-injection-confirm-title" aria-describedby="personal-injection-confirm-description">
         <h4 id="personal-injection-confirm-title">确认收回个人记忆使用</h4>
-        <p id="personal-injection-confirm-description">移除选择会停止正在生成的回复，并删除使用过所移除条目、且此后不再使用它的对话：从第一次使用它的一轮起全部清除，之前的对话保留；仍在其他模型选用的对话不动。个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
+        <p id="personal-injection-confirm-description">{!impact ? '移除选择会停止正在生成的回复，并删除使用过所移除条目、且此后不再使用它的对话：从第一次使用它的一轮起全部清除，之前的对话保留；仍在其他模型选用的对话不动。' : impact.affectedTurnsTotal > 0 ? `移除选择会停止正在生成的回复，并删除使用过所移除条目、且此后不再使用它的对话：从第一次使用它的一轮起，预计最多清除最近 ${impact.affectedTurnsTotal} 轮，之前的对话保留；仍在其他模型选用的对话不动。实际以提交后的回执为准。` : '移除选择会停止正在生成的回复。目前没有本机对话使用过所移除条目，预计聊天记录保持不变；实际以提交后的回执为准。'}个人记忆条目仍保留在服务中；已经发给服务商的内容不能撤回。</p>
         <button autoFocus disabled={injectionBusy} onClick={() => void saveInjection(true)}>确认收回并开始新对话</button>
-        <button disabled={injectionBusy} onClick={() => setConfirming(false)}>返回，不修改</button>
+        <button disabled={injectionBusy} onClick={() => setConfirmIds(null)}>返回，不修改</button>
       </div>}
-      <button disabled={injectionBusy || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirming(true); else void saveInjection(false); }}>保存选择</button>
+      <button disabled={injectionBusy || confirmIds !== null || !online || chosen.length > 5 || chars > 800 || !changed} onClick={() => { if (removing) setConfirmIds(removingIds); else void saveInjection(false); }}>保存选择</button>
       {!online && <p className="personal-memory-help">服务未连接时保存不可用；如需临时停用注入，请启动服务后操作。</p>}
     </div>}
   </section>;
