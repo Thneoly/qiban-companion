@@ -290,6 +290,46 @@ test("document gateway permits confirmation, cancellation and deletion but denie
     );
 });
 
+test("memory gateway permits listing, correction and deletion but denies push and sync", async (t) => {
+  const call = await fixture(t, async () => Response.json([]));
+  const headers = { Cookie: `__Host-qiban_session=${token}` };
+  const id = "00000000-0000-0000-0000-000000000000";
+  assert.equal((await call("/api/memories", { headers })).status, 200);
+  for (const op of ["update", "delete"]) {
+    assert.equal(
+      (
+        await call(`/api/memories/${id}/${op}`, {
+          method: "POST",
+          headers,
+          body: "{}",
+        })
+      ).status,
+      200,
+    );
+    // Cross-origin posts stay rejected on the new routes too.
+    assert.equal(
+      (
+        await call(`/api/memories/${id}/${op}`, {
+          method: "POST",
+          headers: { ...headers, Origin: "https://evil.example" },
+          body: "{}",
+        })
+      ).status,
+      403,
+    );
+  }
+  // The desktop-only routes never exist on the phone gateway.
+  for (const path of [
+    "/api/memories",
+    "/api/memories/sync",
+    `/api/memories/${id}/create`,
+  ])
+    assert.equal(
+      (await call(path, { method: "POST", headers, body: "{}" })).status,
+      404,
+    );
+});
+
 test("pairing lockout stays distinct from email cooldown and does not clear login", async (t) => {
   const call = await fixture(t, async () =>
     Response.json({ error: { code: "pairing_rate_limited" } }, { status: 429 }),
