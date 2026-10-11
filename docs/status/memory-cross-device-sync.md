@@ -79,4 +79,4 @@ chat-history.db schema v4 → **v5**（`companion-storage/src/memory_sync_outbox
 
 - `cargo fmt --check` / `clippy --workspace --all-targets --locked` 干净；`cargo test --workspace --locked` 全绿（storage 98、coordinator 13、core 15、desktop 68）。
 - `npm run check` + `test:browser`（55 过 1 跳）+ BFF node:test（9 过）+ contracts vitest（66 过）。
-- native 真机（2026-10-11，验收标识 `dev.qiban.companion.acceptance.m2-msync-20261011`，[memory-sync.cjs](../../apps/desktop/tests/native/memory-sync.cjs)）：真实 UI 三例——创建入队且重启后仍在（同事务+持久）、更正折叠为一行并换 requestId、删除全部后未推送的 create 全部净零且墓碑不变式保持。证据在 gitignored `.cache/`；HTTP 收敛半边由上述 Rust 集成对真路由覆盖。native 既有脚本的 schema 断言已随 v5 同步（memory-panel/memory-context/voice-chat/single-instance/q6 harness）。
+- native 真机（2026-10-11，验收标识 `dev.qiban.companion.acceptance.m2-msync-20261011b`，[memory-sync.cjs](../../apps/desktop/tests/native/memory-sync.cjs)）：真实 UI 三例——创建入队且重启后仍在（同事务+持久）、更正折叠为一行并换 requestId、删除全部后每条保留内容为空的 delete 行（在途 create 保护）且墓碑不变式保持。证据在 gitignored `.cache/`；HTTP 收敛半边由上述 Rust 集成对真路由覆盖。native 既有脚本的 schema 断言已随 v5 同步（memory-panel/memory-context/voice-chat/single-instance/q6 harness）。
