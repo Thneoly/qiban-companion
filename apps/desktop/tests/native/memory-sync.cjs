@@ -59,9 +59,9 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   assert.equal(rows[0].op,'create');assert.equal(rows[0].body,'合成偏好：已更正的跨端内容');
   assert.notEqual(rows[0].request_id,firstRequestId,'folding rewrites the request id');
 
-  // Case 3 — delete-all after never-pushed creates: create+delete folds to
-  // net zero (the server never hears about them — no coordinator in this
-  // acceptance), and the tombstone invariant holds in the real database.
+  // Case 3 — delete-all after never-pushed creates: the fold keeps a DELETE
+  // row per entry (an in-flight create push may exist), and the tombstone
+  // invariant holds in the real database.
   await memory().getByLabel('记忆内容').fill('第二条合成记忆');
   await memory().getByRole('button',{name:'保存记忆',exact:true}).click();
   await expect(memory().locator('article').nth(0)).toBeVisible();
@@ -69,7 +69,8 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await memory().getByRole('button',{name:'删除全部记忆'}).click();
   await memory().getByRole('button',{name:'确认并开始新对话'}).click();
   await expect(memory()).toContainText('还没有留下记忆');
-  rows=outbox();assert.equal(rows.length,0,'unpushed create + delete is a net zero');
+  rows=outbox();assert.equal(rows.length,2);
+  assert(rows.every(r=>r.op==='delete'&&r.body===null&&r.kind===null),'folded deletes keep content-free rows');
   const tombstones=read("SELECT count(*) AS n FROM memories WHERE deleted_at IS NOT NULL AND body IS NULL AND source_label IS NULL AND event_date IS NULL")[0].n;
   assert.equal(tombstones,2);
   assert.equal(read('SELECT count(*) AS n FROM memories WHERE deleted_at IS NULL')[0].n,0);
