@@ -53,12 +53,14 @@ impl OutboxOp {
 
 /// What the host needs to know after applying a pull: whether to emit
 /// memory-changed, how many turns were pruned, and how many entries were
-/// skipped because the local domain refuses their kind.
+/// skipped because the local domain refuses their kind or the local capacity
+/// is full (both still record the mirror so the stream keeps moving).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RemoteApplyReport {
     pub changed: bool,
     pub cleared_turns: u64,
     pub skipped_kind: usize,
+    pub skipped_capacity: usize,
 }
 
 fn now() -> Result<i64, StorageError> {
@@ -120,11 +122,11 @@ pub(crate) fn enqueue(
                 ],
             )?;
         }
-        // create+delete is a net zero: the server never needs to hear about it.
-        (Some("create"), OutboxOp::Delete) => {
-            tx.execute("DELETE FROM memory_outbox WHERE memory_id=?1", [memory_id])?;
-        }
-        (Some("update"), OutboxOp::Delete) => {
+        // create+delete and update+delete both keep a DELETE row rather than
+        // vanishing: if the earlier push is already in flight, the server
+        // entry exists and only this delete row can retire it. When no mirror
+        // ever forms, the push phase resolves it to a local net zero.
+        (Some("create") | Some("update"), OutboxOp::Delete) => {
             tx.execute(
                 "UPDATE memory_outbox SET request_id=?1,op='delete',kind=NULL,body=NULL,event_date=NULL,created_at=?2
                  WHERE memory_id=?3",
@@ -303,9 +305,20 @@ fn apply_remote_entry(
             None => {
                 // The local domain stores only user-editable kinds; a
                 // task_fact entry is mirrored (so it never resurrects here)
-                // but not materialized.
+                // but not materialized. A full local capacity skips the
+                // materialization the same way: the mirror still records the
+                // revision so this pull's cursor advances and the loop never
+                // wedges — the entry catches up on a later snapshot once
+                // room exists locally.
+                let active: usize = tx.query_row(
+                    "SELECT count(*) FROM memories WHERE deleted_at IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )? as usize;
                 if kind == MemoryKind::TaskFact {
                     report.skipped_kind += 1;
+                } else if active >= MAX_MEMORIES {
+                    report.skipped_capacity += 1;
                 } else {
                     let draft = MemoryDraft {
                         kind,
@@ -386,31 +399,28 @@ impl HistoryStore {
         mirror_revision(&self.0, owner, memory_id)
     }
 
-    /// A accepted push: drop the row (no-op when folding already replaced it)
-    /// and move the mirror to the receipt's revision.
+    /// An accepted push: drop the row (no-op when folding already replaced
+    /// it) and ALWAYS move the mirror to the receipt's revision — the server
+    /// has accepted the change, so its revision is a fact regardless of
+    /// whether this row still exists. Folding away the row must not strand
+    /// that fact: the folded delete row pushes against the recorded mirror
+    /// and retires the server entry; a folded update row rebases onto it
+    /// (last-writer-wins per revision).
     pub fn memory_outbox_ack(
         &mut self,
         owner: &str,
         request_id: &str,
+        memory_id: &str,
         server_revision: i64,
     ) -> Result<(), StorageError> {
         let tx = self
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let memory_id: Option<String> = tx
-            .query_row(
-                "SELECT memory_id FROM memory_outbox WHERE request_id=?1",
-                [request_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(id) = memory_id {
-            tx.execute(
-                "DELETE FROM memory_outbox WHERE request_id=?1",
-                [request_id],
-            )?;
-            set_mirror(&tx, owner, &id, server_revision)?;
-        }
+        tx.execute(
+            "DELETE FROM memory_outbox WHERE request_id=?1",
+            [request_id],
+        )?;
+        set_mirror(&tx, owner, memory_id, server_revision)?;
         tx.commit()?;
         Ok(())
     }
@@ -584,6 +594,7 @@ fn persist_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use companion_core::memory::MemorySyncOp;
 
     fn store() -> HistoryStore {
         HistoryStore::open(
@@ -669,7 +680,8 @@ mod tests {
         // Once the server has seen the entry, update + delete folds into a
         // delete row with a fresh id.
         let entry = row(&s, &m.id).unwrap();
-        s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
+        s.memory_outbox_ack(owner, &entry.request_id, &m.id, 1)
+            .unwrap();
         assert!(row(&s, &m.id).is_none());
         let epoch = s.context_epoch().unwrap();
         s.memory_update(
@@ -704,26 +716,30 @@ mod tests {
     }
 
     #[test]
-    fn create_then_delete_without_a_push_is_a_net_zero() {
+    fn create_then_delete_keeps_a_delete_row_even_without_a_push() {
+        let owner = "4318-net-zero";
         let mut s = store();
         let m = create(&mut s);
         let epoch = s.context_epoch().unwrap();
         s.memory_delete(&m.id, m.revision, epoch).unwrap();
-        assert!(row(&s, &m.id).is_none(), "no server roundtrip needed");
+        // The row stays as a delete: the create push may already be in
+        // flight, and only this row can retire the server entry it created.
+        let pending = row(&s, &m.id).expect("delete row survives");
+        assert_eq!(pending.op, OutboxOp::Delete);
+        assert!(pending.body.is_none());
+        // No mirror ever formed for this owner: the push phase resolves the
+        // row to a local net zero without a round trip.
+        assert_eq!(s.memory_push_base(owner, &m.id).unwrap(), None);
+        s.memory_outbox_ack(owner, &pending.request_id, &m.id, 0)
+            .unwrap();
+        assert!(row(&s, &m.id).is_none());
     }
 
     #[test]
     fn delete_all_enqueues_one_delete_per_active_memory() {
-        let owner = "4318-delete-all";
         let mut s = store();
-        let a = create(&mut s);
-        let b = create(&mut s);
-        // Ack both creates first: an unpushed create folded with its delete
-        // is a net zero and never reaches the server.
-        for memory in [&a, &b] {
-            let entry = row(&s, &memory.id).unwrap();
-            s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
-        }
+        create(&mut s);
+        create(&mut s);
         let epoch = s.context_epoch().unwrap();
         s.memory_delete_all(epoch).unwrap();
         assert_eq!(rows(&s).len(), 2);
@@ -739,7 +755,8 @@ mod tests {
         // Ack the local create first: while a push is pending, remote events
         // for that id defer to the local change (only the mirror moves).
         let entry = row(&s, &id).unwrap();
-        s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
+        s.memory_outbox_ack(owner, &entry.request_id, &m.id, 1)
+            .unwrap();
         // A brand-new id from another device lands as a local row.
         let other = uuid::Uuid::new_v4().to_string();
         let report = s
@@ -797,7 +814,8 @@ mod tests {
         // The local edit has been pushed (ack clears the pending row), so the
         // server's delete may now land instead of deferring to it.
         let pending = row(&s, &id).expect("local edit enqueued");
-        s.memory_outbox_ack(owner, &pending.request_id, 3).unwrap();
+        s.memory_outbox_ack(owner, &pending.request_id, &id, 3)
+            .unwrap();
         // Deleting remotely tombstones locally, then the server's newer
         // wording resurrects the tombstone (chats stay deleted).
         let report = s
@@ -858,7 +876,8 @@ mod tests {
         // The create has been pushed: a snapshot tombstone may now delete it
         // locally instead of deferring to the pending push.
         let entry = row(&s, &local_only.id).unwrap();
-        s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
+        s.memory_outbox_ack(owner, &entry.request_id, &local_only.id, 1)
+            .unwrap();
         let remote_id = uuid::Uuid::new_v4().to_string();
         let report = s
             .memory_apply_snapshot(
@@ -916,17 +935,20 @@ mod tests {
     }
 
     #[test]
-    fn ack_moves_the_mirror_and_ignores_folded_away_rows() {
+    fn late_ack_of_a_folded_row_records_the_server_fact() {
         let owner = "4318-ack";
         let mut s = store();
         let m = create(&mut s);
         let entry = row(&s, &m.id).unwrap();
-        s.memory_outbox_ack(owner, &entry.request_id, 1).unwrap();
+        s.memory_outbox_ack(owner, &entry.request_id, &m.id, 1)
+            .unwrap();
         assert!(row(&s, &m.id).is_none());
         assert_eq!(s.memory_push_base(owner, &m.id).unwrap(), Some(1));
-        // A folded row was replaced before the old push landed: the late ack
-        // of the old id is a no-op — it must neither drop the folded row nor
-        // pollute the mirror with a revision the folded push does not know.
+        // A folded row was replaced before the old push landed. The late ack
+        // of the old id must still record the server's revision: that push
+        // WAS accepted, and the folded row needs the recorded base — an
+        // update rebases onto it (last-writer-wins), a delete retires the
+        // server entry through it.
         let epoch = s.context_epoch().unwrap();
         s.memory_update(
             &m.id,
@@ -937,15 +959,70 @@ mod tests {
         .unwrap();
         let folded = row(&s, &m.id).unwrap();
         assert_ne!(folded.request_id, entry.request_id);
-        s.memory_outbox_ack(owner, &entry.request_id, 2).unwrap();
+        s.memory_outbox_ack(owner, &entry.request_id, &m.id, 2)
+            .unwrap();
         assert!(row(&s, &m.id).is_some(), "folded row survives");
         assert_eq!(
             s.memory_push_base(owner, &m.id).unwrap(),
-            Some(1),
-            "late ack of a folded-away request must not move the mirror"
+            Some(2),
+            "a server-accepted revision is a fact even for a folded-away row"
         );
         assert!(s.memory_outbox_drop(owner, &folded.request_id).unwrap());
         assert!(row(&s, &m.id).is_none());
+    }
+
+    #[test]
+    fn in_flight_create_push_then_delete_retires_the_server_entry() {
+        let owner = "4318-race";
+        let mut s = store();
+        let m = create(&mut s);
+        let create_row = row(&s, &m.id).unwrap();
+        // The user deletes while the create push is on the wire: folding
+        // turns the row into a delete, the push lands, the (late) ack
+        // records the server fact, and the delete now has a real base.
+        let epoch = s.context_epoch().unwrap();
+        s.memory_delete(&m.id, m.revision, epoch).unwrap();
+        let delete_row = row(&s, &m.id).expect("delete row replaces the create");
+        assert_eq!(delete_row.op, OutboxOp::Delete);
+        s.memory_outbox_ack(owner, &create_row.request_id, &m.id, 1)
+            .unwrap();
+        assert_eq!(
+            s.memory_push_base(owner, &m.id).unwrap(),
+            Some(1),
+            "the delete can now push against the accepted create"
+        );
+    }
+
+    #[test]
+    fn remote_materialization_skips_when_local_capacity_is_full() {
+        let owner = "4318-capacity";
+        let mut s = store();
+        for i in 0..MAX_MEMORIES {
+            let epoch = s.context_epoch().unwrap();
+            s.memory_create(&draft(&format!("full {i}")), epoch)
+                .unwrap();
+        }
+        // A remote-only entry arrives while every local slot is taken: the
+        // pull must not fail (that would wedge the cursor); the entry is
+        // skipped, counted, and mirrored so the stream moves on.
+        let extra = uuid::Uuid::new_v4().to_string();
+        let report = s
+            .memory_apply_remote(
+                owner,
+                &[event(1, &extra, MemorySyncOp::Upsert, 1, Some("no room"))],
+                1,
+                1,
+            )
+            .unwrap();
+        assert_eq!(report.skipped_capacity, 1);
+        assert!(!report.changed);
+        assert_eq!(list_active(&s).len(), MAX_MEMORIES);
+        assert_eq!(s.memory_sync_state(owner).unwrap(), (1, 1));
+        assert_eq!(
+            s.memory_push_base(owner, &extra).unwrap(),
+            Some(1),
+            "mirror records the skipped revision"
+        );
     }
 
     /// Test-only read of the active memories through the domain validator.

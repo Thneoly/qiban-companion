@@ -74,6 +74,11 @@ pub struct AccountClient {
     http: Client,
     vault: Arc<dyn SessionVault>,
     challenge: Option<Challenge>,
+    /// Cached "{port}-{account_id}" for the sync loop's per-tick use. Set on
+    /// first resolution, cleared on a 401 so it never outlives the session
+    /// it names — the loop must not turn /v1/me into a recurring call inside
+    /// the account lock.
+    owner_cache: std::sync::Mutex<Option<String>>,
 }
 pub type AccountState = Mutex<AccountClient>;
 impl AccountClient {
@@ -121,6 +126,7 @@ impl AccountClient {
             http,
             vault,
             challenge: None,
+            owner_cache: std::sync::Mutex::new(None),
         })
     }
     fn scope(&self) -> String {
@@ -228,6 +234,9 @@ impl AccountClient {
             if code == "authentication_required" && token.is_some() {
                 // Even if local deletion fails, never return account data for this token.
                 let _ = self.vault.delete(&self.scope());
+                if let Ok(mut cache) = self.owner_cache.lock() {
+                    *cache = None;
+                }
             }
             return Err(AccountError::new(code));
         }
@@ -397,6 +406,9 @@ impl AccountClient {
         .map_err(|_| AccountError::new("unavailable"))
     }
     pub(crate) async fn remote_owner(&self) -> Result<String> {
+        if let Some(owner) = self.owner_cache.lock().ok().and_then(|cache| cache.clone()) {
+            return Ok(owner);
+        }
         let secret = self.active_secret()?;
         let profile: Profile = serde_json::from_value(
             self.request(Method::GET, "/v1/me", Some(&secret.token), None)
@@ -405,7 +417,11 @@ impl AccountClient {
         .map_err(|_| AccountError::new("unavailable"))?;
         let id = uuid::Uuid::parse_str(&profile.account_id)
             .map_err(|_| AccountError::new("unavailable"))?;
-        Ok(format!("{}-{id}", self.port))
+        let owner = format!("{}-{id}", self.port);
+        if let Ok(mut cache) = self.owner_cache.lock() {
+            *cache = Some(owner.clone());
+        }
+        Ok(owner)
     }
     pub async fn pairings(&self) -> Result<Vec<companion_core::authorization::Pairing>> {
         let secret = self.active_secret()?;

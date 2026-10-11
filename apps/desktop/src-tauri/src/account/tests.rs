@@ -760,7 +760,7 @@ async fn sync_tick(c: &AccountClient, store: &mut HistoryStore) -> RemoteApplyRe
                 Some(base) => ("delete", base),
                 None => {
                     store
-                        .memory_outbox_ack(&owner, &entry.request_id, 0)
+                        .memory_outbox_ack(&owner, &entry.request_id, &entry.memory_id, 0)
                         .unwrap();
                     continue;
                 }
@@ -768,7 +768,12 @@ async fn sync_tick(c: &AccountClient, store: &mut HistoryStore) -> RemoteApplyRe
         };
         match c.memory_push(&entry, op, base).await {
             Ok(receipt) => store
-                .memory_outbox_ack(&owner, &entry.request_id, receipt.revision)
+                .memory_outbox_ack(
+                    &owner,
+                    &entry.request_id,
+                    &entry.memory_id,
+                    receipt.revision,
+                )
                 .unwrap(),
             Err(error) => {
                 assert!(

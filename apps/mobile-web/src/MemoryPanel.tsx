@@ -96,6 +96,9 @@ export function MemoryPanel({ onExpired }: { onExpired: () => void }) {
   }, []);
 
   function openEdit(item: RemoteMemoryItem) {
+    // Only one dialog at a time — the delete path closes an open edit; the
+    // edit path owes the confirm dialog the same.
+    setConfirming(null);
     setEditing(item);
     setDraft(item.body ?? "");
     setDraftDate(item.eventDate ?? "");
@@ -124,9 +127,16 @@ export function MemoryPanel({ onExpired }: { onExpired: () => void }) {
       setNote("已更正，将同步到所有设备。");
       await refresh();
     } catch (e) {
+      if (e instanceof ApiError && e.status === 0) {
+        // Outcome unknown: keep the typed draft so a retry needs no retyping
+        // — do NOT close the editor or refetch against uncertain state.
+        setNote(message(e));
+        return;
+      }
       failure(e);
-      // A conflict means another device moved first; the refreshed list is
-      // the honest view to retry against.
+      // A definitive rejection (conflict/validation) means another device
+      // moved first or the draft was invalid; the refreshed list is the
+      // honest view to retry against.
       setEditing(null);
       await refresh();
     } finally {
