@@ -38,14 +38,14 @@ fn timestamp() -> Result<i64, StorageError> {
         .ok_or(StorageError::InvalidTimestamp)
 }
 
-fn epoch(db: &Connection) -> Result<i64, StorageError> {
+pub(crate) fn epoch(db: &Connection) -> Result<i64, StorageError> {
     Ok(db.query_row(
         "SELECT context_epoch FROM memory_meta WHERE singleton=1",
         [],
         |r| r.get(0),
     )?)
 }
-fn advance(db: &Connection, expected: i64) -> Result<i64, StorageError> {
+pub(crate) fn advance(db: &Connection, expected: i64) -> Result<i64, StorageError> {
     if epoch(db)? != expected {
         return Err(MemoryError::ContextChanged.into());
     }
@@ -57,7 +57,7 @@ fn advance(db: &Connection, expected: i64) -> Result<i64, StorageError> {
     Ok(next)
 }
 
-fn read_active(db: &Connection) -> Result<Vec<Memory>, StorageError> {
+pub(crate) fn read_active(db: &Connection) -> Result<Vec<Memory>, StorageError> {
     let mut statement = db.prepare("SELECT id,kind,body,source_kind,source_label,event_date,created_at,confirmed_at,updated_at,revision FROM memories WHERE deleted_at IS NULL ORDER BY created_at,id")?;
     let rows = statement.query_map([], |r| {
         Ok((
@@ -533,6 +533,8 @@ impl HistoryStore {
         };
         tx.execute("INSERT INTO memories(id,kind,body,source_kind,source_label,event_date,created_at,confirmed_at,updated_at,revision) VALUES(?1,?2,?3,'user_manual',?4,?5,?6,?6,?6,1)",
             params![memory.id,memory.kind.as_str(),memory.body,memory.source_label,memory.event_date,now])?;
+        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Create,
+            &memory.id, Some(&memory.kind), Some(&memory.body), memory.event_date.as_deref())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
@@ -578,6 +580,8 @@ impl HistoryStore {
         // their history quoting the old one is exactly the contamination
         // being corrected.
         let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
+        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Update,
+            id, Some(&memory.kind), Some(&memory.body), memory.event_date.as_deref())?;
         tx.commit()?;
         Ok(MemoryCommit {
             value: memory,
@@ -617,11 +621,9 @@ impl HistoryStore {
             return Err(MemoryError::Conflict.into());
         }
         let context_epoch = advance(&tx, expected_epoch)?;
-        let revision = next_counter(revision)?;
-        remove_selections(&tx, Some(id))?;
-        tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=?2,deleted_at=?3 WHERE id=?1", params![id,revision,timestamp()?])?;
-        // Ledger rows outlive the tombstone (no FK): pruning still sees the id.
-        let cleared_turns = prune_chats(&tx, &[id.to_string()], &[], &BTreeSet::new())?;
+        let cleared_turns = tombstone_and_prune(&tx, id)?;
+        crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Delete,
+            id, None, None, None)?;
         #[cfg(test)]
         q6_tests::crash_before_commit();
         tx.commit()?;
@@ -652,6 +654,10 @@ impl HistoryStore {
         // Same precise semantics as a single delete: only turns that carried
         // one of the removed items go, scope by scope.
         let cleared_turns = prune_chats(&tx, &active_ids, &[], &BTreeSet::new())?;
+        for id in &active_ids {
+            crate::memory_sync_outbox::enqueue(&tx, crate::memory_sync_outbox::OutboxOp::Delete,
+                id, None, None, None)?;
+        }
         tx.commit()?;
         Ok(MemoryCommit {
             value: (),
@@ -748,7 +754,7 @@ fn merge_cutoffs<T: ToSql>(
 /// another scope that still selects it (it keeps injecting the item every
 /// turn, so its history removes nothing the next request will not carry).
 /// Returns the number of turns removed across scopes.
-fn prune_chats(
+pub(crate) fn prune_chats(
     db: &Connection,
     app_ids: &[String],
     personal_ids: &[i64],
@@ -788,7 +794,7 @@ fn still_selecting_scopes<T: ToSql>(
     Ok(scopes)
 }
 
-fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageError> {
+pub(crate) fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageError> {
     let mut statement = db.prepare("SELECT base_url,model,revision FROM memory_policy WHERE (?1 IS NULL AND (enabled=1 OR EXISTS(SELECT 1 FROM memory_selection s WHERE s.base_url=memory_policy.base_url AND s.model=memory_policy.model))) OR EXISTS(SELECT 1 FROM memory_selection s WHERE s.base_url=memory_policy.base_url AND s.model=memory_policy.model AND s.memory_id=?1)")?;
     let policies = statement
         .query_map([id], |r| {
@@ -807,4 +813,23 @@ fn remove_selections(db: &Connection, id: Option<&str>) -> Result<(), StorageErr
         db.execute("UPDATE memory_policy SET revision=?3,enabled=CASE WHEN EXISTS(SELECT 1 FROM memory_selection WHERE base_url=?1 AND model=?2) THEN enabled ELSE 0 END WHERE base_url=?1 AND model=?2", params![base,model,next_counter(revision)?])?;
     }
     Ok(())
+}
+
+/// Tombstone + selection removal + precise prune, shared by the user-facing
+/// delete and the remote-event delete so both stay in lockstep semantics.
+/// The caller owns the epoch advance and the enclosing transaction; the
+/// revision counter is checked in Rust, never promoted by SQL arithmetic.
+pub(crate) fn tombstone_and_prune(tx: &Connection, id: &str) -> Result<u64, StorageError> {
+    let revision: Option<i64> = tx
+        .query_row(
+            "SELECT revision FROM memories WHERE id=?1 AND deleted_at IS NULL",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let revision = next_counter(revision.ok_or(MemoryError::NotFound)?)?;
+    remove_selections(tx, Some(id))?;
+    tx.execute("UPDATE memories SET body=NULL,source_kind=NULL,source_label=NULL,event_date=NULL,created_at=NULL,confirmed_at=NULL,updated_at=NULL,revision=?2,deleted_at=?3 WHERE id=?1", params![id,revision,timestamp()?])?;
+    // Ledger rows outlive the tombstone (no FK): pruning still sees the id.
+    prune_chats(tx, &[id.to_string()], &[], &BTreeSet::new())
 }

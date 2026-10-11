@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod execution;
 pub mod history;
 pub mod memory;
+pub mod memory_sync_outbox;
 pub mod remote_jobs;
 use companion_core::{DomainError, Task};
 use rusqlite::{params, Connection, OptionalExtension};
