@@ -20,6 +20,9 @@ use companion_storage::memory_sync_outbox::{OutboxEntry, OutboxOp, RemoteApplyRe
 use tauri::{AppHandle, Manager};
 
 const TICK: std::time::Duration = std::time::Duration::from_secs(5);
+/// Hard bound on pages per tick (200 events each): far above any real
+/// backlog the 512-event window can present, low enough to always yield.
+const MAX_PAGES_PER_TICK: usize = 16;
 
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -47,9 +50,13 @@ async fn tick(app: &AppHandle) {
 }
 
 /// Pull until drained. The server keeps events for us until we report the new
-/// cursor back (at-least-once), so a lost response only costs a re-pull.
+/// cursor back (at-least-once), so a lost response only costs a re-pull. A
+/// page cap and a cursor-progress check bound the loop against a coordinator
+/// that keeps answering pending=true with a standing cursor — the server
+/// controls paging, but it must never hold one tick hostage.
 async fn pull(app: &AppHandle, owner: &str) {
-    loop {
+    let mut last_cursor = None;
+    for _ in 0..MAX_PAGES_PER_TICK {
         let Some((generation, cursor)) = read_sync_state(app, owner) else {
             return;
         };
@@ -72,6 +79,11 @@ async fn pull(app: &AppHandle, owner: &str) {
         if !pending {
             return;
         }
+        if Some(response.cursor) == last_cursor {
+            // No forward progress between pages: stop instead of spinning.
+            return;
+        }
+        last_cursor = Some(response.cursor);
     }
 }
 
@@ -115,7 +127,7 @@ async fn push(app: &AppHandle, owner: &str) {
         let Some((op, base_revision)) = resolved else {
             // The owner's server has never met this entry; a delete for it is
             // a net zero — clear the row without a round trip.
-            ack(app, owner, &entry.request_id, 0);
+            ack(app, owner, &entry.request_id, &entry.memory_id, 0);
             continue;
         };
         let result = {
@@ -124,7 +136,13 @@ async fn push(app: &AppHandle, owner: &str) {
             c.memory_push(&entry, op, base_revision).await
         };
         match result {
-            Ok(receipt) => ack(app, owner, &entry.request_id, receipt.revision),
+            Ok(receipt) => ack(
+                app,
+                owner,
+                &entry.request_id,
+                &entry.memory_id,
+                receipt.revision,
+            ),
             Err(error) => {
                 if matches!(
                     error.code,
@@ -184,13 +202,13 @@ fn read_outbox(app: &AppHandle) -> Option<Vec<OutboxEntry>> {
     inner.store.as_ref()?.memory_outbox_peek().ok()
 }
 
-fn ack(app: &AppHandle, owner: &str, request_id: &str, server_revision: i64) {
+fn ack(app: &AppHandle, owner: &str, request_id: &str, memory_id: &str, server_revision: i64) {
     let state = app.state::<ChatState>();
     let Ok(mut inner) = state.0.lock() else {
         return;
     };
     if let Some(store) = inner.store.as_mut() {
-        let _ = store.memory_outbox_ack(owner, request_id, server_revision);
+        let _ = store.memory_outbox_ack(owner, request_id, memory_id, server_revision);
     }
 }
 
