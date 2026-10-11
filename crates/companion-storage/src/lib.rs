@@ -1,5 +1,6 @@
 //! SQLite is owned by Rust. Frontend callers cannot choose paths or execute SQL.
 pub mod accounts;
+pub mod dispatch_log;
 pub mod execution;
 pub mod history;
 pub mod memory;

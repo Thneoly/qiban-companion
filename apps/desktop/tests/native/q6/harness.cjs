@@ -31,7 +31,7 @@ class Harness {
     for(let n=0;n<100;n++){const pages=this.browser.contexts().flatMap(c=>c.pages());this.pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));this.panel=pages.find(p=>p.url().includes('view=panel'));if(this.pet&&this.panel)break;await delay(100);}
     assert(this.pet&&this.panel);await this.pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
     assert(fs.existsSync(path.join(this.directory,'instance.lock')),'Wrong build profile');
-    const db=new DatabaseSync(path.join(this.directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,5);db.close();
+    const db=new DatabaseSync(path.join(this.directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,7);db.close();
     assert.equal((await this.invoke(this.pet,'get_runtime_info')).protocolVersion,3);
   }
   async stop(){if(this.browser)await this.browser.close();this.browser=undefined;if(this.child){const child=this.child;this.child=undefined;const exited=new Promise(r=>child.once('exit',r));child.kill();await exited;}await delay(250);}

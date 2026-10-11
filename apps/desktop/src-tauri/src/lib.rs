@@ -13,6 +13,7 @@ mod personal_memory;
 mod personal_memory_context;
 mod pet;
 mod placement;
+mod reminders;
 mod remote_documents;
 mod remote_memory;
 mod tray;
@@ -71,6 +72,7 @@ pub fn run() {
                 };
             remote_documents::start(app.handle().clone());
             remote_memory::start(app.handle().clone());
+            reminders::start(app.handle().clone());
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
@@ -123,6 +125,9 @@ pub fn run() {
             memory::chat_context_epoch,
             memory::chat_usage_impact,
             memory_export::memory_export,
+            reminders::reminder_list,
+            reminders::reminder_add,
+            reminders::reminder_cancel,
             personal_memory::personal_memory_overview,
             personal_memory::personal_memory_recall,
             personal_memory::personal_memory_detail,
