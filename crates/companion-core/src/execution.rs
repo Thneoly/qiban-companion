@@ -1,4 +1,6 @@
 //! Bounded document action contracts. No filesystem, Tauri or model calls.
+#[cfg(test)]
+use crate::authorization::ActionScope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -284,5 +286,80 @@ mod fact_tests {
         assert_eq!(civil_from_days(11_016), "2000-02-29");
         assert_eq!(civil_from_days(11_017), "2000-03-01");
         assert_eq!(civil_from_days(-1), "1969-12-31");
+    }
+}
+
+/// The static contract of one action scope: its slug, the shape its artifacts
+/// must satisfy, and the pure projection that is the ONLY sanctioned source
+/// of its task facts. Compile-time registered (no dynamic loading); a new
+/// scope adds a row here plus its executor, and authorization surfaces
+/// (ACTION_SCOPES) stay the single source of truth for what is advertised.
+/// The settled fact of one terminal task: its body and optional event date.
+pub type ProjectedFact = (String, Option<String>);
+pub type FactProjection = fn(&ExecutionTask) -> Option<ProjectedFact>;
+
+pub struct ScopeContract {
+    pub slug: &'static str,
+    pub fact_projection: FactProjection,
+}
+pub const SCOPE_CONTRACTS: [ScopeContract; 1] = [ScopeContract {
+    slug: "document_excerpt",
+    fact_projection: task_fact_projection,
+}];
+
+impl ScopeContract {
+    /// Mechanical artifact gate (F2): a task that would settle a fact must
+    /// carry a 64-lowercase-hex artifact hash and a bounded artifact name;
+    /// nothing content-shaped is claimed — existence and integrity only.
+    pub fn validate_artifact(task: &ExecutionTask) -> Result<(), ExecutionError> {
+        if task.artifact_hash.len() != 64
+            || !task
+                .artifact_hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(ExecutionError::InvalidDocument);
+        }
+        if task.artifact_name.is_empty() || task.artifact_name.chars().count() > 200 {
+            return Err(ExecutionError::InvalidDocument);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_gate_rejects_malformed_hashes_and_names() {
+        let mut task = ExecutionTask {
+            id: "00000000-0000-4000-8000-000000000001".into(),
+            action_id: "00000000-0000-4000-8000-000000000002".into(),
+            source_name: "a.txt".into(),
+            preview: "p".into(),
+            artifact_name: "x.md".into(),
+            artifact_hash: digest(b"p"),
+            status: ExecutionStatus::Completed,
+            revision: 1,
+            created_at: 1,
+            updated_at: 1,
+            note: String::new(),
+        };
+        ScopeContract::validate_artifact(&task).unwrap();
+        task.artifact_hash = task.artifact_hash.to_uppercase();
+        assert!(ScopeContract::validate_artifact(&task).is_err());
+        task.artifact_hash = "z".repeat(64);
+        assert!(ScopeContract::validate_artifact(&task).is_err());
+        task.artifact_hash = "a".repeat(63);
+        assert!(ScopeContract::validate_artifact(&task).is_err());
+        task.artifact_hash = digest(b"p");
+        task.artifact_name = "n".repeat(201);
+        assert!(ScopeContract::validate_artifact(&task).is_err());
+    }
+
+    #[test]
+    fn contracts_table_covers_the_advertised_slug() {
+        assert_eq!(SCOPE_CONTRACTS[0].slug, ActionScope::DocumentExcerpt.slug());
     }
 }

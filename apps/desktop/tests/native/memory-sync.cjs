@@ -22,7 +22,7 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  assert.equal(read('PRAGMA user_version')[0].user_version,5);
+  assert.equal(read('PRAGMA user_version')[0].user_version,7);
   await invoke(pet,'pet_action',{action:'open_memory'});
   await panel.getByRole('region',{name:'我们的记忆'}).getByRole('button',{name:'保存记忆',exact:true}).waitFor();
 }

@@ -79,6 +79,13 @@ export function Pet() {
           for (const [name, callback] of [
             ['pet-restored', restore],
             ['pet-quiet', () => { setQuiet(true); setOpen(false); }],
+            // A due reminder becomes an in-app bubble (never an OS
+            // notification); it retracts itself after ten seconds.
+            ['reminder-due', (event: { payload: string }) => {
+              setNote(`⏰ ${event.payload}`);
+              setOpen(true);
+              window.setTimeout(() => { if (!disposed) setNote('慢慢来，我在这里。'); }, 10_000);
+            }],
           ] as const) {
             const unlisten = await listen(name, callback);
             if (disposed) unlisten(); else removers.push(unlisten);

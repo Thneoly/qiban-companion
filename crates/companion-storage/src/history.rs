@@ -56,7 +56,7 @@ impl HistoryStore {
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(StorageError::NewerSchema);
         }
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -100,6 +100,11 @@ impl HistoryStore {
         // task/fact identity index, the send-audit dispatch log and reminders.
         if version < 6 {
             tx.execute_batch(include_str!("memory-schema-v6.sql"))?;
+        }
+        // v7 finalizes the dispatch log shape (prompt column, history_turns)
+        // by dropping and recreating the still-unwritten table.
+        if version < 7 {
+            tx.execute_batch(include_str!("memory-schema-v7.sql"))?;
         }
         crate::memory::validate_schema(&tx)?;
         tx.commit()?;
@@ -196,6 +201,9 @@ impl HistoryStore {
         )?;
         let next = companion_core::memory::next_counter(epoch)?;
         tx.execute("DELETE FROM chat_turns", [])?;
+        // The audit records what was SENT; deleting every chat deletes the
+        // audit with it (the same consent boundary as the turns themselves).
+        tx.execute("DELETE FROM chat_dispatch_log", [])?;
         tx.execute(
             "UPDATE memory_meta SET context_epoch=?1 WHERE singleton=1",
             [next],
@@ -684,5 +692,133 @@ mod tests {
             crate::memory::validate_schema(&store.0).unwrap();
         }
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+impl HistoryStore {
+    /// App-local reminders (schema v6 table). One connection, short queries.
+    pub fn reminder_rows(&self) -> Result<Vec<(String, i64, String, String)>, StorageError> {
+        let mut query = self
+            .0
+            .prepare("SELECT id,due_at,message,status FROM reminders ORDER BY due_at,id")?;
+        let rows = query
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    pub fn reminder_insert(&mut self, message: &str, due_at: u64) -> Result<(), StorageError> {
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO reminders(id,due_at,message,status) VALUES(?1,?2,?3,'pending')",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                i64::try_from(due_at).map_err(|_| StorageError::InvalidTimestamp)?,
+                message
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn reminder_cancel(&mut self, id: &str) -> Result<(), StorageError> {
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE reminders SET status='cancelled' WHERE id=?1 AND status='pending'",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Flip due pending reminders to fired; returns (id, message) pairs for
+    /// the host to bubble. Idempotent per row (the status gate).
+    pub fn reminder_fire_due(&mut self, now: u64) -> Result<Vec<(String, String)>, StorageError> {
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows: Vec<(String, String)> = {
+            let mut query = tx.prepare(
+                "SELECT id,message FROM reminders WHERE status='pending' AND due_at<=?1 ORDER BY due_at,id",
+            )?;
+            let mapped = query.query_map(
+                [i64::try_from(now).map_err(|_| StorageError::InvalidTimestamp)?],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?;
+            let mut collected = Vec::new();
+            for row in mapped {
+                collected.push(row?);
+            }
+            collected
+        };
+        for (id, _) in &rows {
+            tx.execute(
+                "UPDATE reminders SET status='fired' WHERE id=?1 AND status='pending'",
+                [id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod reminder_tests {
+    use super::*;
+
+    fn store() -> HistoryStore {
+        HistoryStore::open(
+            &std::env::temp_dir().join(format!("qiban-reminders-{}.db", uuid::Uuid::new_v4())),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reminders_fire_once_cancel_only_pending_and_survive_restart() {
+        let mut s = store();
+        s.reminder_insert("喝水", 1000).unwrap();
+        s.reminder_insert("明天的事", 9000).unwrap();
+        let rows = s.reminder_rows().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(_, _, _, status)| status == "pending"));
+        // Due: only the first flips; the far one stays pending.
+        let fired = s.reminder_fire_due(5000).unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].1, "喝水");
+        // Idempotent: a rescan settles nothing new.
+        assert!(s.reminder_fire_due(5000).unwrap().is_empty());
+        let statuses: Vec<String> = s
+            .reminder_rows()
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, status)| status)
+            .collect();
+        assert_eq!(statuses, vec!["fired".to_string(), "pending".to_string()]);
+        // Cancel targets only pending rows.
+        let ids: Vec<String> = s
+            .reminder_rows()
+            .unwrap()
+            .into_iter()
+            .map(|(id, ..)| id)
+            .collect();
+        s.reminder_cancel(&ids[0]).unwrap(); // already fired: no-op
+        s.reminder_cancel(&ids[1]).unwrap(); // pending -> cancelled
+        let statuses: Vec<String> = s
+            .reminder_rows()
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, status)| status)
+            .collect();
+        assert_eq!(statuses, vec!["fired".to_string(), "cancelled".to_string()]);
+        // A cancelled reminder never fires.
+        assert!(s.reminder_fire_due(100_000).unwrap().is_empty());
     }
 }

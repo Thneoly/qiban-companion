@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reminder-cancel"
+description = "Enables the reminder_cancel command without any pre-configured scope."
+commands.allow = ["reminder_cancel"]
+
+[[permission]]
+identifier = "deny-reminder-cancel"
+description = "Denies the reminder_cancel command without any pre-configured scope."
+commands.deny = ["reminder_cancel"]

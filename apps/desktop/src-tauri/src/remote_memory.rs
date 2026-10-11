@@ -70,11 +70,13 @@ fn settle_task_facts(app: &AppHandle) {
     }
     let chat = app.state::<ChatState>();
     for (fingerprint, task_id, task) in pending {
-        // The projection is the ONLY fact source; only terminal statuses
-        // register, so None here means a projection rule changed under old
-        // ledger rows — settle them without depositing.
-        let Some((body, event_date)) = companion_core::execution::task_fact_projection(&task)
-        else {
+        // The projection is the ONLY fact source and lives in the scope
+        // contract table (single scope today; a second scope adds a row and
+        // resolves by the task's scope when one is carried). None here means
+        // a projection rule changed under old ledger rows — settle without
+        // depositing.
+        let projection = companion_core::execution::SCOPE_CONTRACTS[0].fact_projection;
+        let Some((body, event_date)) = projection(&task) else {
             let state = app.state::<crate::execution::ExecutionState>();
             let _ = state.store.fact_settled(&task_id);
             continue;

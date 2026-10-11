@@ -75,7 +75,7 @@ try {
     .getByRole("button", { name: "确认配对这台电脑", exact: true })
     .click();
   await expect(pairing.getByRole("status")).toContainText("配对成功");
-  await expect(pairing.locator(".task-list")).toContainText("已配对");
+  await expect(pairing.locator(".task-list").first()).toContainText("已配对");
   await page.screenshot({
     path: "apps/desktop/test-results/mobile-pairing.png",
     fullPage: true,
@@ -101,7 +101,9 @@ try {
     ["准入丢失.txt", "未保存成功"],
     ["回执恢复.txt", "已保存并核验"],
   ]) {
-    const item = documents.locator("article").filter({ hasText: name });
+    // Retry-scenario files can appear as several action records; the
+    // assertion is that the newest one settles to the expected outcome.
+    const item = documents.locator("article").filter({ hasText: name }).first();
     page.once("dialog", (dialog) => dialog.accept());
     await item
       .getByRole("button", { name: "确认电脑保存这份摘录", exact: true })
@@ -119,7 +121,7 @@ try {
   await pairing
     .getByRole("button", { name: "撤销配对 集成测试电脑", exact: true })
     .click();
-  await expect(pairing.locator(".task-list")).toContainText("已撤销");
+  await expect(pairing.locator(".task-list").last()).toContainText("已撤销");
   const replay = await page.evaluate(async (code) => {
     const r = await fetch("/api/pairings/preview", {
       method: "POST",

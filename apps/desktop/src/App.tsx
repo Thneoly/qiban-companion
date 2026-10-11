@@ -11,6 +11,7 @@ import { ExecutionPanel } from './features/tasks/ExecutionPanel';
 import { TaskPanel } from './features/tasks/TaskPanel';
 import { AccountPanel } from './features/account/AccountPanel';
 import { PersonalMemoryPanel } from './features/personal-memory/PersonalMemoryPanel';
+import { RemindersPanel } from './features/reminders/RemindersPanel';
 
 export default function App() {
   const [info, setInfo] = useState<RuntimeInfo | null>(null);
@@ -82,6 +83,7 @@ export default function App() {
         <ExecutionPanel/>
         <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
         <PersonalMemoryPanel/>
+        <RemindersPanel/>
         <footer className="page-footer"><span>栖伴 · 给想法一个停靠的地方</span><span>本地设置 / 模型服务由你选择</span></footer>
       </div>
     </main>

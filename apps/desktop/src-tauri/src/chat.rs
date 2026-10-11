@@ -19,6 +19,11 @@ use std::{
 use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use tokio::sync::watch;
 
+/// Version anchor for the system prompt constant below: the audit log stores
+/// this number (not the text), and a rebuild resolves it against the binary.
+/// Bump whenever the prompt wording changes.
+const SYSTEM_PROMPT_VERSION: i64 = 1;
+
 pub(crate) struct ChatInner {
     pub(crate) active: Option<(String, watch::Sender<bool>)>,
     pub(crate) conversation: Conversation,
@@ -365,6 +370,45 @@ pub async fn chat_generate(
     let mut usage_receipt = preview.usage();
     usage_receipt.personal = personal_receipt;
     let epoch = preview.context_epoch;
+    // Send-audit composition, captured BEFORE the request leaves and sourced
+    // from the SAME builders the request uses (reference_block here is the
+    // very function stream_context assembles the memory segment with). The
+    // prompt rides the row so cancelled/failed requests — which leave no turn
+    // row — stay fully reconstructable.
+    let audit_memory_block = reference_block(&preview.items);
+    let audit_personal_digest =
+        crate::personal_memory_context::personal_reference_block(&personal_items).map(|block| {
+            use sha2::{Digest, Sha256};
+            format!("{:x}", Sha256::digest(block.as_bytes()))
+        });
+    let audit_history_turns = history.len();
+    let audit_memory_count = usage_receipt.memories.len();
+    let audit_memory_chars = audit_memory_block
+        .as_deref()
+        .map_or(0, |block| block.chars().count());
+    let audit_prompt = request.prompt.clone();
+    let audit_request_id = request.request_id.clone();
+    let audit = |outcome: companion_storage::dispatch_log::DispatchOutcome| {
+        let Ok(mut inner) = state.0.lock() else {
+            return;
+        };
+        let Some(store) = inner.store.as_mut() else {
+            return;
+        };
+        let _ = store.dispatch_log_append(&companion_storage::dispatch_log::Dispatch {
+            request_id: &audit_request_id,
+            outcome,
+            model: &selected,
+            base_url: &config.base_url,
+            system_version: SYSTEM_PROMPT_VERSION,
+            memory_block: audit_memory_block.as_deref(),
+            personal_digest: audit_personal_digest.as_deref(),
+            history_turns: audit_history_turns,
+            memory_count: audit_memory_count,
+            memory_chars: audit_memory_chars,
+            prompt: &audit_prompt,
+        });
+    };
     let run = stream_context(
         &endpoint,
         key.as_deref().map(|s| s.as_str()).unwrap_or(""),
@@ -394,9 +438,28 @@ pub async fn chat_generate(
     );
     tokio::select! {
         biased;
-        _ = cancelled.changed() => Err("已停止生成；已产生的服务用量仍可能计费".into()),
+        _ = cancelled.changed() => {
+            // The HTTP request may already be in flight (the receipt wording
+            // says as much): the audit records the dispatch attempt with its
+            // honest outcome, not a guess about the wire.
+            audit(companion_storage::dispatch_log::DispatchOutcome::Cancelled);
+            Err("已停止生成；已产生的服务用量仍可能计费".into())
+        }
         result = tokio::time::timeout(Duration::from_secs(90),run) => {
-            let (usage, reply)=result.map_err(|_| "回复超时，请稍后重试")??;
+            let (usage, reply) = match result {
+                Ok(inner) => match inner {
+                    Ok(value) => value,
+                    Err(message) => {
+                        audit(companion_storage::dispatch_log::DispatchOutcome::Dropped);
+                        return Err(message);
+                    }
+                },
+                Err(_) => {
+                    audit(companion_storage::dispatch_log::DispatchOutcome::Timeout);
+                    return Err("回复超时，请稍后重试".into());
+                }
+            };
+            audit(companion_storage::dispatch_log::DispatchOutcome::Sent);
             let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
             inner.ensure_current(&request.request_id, epoch, version)?;
             // The receipt says what was sent to the provider; the ledger below

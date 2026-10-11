@@ -48,38 +48,26 @@ impl From<StorageError> for ExecutionFailure {
 }
 pub struct ExecutionState {
     pub store: ExecutionStore,
-    root: PathBuf,
+    world: LocalFilesystem,
     owner: String,
     operation: Mutex<()>,
 }
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
-    }
+
+/// The execution seam (one concrete "execution world"): where document-
+/// excerpt artifacts live and how they are published/verified. The claim/
+/// admit/receipt orchestration and the scope contract stay world-agnostic;
+/// a sandbox or remote world is a new implementation of this trait, swapped
+/// as the `world` field — no dynamic loading, no orchestration fork.
+trait ExecutionWorld {
+    fn publish(&self, task: &ExecutionTask) -> Result<(), ExecutionFailure>;
+    /// Some(content) = present and hash-verified; None = absent; Err = unverifiable.
+    fn verify(&self, task: &ExecutionTask) -> Result<Option<String>, ExecutionFailure>;
 }
-impl ExecutionState {
-    pub fn open(data: &Path) -> Result<Self, StorageError> {
-        let store = ExecutionStore::open(&data.join("executions.db"))?;
-        store.interrupt_previous_owner()?;
-        let state = Self {
-            store,
-            root: data.join("document-drafts"),
-            owner: uuid::Uuid::new_v4().to_string(),
-            operation: Mutex::new(()),
-        };
-        for task in state.store.list()? {
-            if task.status == ExecutionStatus::Unknown {
-                let _ = state.reconcile(&task.id);
-            }
-        }
-        Ok(state)
-    }
+
+struct LocalFilesystem {
+    root: PathBuf,
+}
+impl LocalFilesystem {
     fn artifact_path(&self, task: &ExecutionTask) -> Result<PathBuf, ExecutionFailure> {
         let action = uuid::Uuid::parse_str(&task.action_id).map_err(|_| ExecutionFailure::io())?;
         let expected = format!("{action}.md");
@@ -93,7 +81,27 @@ impl ExecutionState {
         }
         Ok(self.root.join(expected))
     }
-    fn read_artifact(&self, task: &ExecutionTask) -> Result<Option<String>, ExecutionFailure> {
+}
+impl ExecutionWorld for LocalFilesystem {
+    fn publish(&self, task: &ExecutionTask) -> Result<(), ExecutionFailure> {
+        let destination = self.artifact_path(task)?;
+        let pending = self.root.join(format!("{}.pending", task.action_id));
+        // Exclusive create plus atomic no-replace hard link. Never truncate an existing file.
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&pending)
+            .map_err(|_| ExecutionFailure::io())?;
+        let outcome = (|| -> std::io::Result<()> {
+            file.write_all(task.preview.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::hard_link(&pending, &destination)
+        })();
+        let _ = std::fs::remove_file(&pending); // only our fixed, newly created staging file
+        outcome.map_err(|_| ExecutionFailure::io())
+    }
+    fn verify(&self, task: &ExecutionTask) -> Result<Option<String>, ExecutionFailure> {
         let path = self.artifact_path(task)?;
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(m) => m,
@@ -114,23 +122,36 @@ impl ExecutionState {
         }
         Ok(Some(content))
     }
-    fn publish(&self, task: &ExecutionTask) -> Result<(), ExecutionFailure> {
-        let destination = self.artifact_path(task)?;
-        let pending = self.root.join(format!("{}.pending", task.action_id));
-        // Exclusive create plus atomic no-replace hard link. Never truncate an existing file.
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&pending)
-            .map_err(|_| ExecutionFailure::io())?;
-        let outcome = (|| -> std::io::Result<()> {
-            file.write_all(task.preview.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            std::fs::hard_link(&pending, &destination)
-        })();
-        let _ = std::fs::remove_file(&pending); // only our fixed, newly created staging file
-        outcome.map_err(|_| ExecutionFailure::io())
+}
+fn is_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+impl ExecutionState {
+    pub fn open(data: &Path) -> Result<Self, StorageError> {
+        let store = ExecutionStore::open(&data.join("executions.db"))?;
+        store.interrupt_previous_owner()?;
+        let state = Self {
+            store,
+            world: LocalFilesystem {
+                root: data.join("document-drafts"),
+            },
+            owner: uuid::Uuid::new_v4().to_string(),
+            operation: Mutex::new(()),
+        };
+        for task in state.store.list()? {
+            if task.status == ExecutionStatus::Unknown {
+                let _ = state.reconcile(&task.id);
+            }
+        }
+        Ok(state)
     }
     fn resolve_file(&self, id: &str) -> Result<ExecutionDetail, ExecutionFailure> {
         let detail = self.store.detail(id)?;
@@ -141,7 +162,7 @@ impl ExecutionState {
             return Ok(detail);
         }
         let attempt = detail.attempts.last().ok_or_else(ExecutionFailure::io)?;
-        match self.read_artifact(&detail.task) {
+        match self.world.verify(&detail.task) {
             Ok(Some(_)) => {
                 self.store.resolve(
                     id,
@@ -183,7 +204,11 @@ impl ExecutionState {
         };
         let task = self.store.detail(id)?.task;
         if self.store.may_publish(id, &attempt)? {
-            let _ = self.publish(&task);
+            // The scope contract gates every publish (F2): a malformed
+            // artifact shape is refused before it can settle a fact.
+            if companion_core::execution::ScopeContract::validate_artifact(&task).is_ok() {
+                let _ = self.world.publish(&task);
+            }
         }
         self.resolve_file(id)
     }
@@ -199,7 +224,8 @@ impl ExecutionState {
         if detail.task.status != ExecutionStatus::Completed {
             return Err(ExecutionFailure::io());
         }
-        self.read_artifact(&detail.task)?
+        self.world
+            .verify(&detail.task)?
             .ok_or_else(ExecutionFailure::io)
     }
 }
@@ -293,7 +319,7 @@ mod tests {
                 state.store.detail(&id).unwrap().task.status,
                 ExecutionStatus::Running
             );
-            assert!(state.read_artifact(&task).unwrap().is_some());
+            assert!(state.world.verify(&task).unwrap().is_some());
             db.execute_batch("DROP TRIGGER reject_complete").unwrap();
         }
         {
@@ -350,7 +376,7 @@ mod tests {
                 .unwrap();
             id = task.id.clone();
             state.store.claim(&id, 0, "old-process").unwrap();
-            state.publish(&task).unwrap();
+            state.world.publish(&task).unwrap();
         }
         {
             let state = ExecutionState::open(&root).unwrap();
@@ -382,7 +408,7 @@ mod tests {
                 .unwrap();
             state.store.claim(&a.id, 0, "old").unwrap();
             state.store.claim(&b.id, 0, "old").unwrap();
-            let target = state.artifact_path(&b).unwrap();
+            let target = state.world.artifact_path(&b).unwrap();
             std::fs::write(target, "keep").unwrap();
             missing = a.id;
             conflict = b.id;
@@ -397,7 +423,7 @@ mod tests {
             assert_eq!(b.status, ExecutionStatus::Unknown);
             assert!(state.execute(&b.id, b.revision).is_err());
             assert_eq!(
-                std::fs::read_to_string(state.artifact_path(&b).unwrap()).unwrap(),
+                std::fs::read_to_string(state.world.artifact_path(&b).unwrap()).unwrap(),
                 "keep"
             );
         }

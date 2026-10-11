@@ -21,7 +21,7 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,5);db.close();
+  const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,7);db.close();
   await invoke(pet,'pet_action',{action:'open_memory'});
   await panel.getByRole('region',{name:'我们的记忆'}).getByRole('button',{name:'保存记忆',exact:true}).waitFor();
 }
@@ -63,10 +63,29 @@ async function exportFile(destination,overwrite=false){
   },requestContext);
   for(let n=0;n<100&&!requests.length;n++)await delay(100);assert.equal(requests.length,1);
   assert(!JSON.stringify(requests[0]).includes('合成经历'),'M2 must not inject memory');
+  // Send-audit invariant (native): the request that left is logged — the
+  // dropped reply leaves no turn, yet the dispatch row survives with the
+  // prompt and outcome; and the audit never leaks INTO a model request.
+  const wireBody=JSON.stringify(requests[0]);
+  for(const forbidden of ['dispatch','system_version','history_turns','memory_block'])assert(!wireBody.includes(forbidden),'audit fields must not ride the wire');
   await memory().getByRole('button',{name:'删除全部记忆'}).click();await memory().getByRole('button',{name:'确认并开始新对话'}).click();await expect(memory()).toContainText('还没有留下记忆');
   heldResponse.end('data: {"choices":[{"delta":{"content":"迟到文本"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
   await expect.poll(()=>pet.evaluate(()=>window.testResult?.ok)).toBe(false);
   assert.deepEqual(await invoke(pet,'chat_history'),[]);
+  {
+    const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});
+    const row=db.prepare('SELECT request_id,outcome,model,base_url,system_version,memory_block,memory_count,history_turns,prompt FROM chat_dispatch_log ORDER BY seq').all();
+    assert.equal(row.length,1,'exactly one dispatch row for the one request');
+    assert.equal(row[0].request_id,'m2-stream');
+    // The mid-stream "确认并开始新对话" is an EXPLICIT cancel: the memory
+    // confirmation fires the cancel signal before the late reply's epoch
+    // mismatch could drop it — the audit outcome records that honestly.
+    assert.equal(row[0].outcome,'cancelled');
+    assert.equal(row[0].model,'m2-fixture');assert.ok(row[0].base_url.includes('127.0.0.1'));
+    assert.equal(row[0].system_version,1);assert.equal(row[0].memory_block,null);
+    assert.equal(row[0].memory_count,0);assert.ok(row[0].history_turns>=0);assert.equal(row[0].prompt,'本机测试');
+    db.close();
+  }
   const emptyExport=path.join(evidence,'empty.json');await exportFile(emptyExport);assert.deepEqual(JSON.parse(fs.readFileSync(emptyExport,'utf8')).items,[]);
   await stop();await start();assert.deepEqual((await invoke(panel,'memory_list')).items,[]);assert.deepEqual(await invoke(pet,'chat_history'),[]);
   await stop();
