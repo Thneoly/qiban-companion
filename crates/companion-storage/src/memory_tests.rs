@@ -11,6 +11,8 @@ fn store() -> HistoryStore {
         .unwrap();
     tx.execute_batch(include_str!("memory-schema-v4.sql"))
         .unwrap();
+    tx.execute_batch(include_str!("memory-schema-v5.sql"))
+        .unwrap();
     tx.commit().unwrap();
     HistoryStore(db)
 }

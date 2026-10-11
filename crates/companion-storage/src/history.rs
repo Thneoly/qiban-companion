@@ -56,7 +56,7 @@ impl HistoryStore {
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err(StorageError::NewerSchema);
         }
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -89,6 +89,11 @@ impl HistoryStore {
         // the selections enabled at migration time (conservative direction).
         if version < 4 {
             tx.execute_batch(include_str!("memory-schema-v4.sql"))?;
+        }
+        // v5 adds the cross-device sync outbox, per-owner cursors and the
+        // server revision mirror; purely additive to the local schema.
+        if version < 5 {
+            tx.execute_batch(include_str!("memory-schema-v5.sql"))?;
         }
         crate::memory::validate_schema(&tx)?;
         tx.commit()?;
@@ -267,7 +272,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 5).unwrap();
+        connection.pragma_update(None, "user_version", 6).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -385,7 +390,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                4
+                5
             );
             let app: (i64, i64) = store
                 .0
@@ -442,7 +447,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                4
+                5
             );
             // Pre-v4 turns had no selections to backfill from: empty ledger.
             let usage: i64 = store
@@ -539,7 +544,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(marker, 1);
-            s.0.pragma_update(None, "user_version", 5).unwrap();
+            s.0.pragma_update(None, "user_version", 6).unwrap();
         }
         let before = std::fs::read(&path).unwrap();
         assert!(matches!(
@@ -605,7 +610,7 @@ mod tests {
             // would leave.
             let db = Connection::open(&path).unwrap();
             db.execute_batch(
-            "DROP TABLE chat_turn_usage;              DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              PRAGMA user_version=2;",
+            "DROP TABLE chat_turn_usage;              DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              DROP TABLE IF EXISTS memory_outbox;              DROP TABLE IF EXISTS memory_sync_owners;              DROP TABLE IF EXISTS memory_server_mirror;              PRAGMA user_version=2;",
         )
         .unwrap();
             let v3_tables: i64 = db.query_row(
@@ -622,7 +627,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                4
+                5
             );
             // Backfill: 3 turns x 2 selected app memories = 6 ledger rows,
             // attributed to the migration-time selection with send-time

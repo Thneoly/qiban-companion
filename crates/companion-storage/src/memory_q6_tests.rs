@@ -30,6 +30,8 @@ fn fixture() -> (HistoryStore, Memory) {
         .unwrap();
     tx.execute_batch(include_str!("memory-schema-v4.sql"))
         .unwrap();
+    tx.execute_batch(include_str!("memory-schema-v5.sql"))
+        .unwrap();
     tx.commit().unwrap();
     let mut store = HistoryStore(db);
     let memory = store.memory_create(&draft("Q6 合成正文"), 0).unwrap().value;
