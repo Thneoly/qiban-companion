@@ -84,7 +84,7 @@ function invoke(page, command, args) {
     assert.deepEqual(await invoke(pet, 'chat_history'), [{ user: 'synthetic question', assistant: 'synthetic answer' }]);
     await browser.close(); browser = undefined; restarted.kill(); await terminated(restarted);
     const db = new DatabaseSync(database, { readOnly: true });
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
     assert.equal(db.prepare('SELECT count(*) AS n FROM memory_policy').get().n, 0);
     assert.equal(db.prepare('SELECT count(*) AS n FROM memories').get().n, 0);
     assert.equal(db.prepare('SELECT context_epoch FROM memory_meta').get().context_epoch, 0);
