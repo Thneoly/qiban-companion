@@ -76,21 +76,39 @@ pub(crate) fn read_active(db: &Connection) -> Result<Vec<Memory>, StorageError> 
     let mut memories = Vec::new();
     for row in rows {
         let (id, kind, body, source, label, date, created, confirmed, updated, revision) = row?;
-        let kind = match kind.as_str() {
-            "preference" => MemoryKind::Preference,
-            "experience" => MemoryKind::Experience,
+        // Kind-split validation: manual rows keep their exact shape; task
+        // facts only ever come from the executor projection (label pinned by
+        // the table CHECK; the kind/source pairing is re-checked here).
+        let (kind, source_kind) = match (kind.as_str(), source.as_str()) {
+            ("preference", "user_manual") => (MemoryKind::Preference, MemorySource::UserManual),
+            ("experience", "user_manual") => (MemoryKind::Experience, MemorySource::UserManual),
+            ("task_fact", "executor") => (MemoryKind::TaskFact, MemorySource::Executor),
             _ => return Err(StorageError::Unavailable),
         };
-        let draft = MemoryDraft {
-            kind,
-            body: body.clone(),
-            event_date: date.clone(),
+        if source_kind == MemorySource::UserManual {
+            let draft = MemoryDraft {
+                kind,
+                body: body.clone(),
+                event_date: date.clone(),
+            }
+            .validate()?;
+            if draft.body != body || label != MANUAL_SOURCE_LABEL {
+                return Err(StorageError::Unavailable);
+            }
+        } else {
+            // Task facts share the body shape rules; no validate() because
+            // manual creation rules (kind/date) do not apply.
+            if body.trim().is_empty()
+                || body.chars().count() > MAX_BODY_CHARS
+                || body
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t')
+                || label != companion_core::execution::TASK_FACT_SOURCE_LABEL
+            {
+                return Err(StorageError::Unavailable);
+            }
         }
-        .validate()?;
         if uuid::Uuid::parse_str(&id).is_err()
-            || draft.body != body
-            || source != "user_manual"
-            || label != MANUAL_SOURCE_LABEL
             || !(1..=MAX_COUNTER).contains(&revision)
             || created < 0
             || created > confirmed
@@ -103,7 +121,7 @@ pub(crate) fn read_active(db: &Connection) -> Result<Vec<Memory>, StorageError> 
             id,
             kind,
             body,
-            source_kind: MemorySource::UserManual,
+            source_kind,
             source_label: label,
             event_date: date,
             created_at: created,
@@ -112,10 +130,20 @@ pub(crate) fn read_active(db: &Connection) -> Result<Vec<Memory>, StorageError> 
             revision,
         });
     }
-    if memories.len() > MAX_MEMORIES {
-        return Err(StorageError::Unavailable);
-    }
     Ok(memories)
+}
+
+/// Kind-split active counts: (manual, task_fact). Capacity rules live with
+/// the callers (create gates manual at 30, deposit gates facts at 50, schema
+/// validation checks both) so reads stay pure.
+pub(crate) fn active_counts(db: &Connection) -> Result<(usize, usize), StorageError> {
+    let (manual, facts): (i64, i64) = db.query_row(
+        "SELECT count(*) FILTER (WHERE kind<>'task_fact'), count(*) FILTER (WHERE kind='task_fact')
+         FROM memories WHERE deleted_at IS NULL",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((manual as usize, facts as usize))
 }
 
 pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
@@ -123,6 +151,12 @@ pub(crate) fn validate_schema(db: &Connection) -> Result<(), StorageError> {
         return Err(StorageError::Unavailable);
     }
     let active = read_active(db)?;
+    // Kind-split capacity: manual memories and executor task facts have
+    // independent caps and never evict each other.
+    let (manual, facts) = active_counts(db)?;
+    if manual > MAX_MEMORIES || facts > MAX_TASK_FACTS {
+        return Err(StorageError::Unavailable);
+    }
     let invalid: i64 = db.query_row("SELECT count(*) FROM memories WHERE deleted_at IS NOT NULL AND (body IS NOT NULL OR source_kind IS NOT NULL OR source_label IS NOT NULL OR event_date IS NOT NULL OR created_at IS NOT NULL OR confirmed_at IS NOT NULL OR updated_at IS NOT NULL)", [], |r| r.get(0))?;
     if invalid != 0 {
         return Err(StorageError::Unavailable);
@@ -515,7 +549,7 @@ impl HistoryStore {
             .0
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let context_epoch = advance(&tx, expected_epoch)?;
-        if read_active(&tx)?.len() >= MAX_MEMORIES {
+        if active_counts(&tx)?.0 >= MAX_MEMORIES {
             return Err(MemoryError::CapacityExceeded.into());
         }
         let now = timestamp()?;

@@ -31,6 +31,19 @@ fn write_task(tx: &Transaction<'_>, task: &ExecutionTask) -> Result<(), StorageE
             i64::try_from(task.updated_at).map_err(|_| StorageError::InvalidTimestamp)?
         ],
     )?;
+    // Fact-settlement ledger, in the SAME transaction as the terminal event:
+    // the host bridge drains it after commit; a crash between commit and
+    // deposit is closed by re-reading this row (idempotent deposit per
+    // fingerprint). User-cancelled tasks settle nothing.
+    if matches!(
+        task.status,
+        ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Unknown
+    ) {
+        tx.execute(
+            "INSERT OR IGNORE INTO execution_fact_pending(task_id) VALUES(?1)",
+            [&task.id],
+        )?;
+    }
     Ok(())
 }
 impl ExecutionStore {
@@ -41,7 +54,7 @@ impl ExecutionStore {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(StorageError::NewerSchema);
         }
         if version == 0 {
@@ -53,7 +66,49 @@ impl ExecutionStore {
                 PRAGMA user_version=1;")?;
             tx.commit()?;
         }
+        let tx = connection.transaction()?;
+        if version < 2 {
+            // v2: fact-settlement ledger (see write_task); additive.
+            tx.execute_batch(
+                "CREATE TABLE execution_fact_pending(task_id TEXT PRIMARY KEY NOT NULL REFERENCES execution_tasks(id));
+                 PRAGMA user_version=2;",
+            )?;
+        }
+        tx.commit()?;
         Ok(Self(Mutex::new(connection)))
+    }
+    /// Terminal tasks still owing a fact deposit, oldest first:
+    /// (fingerprint, task_id, task). Draining is idempotent per fingerprint.
+    pub fn fact_pending(&self) -> Result<Vec<(String, String, ExecutionTask)>, StorageError> {
+        let c = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let mut q = c.prepare(
+            "SELECT t.fingerprint,t.id,t.body FROM execution_fact_pending p
+             JOIN execution_tasks t ON t.id=p.task_id ORDER BY t.created_at,t.id",
+        )?;
+        let rows = q.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (fingerprint, id, body) = row?;
+            out.push((fingerprint, id, serde_json::from_str(&body)?));
+        }
+        Ok(out)
+    }
+    /// Clear one ledger row after a successful deposit.
+    pub fn fact_settled(&self, task_id: &str) -> Result<(), StorageError> {
+        let mut c = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let tx = c.transaction()?;
+        tx.execute(
+            "DELETE FROM execution_fact_pending WHERE task_id=?1",
+            [task_id],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn prepare(
         &self,
@@ -302,7 +357,7 @@ mod tests {
         assert!(store.claim(&task.id, 0, "owner").is_err());
         assert_eq!(store.detail(&task.id).unwrap().events.len(), 2);
         let c = Connection::open_in_memory().unwrap();
-        c.pragma_update(None, "user_version", 2).unwrap();
+        c.pragma_update(None, "user_version", 3).unwrap();
         assert!(matches!(
             ExecutionStore::from_connection(c),
             Err(StorageError::NewerSchema)

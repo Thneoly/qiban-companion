@@ -1029,3 +1029,99 @@ async fn list_remote(c: &AccountClient) -> (reqwest::StatusCode, serde_json::Val
     let status = response.status();
     (status, response.json().await.unwrap())
 }
+
+#[tokio::test]
+async fn executed_task_settles_a_fact_and_syncs_to_the_peer_list() {
+    let f = Fixture::new().await;
+    let vault = Arc::new(MemoryVault::default());
+    let mut c = f.client(vault.clone());
+    c.request_code("alice@example.com".into()).await.unwrap();
+    c.login(f.code("alice@example.com")).await.unwrap();
+
+    // A real execution store walked to Completed through the real
+    // transitions, plus a real history store — the settle bridge's core
+    // sequence (ledger -> projection -> deposit -> settled) against live
+    // components, then the ordinary sync tick carries the fact to the server
+    // and the phone list sees it.
+    let exec = companion_storage::execution::ExecutionStore::open(
+        &std::env::temp_dir().join(format!("qiban-tf-exec-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let mut desktop = HistoryStore::open(
+        &std::env::temp_dir().join(format!("qiban-tf-hist-{}.db", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let task = exec
+        .prepare(&request_id, "路线图.txt", "第一行\n第二行")
+        .unwrap();
+    let attempt = exec
+        .claim(&task.id, task.revision, "acceptance")
+        .unwrap()
+        .unwrap();
+    let done = exec
+        .resolve(
+            &task.id,
+            &attempt.id,
+            companion_core::execution::ExecutionStatus::Completed,
+            "done",
+        )
+        .unwrap();
+    // The settle bridge: drain, project, deposit, clear (idempotent retry).
+    for (fingerprint, task_id, pending) in exec.fact_pending().unwrap() {
+        let (body, date) = companion_core::execution::task_fact_projection(&pending).unwrap();
+        desktop
+            .task_fact_deposit(&fingerprint, &body, date.as_deref())
+            .unwrap();
+        exec.fact_settled(&task_id).unwrap();
+    }
+    assert!(exec.fact_pending().unwrap().is_empty());
+    let facts: Vec<_> = desktop
+        .memory_list()
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind == companion_core::memory::MemoryKind::TaskFact)
+        .collect();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(
+        facts[0].body,
+        format!("把《{}》的摘录保存为草稿：已核验完成", "路线图.txt")
+    );
+    let _ = done;
+    // Sync to the server; the peer list shows the fact; the phone cannot
+    // correct it (400) but can delete it — the server route contract.
+    sync_tick(&c, &mut desktop).await;
+    let (_, listed) = list_remote(&c).await;
+    let items = listed.as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["kind"], "task_fact");
+    assert_eq!(items[0]["body"], facts[0].body);
+    let fact_id = items[0]["id"].as_str().unwrap().to_string();
+    let (status, _) = phone_write(
+        &c,
+        &format!("/v1/memories/{fact_id}/update"),
+        serde_json::json!({
+            "revision": 1,
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "kind": "task_fact",
+            "body": "篡改"
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+    let (status, _) = phone_write(
+        &c,
+        &format!("/v1/memories/{fact_id}/delete"),
+        serde_json::json!({"revision": 1, "requestId": uuid::Uuid::new_v4().to_string()}),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    // The desktop converges to the tombstone; the fact row is gone but the
+    // memories table keeps its content-free tombstone (never resurrectable).
+    sync_tick(&c, &mut desktop).await;
+    assert!(desktop
+        .memory_list()
+        .unwrap()
+        .iter()
+        .all(|m| m.kind != companion_core::memory::MemoryKind::TaskFact));
+}

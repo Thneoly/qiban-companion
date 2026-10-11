@@ -65,12 +65,20 @@ impl MemoryWriteRequest {
                     event_date: self.event_date,
                 })
             }
-            "update" if self.kind.is_some() && self.body.is_some() => Ok(MemoryWrite::Update {
-                base_revision: self.base_revision,
-                kind: self.kind.unwrap(),
-                body: self.body.unwrap(),
-                event_date: self.event_date,
-            }),
+            "update" if self.kind.is_some() && self.body.is_some() => {
+                let kind = self.kind.unwrap();
+                // Same sole-source rule as the peer route: task facts are
+                // never corrected by a client, only created and deleted.
+                if kind == MemoryKind::TaskFact {
+                    return Err(bad());
+                }
+                Ok(MemoryWrite::Update {
+                    base_revision: self.base_revision,
+                    kind,
+                    body: self.body.unwrap(),
+                    event_date: self.event_date,
+                })
+            }
             // A delete carrying kind/body/eventDate is a reused template, not
             // a delete: drop nothing silently, reject the shape.
             "delete" if self.kind.is_none() && self.body.is_none() && self.event_date.is_none() => {
@@ -136,6 +144,12 @@ pub(super) async fn update(
     b: Result<Json<MemoryPeerUpdate>, JsonRejection>,
 ) -> Result<Json<MemoryWriteReceipt>, ApiError> {
     let request = request_body(b)?;
+    // The phone may correct manual memories only: a task fact's wording is
+    // the executor's projection, the sole source (product/task-facts.md).
+    // Deleting a fact stays allowed on this route.
+    if request.kind == MemoryKind::TaskFact {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_request"));
+    }
     let write = MemoryWrite::Update {
         base_revision: request.revision,
         kind: request.kind,

@@ -76,6 +76,46 @@ pub struct PreparedDocument {
 pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+/// Source label pinned into every task-fact row (schema CHECK enforces it).
+pub const TASK_FACT_SOURCE_LABEL: &str = "来自电脑上的文档任务";
+/// Pure projection: a terminal task -> (body, event_date) for its task fact.
+/// Reads no files and depends on no environment — this function is the ONLY
+/// sanctioned source of task facts (the model cannot fabricate one). None
+/// means the status settles no fact (in-flight or user-cancelled).
+pub fn task_fact_projection(task: &ExecutionTask) -> Option<(String, Option<String>)> {
+    let outcome = match task.status {
+        ExecutionStatus::Completed => "已核验完成",
+        ExecutionStatus::Failed => "未成功",
+        ExecutionStatus::Unknown => "结果未知",
+        ExecutionStatus::WaitingConfirmation
+        | ExecutionStatus::Running
+        | ExecutionStatus::Cancelled => return None,
+    };
+    let name: String = task.source_name.chars().take(60).collect();
+    let body: String = format!("把《{name}》的摘录保存为草稿：{outcome}")
+        .chars()
+        .take(200)
+        .collect();
+    // Event date from the task's creation instant, UTC calendar day (the
+    // desktop is single-timezone in practice; the date is a hint, not a gate).
+    let days = task.created_at / 86_400_000;
+    let date = civil_from_days(days as i64);
+    Some((body, Some(date)))
+}
+/// Days-since-epoch to YYYY-MM-DD (Howard Hinnant's civil_from_days).
+fn civil_from_days(days: i64) -> String {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
 pub fn prepare_document(
     request_id: &str,
     name: &str,
@@ -185,5 +225,64 @@ mod tests {
         t.transition(1, ExecutionStatus::Unknown, "待核对").unwrap();
         t.transition(2, ExecutionStatus::Completed, "已核对")
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod fact_tests {
+    use super::*;
+
+    fn task(status: ExecutionStatus) -> ExecutionTask {
+        ExecutionTask {
+            id: "00000000-0000-4000-8000-000000000001".into(),
+            action_id: "00000000-0000-4000-8000-000000000002".into(),
+            source_name: "产品路线.txt".into(),
+            preview: "…".into(),
+            artifact_name: "draft.md".into(),
+            artifact_hash: "0".repeat(64),
+            status,
+            revision: 1,
+            created_at: 1_762_934_400_000, // 2025-11-12 UTC
+            updated_at: 1,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn projection_settles_terminal_states_and_refuses_the_rest() {
+        for status in [
+            ExecutionStatus::WaitingConfirmation,
+            ExecutionStatus::Running,
+            ExecutionStatus::Cancelled,
+        ] {
+            assert!(
+                task_fact_projection(&task(status)).is_none(),
+                "{status:?} settles nothing"
+            );
+        }
+        let (body, date) = task_fact_projection(&task(ExecutionStatus::Completed)).unwrap();
+        assert_eq!(body, "把《产品路线.txt》的摘录保存为草稿：已核验完成");
+        assert_eq!(date.as_deref(), Some("2025-11-12"));
+        assert!(task_fact_projection(&task(ExecutionStatus::Failed))
+            .unwrap()
+            .0
+            .ends_with("未成功"));
+        assert!(task_fact_projection(&task(ExecutionStatus::Unknown))
+            .unwrap()
+            .0
+            .ends_with("结果未知"));
+        // A hostile long filename cannot push the body past the cap.
+        let mut long = task(ExecutionStatus::Completed);
+        long.source_name = "长".repeat(300) + ".txt";
+        let (body, _) = task_fact_projection(&long).unwrap();
+        assert!(body.chars().count() <= 200);
+    }
+
+    #[test]
+    fn civil_date_math_covers_the_leap_and_epoch_edges() {
+        assert_eq!(civil_from_days(0), "1970-01-01");
+        assert_eq!(civil_from_days(11_016), "2000-02-29");
+        assert_eq!(civil_from_days(11_017), "2000-03-01");
+        assert_eq!(civil_from_days(-1), "1969-12-31");
     }
 }

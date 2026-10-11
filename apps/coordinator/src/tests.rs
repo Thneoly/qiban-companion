@@ -1427,3 +1427,93 @@ async fn memory_sync_http_roundtrip_conflict_codes_and_shape_strictness() {
         StatusCode::CONFLICT
     );
 }
+
+#[tokio::test]
+async fn task_facts_are_phone_uncorrectable_and_capacity_splits_by_kind() {
+    let f = Fixture::new();
+    let app = f.app();
+    let desktop = login(&f, &app, "alice@example.com").await;
+    let fact_id = uuid::Uuid::new_v4().to_string();
+    // The desktop pushes a task fact (executor-sourced create).
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":fact_id,"op":"create","baseRevision":0,
+               "kind":"task_fact","body":"把《报告》的摘录保存为草稿：已核验完成"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // The phone cannot CORRECT a fact (sole source is the executor).
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/v1/memories/{fact_id}/update"),
+        Some(&desktop),
+        json!({"revision":1,"requestId":uuid::Uuid::new_v4().to_string(),
+               "kind":"task_fact","body":"篡改的事实"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The desktop push route rejects the same shape.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+               "op":"update","baseRevision":1,"kind":"task_fact","body":"篡改的事实"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The phone CAN delete a fact.
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/v1/memories/{fact_id}/delete"),
+        Some(&desktop),
+        json!({"revision":1,"requestId":uuid::Uuid::new_v4().to_string()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Kind-split capacity: 30 manual entries fill the manual cap; a task
+    // fact create still succeeds (independent 50-slot pool).
+    for _ in 0..30 {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/v1/memories",
+            Some(&desktop),
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+                   "op":"create","baseRevision":0,"kind":"preference","body":"x"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+               "op":"create","baseRevision":0,"kind":"preference","body":"over cap"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "memory_capacity");
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/memories",
+        Some(&desktop),
+        json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+               "op":"create","baseRevision":0,"kind":"task_fact","body":"把《新报告》的摘录保存为草稿：结果未知"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a full manual pool must not block the independent fact pool"
+    );
+}

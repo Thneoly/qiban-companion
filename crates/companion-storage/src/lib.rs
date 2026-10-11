@@ -5,6 +5,7 @@ pub mod history;
 pub mod memory;
 pub mod memory_sync_outbox;
 pub mod remote_jobs;
+pub mod task_facts;
 use companion_core::{DomainError, Task};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex, time::Duration};

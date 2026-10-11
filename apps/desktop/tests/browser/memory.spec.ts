@@ -120,3 +120,28 @@ test('unicode count, full capacity, unavailable store and narrow layout remain a
   await expect(panel).not.toContainText('还没有留下记忆');
   await expect(panel.getByRole('button',{name:'导出 JSON'})).toBeDisabled();
 });
+
+test('task facts render read-only with the executor source and no correction button', async ({ page }) => {
+  const panel = page.getByRole('region', { name: '我们的记忆' });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.memoryItems = [
+      { id: crypto.randomUUID(), kind: 'task_fact', body: '把《路线图.txt》的摘录保存为草稿：已核验完成', sourceKind: 'executor', sourceLabel: '来自电脑上的文档任务', eventDate: '2026-10-11', createdAt: 1000, confirmedAt: 1000, updatedAt: 1000, revision: 1 },
+      { id: crypto.randomUUID(), kind: 'preference', body: '手动偏好并存', sourceKind: 'user_manual', sourceLabel: '用户在记忆面板填写', eventDate: null, createdAt: 1000, confirmedAt: 1000, updatedAt: 1000, revision: 1 },
+    ];
+  });
+  await panel.getByRole('button', { name: '刷新记忆' }).click();
+  const cards = panel.locator('article');
+  await expect(cards).toHaveCount(2);
+  const fact = cards.filter({ hasText: '路线图' });
+  await expect(fact).toContainText('任务事实');
+  await expect(fact).toContainText('来自电脑上的文档任务');
+  await expect(fact).toContainText('已核验完成');
+  // No correction entry point on an executor fact; delete stays available.
+  await expect(fact.getByRole('button', { name: '更正', exact: true })).toHaveCount(0);
+  await expect(fact.getByRole('button', { name: '由电脑任务生成，不能手动更正；重做任务会更新。' })).toHaveCount(0);
+  await expect(fact.getByRole('button', { name: '删除', exact: true })).toHaveCount(1);
+  // Manual memories keep their correction button.
+  const manual = cards.filter({ hasText: '手动偏好并存' });
+  await expect(manual.getByRole('button', { name: '更正', exact: true })).toHaveCount(1);
+});
