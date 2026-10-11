@@ -10,10 +10,12 @@ use std::{path::Path, sync::Mutex, time::Duration};
 mod authorization;
 mod memory_sync;
 mod native_auth;
-pub use memory_sync::{
-    MemorySnapshotItem, MemorySyncEvent, MemorySyncOp, MemorySyncResponse, MemoryWrite,
-    MemoryWriteReceipt,
+// Wire types live in companion-core so the desktop sync engine deserializes
+// the exact shapes the coordinator serializes.
+pub use companion_core::memory::{
+    MemorySnapshotItem, MemorySyncEvent, MemorySyncOp, MemorySyncResponse, MemoryWriteReceipt,
 };
+pub use memory_sync::MemoryWrite;
 pub use native_auth::{NativeLogin, NATIVE_ISSUER};
 
 pub struct AccountStore {

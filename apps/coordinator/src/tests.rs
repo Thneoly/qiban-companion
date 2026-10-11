@@ -1375,6 +1375,14 @@ async fn memory_sync_http_roundtrip_conflict_codes_and_shape_strictness() {
                    "op":"create","baseRevision":0,"kind":"preference","body":"x","extra":1})).await.0,
         StatusCode::BAD_REQUEST
     );
+    // A delete carrying the update template's fields is a shape mismatch,
+    // not a delete to accept with silently dropped extras.
+    assert_eq!(
+        call(&app, "POST", "/v1/memories", Some(&desktop),
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"id":uuid::Uuid::new_v4().to_string(),
+                   "op":"delete","baseRevision":0,"kind":"preference","body":"stale text"})).await.0,
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(
         call(
             &app,

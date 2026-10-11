@@ -4,7 +4,10 @@
 //! Event ordering is a global AUTOINCREMENT sequence; per-account monotonicity
 //! follows for free and watermarks stay unique after compaction.
 use super::*;
-use companion_core::memory::{validate_synced_body, MemoryKind, MemorySyncError, MAX_MEMORIES};
+use companion_core::memory::{
+    validate_synced_body, MemoryKind, MemorySyncError, MemorySyncEvent, MemorySyncOp,
+    MemorySyncResponse, MemorySnapshotItem, MemoryWriteReceipt, MAX_MEMORIES,
+};
 use serde::{Deserialize, Serialize};
 
 /// Event retention window. Beyond it the account enters a new sync
@@ -33,7 +36,6 @@ pub(super) fn migrate(c: &mut Connection) -> Result<(), StorageError> {
            PRIMARY KEY(account_id,id),
            CHECK((deleted=0 AND body IS NOT NULL AND length(body) BETWEEN 1 AND 200)
               OR (deleted=1 AND body IS NULL AND event_date IS NULL AND deleted_at IS NOT NULL)));
-         CREATE INDEX account_memories_list ON account_memories(account_id,deleted,created_at);
          CREATE TABLE memory_events (
            account_id TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT,
            memory_id TEXT NOT NULL, op TEXT NOT NULL CHECK(op IN ('upsert','delete')),
@@ -57,73 +59,10 @@ pub(super) fn migrate(c: &mut Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// Snapshot/list item. Active entries carry the full body; tombstones carry
-/// only id and revision so a peer can refuse to resurrect them.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemorySnapshotItem {
-    pub id: String,
-    pub kind: MemoryKind,
-    pub body: Option<String>,
-    pub event_date: Option<String>,
-    pub revision: i64,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MemorySyncOp {
-    Upsert,
-    Delete,
-}
-impl MemorySyncOp {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Upsert => "upsert",
-            Self::Delete => "delete",
-        }
-    }
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "upsert" => Some(Self::Upsert),
-            "delete" => Some(Self::Delete),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemorySyncEvent {
-    pub seq: i64,
-    pub memory_id: String,
-    pub op: MemorySyncOp,
-    pub revision: i64,
-    pub kind: Option<MemoryKind>,
-    pub body: Option<String>,
-    pub event_date: Option<String>,
-    pub occurred_at: i64,
-}
-
-/// Pull answer. `snapshot` is set when the caller's generation or cursor fell
-/// behind the retention window — the client rebuilds from it wholesale.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemorySyncResponse {
-    pub generation: i64,
-    pub cursor: i64,
-    pub pending: bool,
-    pub events: Vec<MemorySyncEvent>,
-    pub snapshot: Option<Vec<MemorySnapshotItem>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryWriteReceipt {
-    pub memory_id: String,
-    pub revision: i64,
-    pub deleted: bool,
-}
+// The wire types (snapshot items, events, pull response, write receipt) live
+// in companion_core::memory so the desktop sync engine deserializes the exact
+// shapes the coordinator serializes. Only MemoryWrite — the storage-domain
+// write input — is defined here.
 
 /// Domain write input shared by the desktop push and the mobile update/delete
 /// routes — both peers meet the same conflict rules. Serialized only to build
@@ -192,6 +131,12 @@ fn record_event(
 /// Drops device rows whose session can no longer authenticate (revoked, or a
 /// native-issuer token gone idle/expired). Called from every pull and write so
 /// a departed device stops gating compaction without waiting for sign-out.
+///
+/// Swept sessions are dead in the auth sense, not merely quiet: a revoked
+/// session cannot refresh, and an idle native token is rejected by verify, so
+/// a returning client always arrives as a NEW session id whose generation-0
+/// pull takes the snapshot path — it can never silently resume from the
+/// compacted-away tail of its predecessor's cursor.
 fn sweep_dead_devices(tx: &Transaction<'_>, account: &str, now: i64) -> Result<(), StorageError> {
     tx.execute(
         "DELETE FROM memory_devices WHERE account_id=?1 AND NOT EXISTS(
@@ -437,11 +382,13 @@ fn apply_write(
             }
             // The exact same delete replayed after a lost response: the base
             // revision plus one is this delete's own tombstone revision.
-            Some((revision, true)) if revision == base_revision + 1 => Ok(MemoryWriteReceipt {
-                memory_id: id.into(),
-                revision,
-                deleted: true,
-            }),
+            Some((revision, true)) if base_revision.checked_add(1) == Some(revision) => {
+                Ok(MemoryWriteReceipt {
+                    memory_id: id.into(),
+                    revision,
+                    deleted: true,
+                })
+            }
             Some((_, _)) => Err(MemorySyncError::RevisionConflict.into()),
             None => Err(StorageError::NotFound),
         },
@@ -475,7 +422,16 @@ impl AccountStore {
             sweep_dead_devices(tx, account, now)?;
             let (server_generation, watermark) = ensure_account_row(tx, account)?;
             let device = identity.session_id();
-            if generation != server_generation || cursor < watermark {
+            // A cursor beyond every seq this server ever issued cannot be
+            // trusted (client bug or corruption); the snapshot is the only
+            // safe recovery. The same branch catches generation rollovers
+            // and cursors behind the retention watermark.
+            let max_seq: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(seq),0) FROM memory_events",
+                [],
+                |r| r.get(0),
+            )?;
+            if generation != server_generation || cursor < watermark || cursor > max_seq {
                 upsert_device(tx, account, device, server_generation, watermark, now)?;
                 let pending: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM memory_events WHERE account_id=?1 AND seq>?2)",
@@ -516,7 +472,12 @@ impl AccountStore {
             let pending = raw.len() > MEMORY_PULL_LIMIT;
             raw.truncate(MEMORY_PULL_LIMIT);
             let new_cursor = raw.last().map(|row| row.0).unwrap_or(cursor);
-            upsert_device(tx, account, device, server_generation, new_cursor, now)?;
+            // Compaction gates on the cursor the CLIENT last reported, not on
+            // what this response hands out: a lost pull response must leave
+            // the events in place for the retry (at-least-once). The device's
+            // row advances only when the next pull proves the client applied
+            // them by sending the new cursor back.
+            upsert_device(tx, account, device, server_generation, cursor, now)?;
             let events = raw
                 .into_iter()
                 .map(
@@ -856,40 +817,60 @@ mod tests {
         let count: i64 = c
             .query_row("SELECT COUNT(*) FROM memory_requests", [], |r| r.get(0))
             .unwrap();
-        assert!(count <= MEMORY_REQUEST_JOURNAL, "journal grew to {count}");
+        // Exactly the bound: under-eviction grows past it, over-eviction
+        // loses replayable retries.
+        assert_eq!(count, MEMORY_REQUEST_JOURNAL, "journal must hold exactly the bound");
     }
 
     #[test]
-    fn compaction_waits_for_lagging_devices_and_unblocks_on_catchup() {
+    fn compaction_waits_for_the_slowest_live_device_and_needs_client_acks() {
         let store = fixture();
         let alice = identity("provider", "alice", "session-a", 100);
         let slow = identity("provider", "alice", "session-slow", 100);
+        let fast = identity("provider", "alice", "session-fast", 100);
         let m1 = uuid::Uuid::new_v4().to_string();
         create(&store, &alice, &m1, "prefer tea").unwrap();
-        // The slow device pulls once, then misses two updates.
-        let anchored = store.pull_memories(&slow, 0, 0).unwrap();
+        // Both devices register via the snapshot; their applied cursor stays 0.
+        for device in [&slow, &fast] {
+            store.pull_memories(device, 0, 0).unwrap();
+        }
         update(&store, &alice, &m1, 1, "v2").unwrap();
         update(&store, &alice, &m1, 2, "v3").unwrap();
-        assert_eq!(
-            events_of(&store, &alice).1,
-            3,
-            "lagging device retains events"
-        );
-        // Catching up, then one more write, releases the retained events…
-        let mut cursor = anchored.cursor;
-        let mut generation = anchored.generation;
+        // The fast device catches up AND reports its new cursor; the slow one
+        // does not. Compaction must gate on the slowest live device (MIN), and
+        // merely handing events out must not count as applying them.
+        let mut fast_cursor = 0;
         loop {
-            let page = store.pull_memories(&slow, generation, cursor).unwrap();
-            cursor = page.cursor;
-            generation = page.generation;
+            let page = store.pull_memories(&fast, 1, fast_cursor).unwrap();
+            fast_cursor = page.cursor;
             if !page.pending {
                 break;
             }
         }
+        // Report: one more pull with the new cursor proves application.
+        store.pull_memories(&fast, 1, fast_cursor).unwrap();
         update(&store, &alice, &m1, 3, "v4").unwrap();
+        assert_eq!(
+            events_of(&store, &alice).1,
+            4,
+            "a lagging live device retains all events"
+        );
+        // The slow device catches up and reports; one more write compacts
+        // everything both devices have proven applied.
+        let mut slow_cursor = 0;
+        loop {
+            let page = store.pull_memories(&slow, 1, slow_cursor).unwrap();
+            slow_cursor = page.cursor;
+            if !page.pending {
+                break;
+            }
+        }
+        store.pull_memories(&slow, 1, slow_cursor).unwrap();
+        update(&store, &alice, &m1, 4, "v5").unwrap();
         let (account, count) = events_of(&store, &alice);
-        // Only the newest event survives: applied-by-all history is gone.
-        assert_eq!(count, 1, "fully applied events should be compacted");
+        // Everything both devices proved applied is gone; the two writes made
+        // after their last report (v4, v5) are the only survivors.
+        assert_eq!(count, 2, "only the unacknowledged newest events remain");
         // …while the mirror row itself survives compaction.
         let c = store.connection.lock().unwrap();
         let rows: i64 = c
@@ -900,6 +881,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn a_lost_pull_response_leaves_events_for_the_retry() {
+        let store = fixture();
+        let alice = identity("provider", "alice", "session-a", 100);
+        let desktop = identity("provider", "alice", "session-desktop", 100);
+        let m1 = uuid::Uuid::new_v4().to_string();
+        create(&store, &alice, &m1, "prefer tea").unwrap();
+        // Both pulls' responses are "lost": the client keeps cursor 0 and
+        // never reports progress; the server must not compact on its behalf.
+        let _dropped = store.pull_memories(&desktop, 1, 0).unwrap();
+        let _dropped = store.pull_memories(&desktop, 1, 0).unwrap();
+        update(&store, &alice, &m1, 1, "v2").unwrap();
+        let page = store.pull_memories(&desktop, 1, 0).unwrap();
+        // The retry still sees every event from the original cursor.
+        assert_eq!(page.events.len(), 2);
+        assert_eq!(page.events[0].body.as_deref(), Some("prefer tea"));
+        assert_eq!(page.events[1].body.as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn pull_pages_large_backlogs_with_pending_until_drained() {
+        let store = fixture();
+        let alice = identity("provider", "alice", "session-a", 100);
+        let desktop = identity("provider", "alice", "session-desktop", 100);
+        let m1 = uuid::Uuid::new_v4().to_string();
+        create(&store, &alice, &m1, "prefer tea").unwrap();
+        // A backlog comfortably past one page but under the window; no device
+        // has ever pulled, so nothing compacts (at-least-once retention).
+        let mut revision = 1;
+        for i in 1..=(MEMORY_PULL_LIMIT as i64 * 2 + 7) {
+            revision += 1;
+            update(&store, &alice, &m1, revision - 1, &format!("v{i}")).unwrap();
+        }
+        let mut cursor = 0;
+        let mut pages = 0usize;
+        let mut total = 0usize;
+        let mut last_seq = 0i64;
+        loop {
+            let page = store.pull_memories(&desktop, 1, cursor).unwrap();
+            assert!(page.snapshot.is_none(), "in-window cursor must replay events");
+            if page.pending {
+                assert_eq!(page.events.len(), MEMORY_PULL_LIMIT, "full pages while pending");
+            }
+            for event in &page.events {
+                assert!(event.seq > last_seq, "events must arrive strictly ordered");
+                last_seq = event.seq;
+            }
+            total += page.events.len();
+            pages += 1;
+            cursor = page.cursor;
+            if !page.pending {
+                break;
+            }
+        }
+        assert_eq!(pages, 3, "407 events page as 200+200+7");
+        assert_eq!(total, MEMORY_PULL_LIMIT * 2 + 8);
     }
 
     #[test]
@@ -1030,6 +1069,12 @@ mod tests {
         let bob_pull = store.pull_memories(&bob, 0, 0).unwrap();
         let snapshot = bob_pull.snapshot.expect("fresh device snapshot");
         assert!(snapshot.is_empty());
+        // The events branch is just as isolated as the snapshot branch.
+        let bob_events = store
+            .pull_memories(&bob, bob_pull.generation, bob_pull.cursor)
+            .unwrap();
+        assert!(bob_events.events.is_empty());
+        assert!(bob_events.snapshot.is_none());
         // The journal is namespaced per account: the same request id under
         // another account is simply a different entry.
         let request_id = uuid::Uuid::new_v4().to_string();
