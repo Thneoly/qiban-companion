@@ -320,6 +320,7 @@ pub async fn personal_memory_policy_set(
             MemoryChanged {
                 context_epoch: result.context_epoch,
                 chat_cleared: result.chat_cleared,
+                remote: false,
             },
         )
         .is_ok();
