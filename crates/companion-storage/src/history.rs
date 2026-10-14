@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 7).unwrap();
+        connection.pragma_update(None, "user_version", 8).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -404,7 +404,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                6
+                7
             );
             let app: (i64, i64) = store
                 .0
@@ -461,7 +461,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                6
+                7
             );
             // Pre-v4 turns had no selections to backfill from: empty ledger.
             let usage: i64 = store
@@ -558,7 +558,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(marker, 1);
-            s.0.pragma_update(None, "user_version", 7).unwrap();
+            s.0.pragma_update(None, "user_version", 8).unwrap();
         }
         let before = std::fs::read(&path).unwrap();
         assert!(matches!(
@@ -641,7 +641,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                6
+                7
             );
             // Backfill: 3 turns x 2 selected app memories = 6 ledger rows,
             // attributed to the migration-time selection with send-time
