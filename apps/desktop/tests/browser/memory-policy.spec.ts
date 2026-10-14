@@ -62,3 +62,32 @@ test('stale model scope is rejected and failed saves retain selection',async({pa
   expect(await page.evaluate(()=>(window as any).policy.enabled)).toBe(false);
   await page.getByRole('button',{name:'刷新记忆'}).click();await expect(region).toContainText('model-b');await expect(checks.first()).not.toBeChecked();
 });
+
+test('task facts are selectable for injection and counted in the preview', async ({ page }) => {
+  // A task fact (executor-sourced) rides the same selection path as manual
+  // memories: default off, selectable, budget-counted (TF-B3). Saving with
+  // exactly the fact selected leaves enabled=false in this mock (it mirrors
+  // the host's empty-selection rule only on `enabled`), but the WRITE carries
+  // the fact id — what the injection path consumes.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.items = [
+      { id: '00000000-0000-4000-8000-00000000000a', kind: 'task_fact', body: '把《路线图.txt》的摘录保存为草稿：已核验完成', eventDate: '2026-10-11', sourceKind: 'executor', sourceLabel: '来自电脑上的文档任务', createdAt: 1, confirmedAt: 1, updatedAt: 1, revision: 1 },
+      { id: '00000000-0000-4000-8000-00000000000b', kind: 'preference', body: '手动偏好', eventDate: null, sourceKind: 'user_manual', sourceLabel: '用户在记忆面板填写', createdAt: 1, confirmedAt: 1, updatedAt: 1, revision: 1 },
+    ];
+  });
+  // The panels already rendered with the initial six-item mock; swap the
+  // items and force a reread before touching checkboxes.
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  const region = page.getByRole('region', { name: '模型记忆许可' });
+  // Checkbox 0 is the enable switch (item checkboxes stay disabled until it
+  // is on); item checkboxes follow in list order — the fact is checkbox 1.
+  const checks = region.getByRole('checkbox');
+  await checks.nth(0).check();
+  const factCheck = checks.nth(1);
+  await expect(factCheck).not.toBeChecked();
+  await factCheck.check();
+  await region.getByRole('button', { name: '保存此模型的记忆设置' }).click();
+  const write = await page.evaluate(() => (window as any).writes[0]);
+  expect(write.selectedIds).toEqual(['00000000-0000-4000-8000-00000000000a']);
+});

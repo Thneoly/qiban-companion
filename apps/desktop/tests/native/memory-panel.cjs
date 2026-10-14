@@ -87,9 +87,51 @@ async function exportFile(destination,overwrite=false){
     db.close();
   }
   const emptyExport=path.join(evidence,'empty.json');await exportFile(emptyExport);assert.deepEqual(JSON.parse(fs.readFileSync(emptyExport,'utf8')).items,[]);
-  await stop();await start();assert.deepEqual((await invoke(panel,'memory_list')).items,[]);assert.deepEqual(await invoke(pet,'chat_history'),[]);
+  // Injection round (TF-C1): rebuild a memory, enable the selection, send,
+  // and prove the audit row's memory_block is BYTE-EQUAL to the memory
+  // segment that actually rode the wire — an independent-source equality,
+  // so a logger writing anything else cannot pass.
+  {
+    await invoke(panel,'memory_mutate',{request:{action:'create',draft:{kind:'preference',body:'注入验收：跨端记忆',eventDate:null},expectedEpoch:(await invoke(panel,'memory_list')).contextEpoch}});
+    const listed=(await invoke(panel,'memory_list')).items;
+    assert.equal(listed.length,1,'exactly the injected memory exists');
+    const scope=(await invoke(pet,'chat_context_preview')).scope;
+    try {
+      await invoke(panel,'memory_policy_set',{request:{expectedScope:scope,expectedRevision:0,expectedEpoch:(await invoke(panel,'memory_list')).contextEpoch,enabled:true,selectedIds:[listed[0].id],restartConversation:false}});
+    } catch (e) {
+      console.log('POLICY_SET_FAILED', String(e && e.message || e));
+      throw e;
+    }
+    const fresh=await invoke(pet,'chat_context_preview');
+    await pet.evaluate(({scope,fresh})=>{const native=window.__TAURI_INTERNALS__;window.injectResult=null;
+      const callback=native.transformCallback(()=>{});
+      native.invoke('chat_generate',{request:{requestId:'m2-inject',prompt:'带记忆的一轮',expectedScope:scope,expectedContextEpoch:fresh.contextEpoch,expectedPersonal:null},onDelta:`__CHANNEL__:${callback}`}).then(v=>{window.injectResult={ok:true,value:v};},e=>{window.injectResult={ok:false,error:e};});
+    },{scope,fresh});
+    for(let n=0;n<100&&requests.length<2;n++)await delay(100);
+    if(requests.length<2){const r=await pet.evaluate(()=>window.injectResult);console.log('INJECT_RESULT',JSON.stringify(r));}
+    assert.equal(requests.length,2,'injection request reached the fixture server');
+    heldResponse.end('data: '+JSON.stringify({choices:[{delta:{content:'好的'}}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{content:'，记住了。'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n');
+    await expect.poll(()=>pet.evaluate(()=>window.injectResult?.ok===true)).toBe(true);
+    assert(JSON.stringify(requests[1]).includes('注入验收'),'the wire carried the memory block');
+    const memoryMessage=requests[1].messages.find(m=>typeof m.content==='string'&&m.content.includes('注入验收'));
+    assert(memoryMessage,'memory segment found in the wire body');
+    const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});
+    const rows=db.prepare('SELECT request_id,outcome,memory_block,memory_count,memory_chars,prompt FROM chat_dispatch_log ORDER BY seq').all();
+    db.close();
+    assert.equal(rows.length,2);
+    assert.equal(rows[1].request_id,'m2-inject');assert.equal(rows[1].outcome,'sent');
+    // The strong pin: the audit's memory_block IS the wire's memory segment.
+    assert.strictEqual(rows[1].memory_block,memoryMessage.content);
+    assert.equal(rows[1].memory_count,1);
+    assert.equal(rows[1].memory_chars,[...memoryMessage.content].length);
+    assert.equal(rows[1].prompt,'带记忆的一轮');
+    // And the equality is discriminating (C4): a corrupted logger writing a
+    // truncated block cannot satisfy it.
+    assert.notStrictEqual(rows[1].memory_block,memoryMessage.content.slice(0,-1));
+  }
+  await stop();await start();assert.deepEqual((await invoke(panel,'memory_list')).items.map(m=>m.body),['注入验收：跨端记忆']);
   await stop();
   const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('SELECT count(*) AS n FROM memories WHERE deleted_at IS NOT NULL AND body IS NULL AND source_label IS NULL').get().n,1);db.close();
-  const result={passed:true,identifier:id,localhostRequests:requests.length,cases:['create and restart','window permission and confirmation','native export cancel/save/overwrite','correct and clear','delete during stream','restart empty and tombstone','empty export without deleted text']};
+  const result={passed:true,identifier:id,localhostRequests:requests.length,cases:['create and restart','window permission and confirmation','native export cancel/save/overwrite','correct and clear','delete during stream','restart empty and tombstone','empty export without deleted text','sent audit byte-equals the wire memory segment']};
   fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await stop();server.closeAllConnections();server.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
