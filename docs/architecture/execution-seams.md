@@ -18,8 +18,8 @@ task_fact 不是"零 schema 改动兑现预留"——对抗审查确认了四层
 |---|---|---|
 | chat-history `memories` 行级 CHECK | 活跃行只允许 preference/experience（memory-schema.sql） | v6 放宽为三值 |
 | `read_active`/`validate_schema` | 遇 task_fact 行直接 `Unavailable`（memory.rs kind match） | kind 感知重构：task_fact 行独立校验（无 event_date 要求、source_kind=`executor`）；**全局 30 校验拆为手动 ≤30 / task_fact ≤50 分列** |
-| 同步引擎两处容量检查 | 桌面物化前 `count(*)` 全 kind 比 30（memory_sync_outbox）；服务端 create 容量同样全 kind（accounts/memory_sync.rs） | 两处都按 kind 分列（服务端是 v8） |
-| 服务端 peer-update 路由 | 接受 kind=task_fact（手机可更正任务事实正文，违背来源唯一） | v8 拒绝：task_fact 只可 delete，不可 create/update |
+| 同步引擎两处容量检查 | 桌面物化前 `count(*)` 全 kind 比 30（memory_sync_outbox）；服务端 create 容量同样全 kind（accounts/memory_sync.rs） | 两处都按 kind 分列（纯查询逻辑，**无 schema 迁移**——实现时确认协调库不需要 v8） |
+| 服务端 peer-update 路由 | 接受 kind=task_fact（手机可更正任务事实正文，违背来源唯一） | 拒绝：task_fact 只可 delete，不可 create/update（同为查询逻辑，无迁移） |
 
 ## 1. task_fact 沉淀管线（主增量）
 
@@ -35,7 +35,7 @@ task_fact 不是"零 schema 改动兑现预留"——对抗审查确认了四层
 
 **失效协调与跨端**：task_fact 的用户删除/更新走既有记忆域（epoch、精准清、enqueue/ack）；跨端展示与删除复用既有管线。**非零代码但小**：服务端 v8（容量分列+peer-update 拒 kind）、桌面物化容量分列、contracts/面板放行展示。旧桌面跳过物化规则不变（skipped_kind 路径）。
 
-**schema 汇总**：chat-history **v6** = memories 行级 CHECK 放宽 + `task_fact_index` + `chat_dispatch_log`（§4）；execution.db **v2** = `execution_fact_pending`；协调库 **v8** = 容量按 kind 分列 + peer-update 拒 task_fact。
+**schema 汇总**：chat-history **v6** = memories 行级 CHECK 放宽 + `task_fact_index` + `chat_dispatch_log` + `reminders`；**v7** = dispatch log 定稿（加 prompt、history_turns 取代 id 区间——6 轮全局逐出会打破区间，诚实的记录是"当时携带了几轮"）；execution.db **v2** = `execution_fact_pending`；协调库**无新版本**（容量分列与 peer 拒更正均为查询逻辑）。
 
 ## 2. 执行器缝（ExecutorProvider）
 
@@ -79,8 +79,8 @@ struct ScopeContract {
 `chat_dispatch_log`（v6 新表）**独立生命周期**——审计行先于轮次产生（取消/超时/epoch 失配的请求没有轮次行），且聊天日常全局逐出（6 轮/1.2 万字）与精准清都不该销毁审计，否则审计窗口静默退化：
 
 - 保留策略：环形最近 **200 条**（超出删最旧），随"全部删除聊天"整体清空；不挂轮次级联。
-- 每行：request_id、结果状态（成功/取消/超时/失配丢弃——失败请求也入账，这是审计的意义）、model/base_url/时间、system 版本号、应用记忆块全文（≤800 字）、个人块摘要、历史轮次区间（指向当时实际携带的轮次，轮次事后被逐出不破坏"当时发了什么"的记录）、实际条数/字数。
-- 重建规则：system 按版本号查常量；记忆块全文在行内；其余按摘要指向。**审计是观察者**，不进任何模型请求。
+- 每行：request_id（UNIQUE——同 id 重发是客户端 bug，拒绝而非静默复制历史）、结果状态（成功/取消/超时/失配丢弃——失败请求也入账，这是审计的意义；流中被"确认并开始新对话"打断记**取消**，显式取消先于迟到回包的失配丢弃）、model/base_url/时间、system 版本号、应用记忆块全文（≤800 字，空段为显式 NULL 标记）、个人块摘要、**当时携带的轮数**与本轮 prompt 全文（id 区间会被 6 轮全局逐出打破——记数量是诚实上限；prompt 让无轮次行的失败请求也可完整重建）、实际条数/字数。
+- 重建规则：system 按版本号查常量；记忆块全文与 prompt 在行内；其余按摘要指向。**审计是观察者**，不进任何模型请求。
 - 与发送边界行的关系：同源于组装函数，预览=下一次，审计=已发生，一致性列入验收。
 - 范围：桌面文字链与文档流确认消息；语音链（voice 轮次）暂不入账，记为边界。
 
