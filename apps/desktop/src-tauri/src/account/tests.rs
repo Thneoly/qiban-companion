@@ -1125,3 +1125,56 @@ async fn executed_task_settles_a_fact_and_syncs_to_the_peer_list() {
         .iter()
         .all(|m| m.kind != companion_core::memory::MemoryKind::TaskFact));
 }
+
+#[tokio::test]
+async fn embedded_mint_self_heals_after_sign_out_everywhere() {
+    // Embedded composition (P1-b PR-1): start the real embedded server on a
+    // process-unique port, mint the local account through it, then kill the
+    // session server-side ("sign out everywhere" from a phone) and prove the
+    // desktop re-mints itself into a working session.
+    let dir = std::env::temp_dir().join(format!("embedded-heal-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let preferred = 46_000 + (std::process::id() % 2_000) as u16;
+    let started = crate::embedded::start(&dir.join("coordinator.db"), preferred)
+        .await
+        .unwrap();
+    let crate::embedded::EmbeddedCoordinator::Started {
+        port,
+        store,
+        shutdown,
+    } = started
+    else {
+        panic!("an external service owns the test port; rerun to re-randomize");
+    };
+    let vault = Arc::new(MemoryVault::default());
+    let mut client = AccountClient::open(&dir.join("account-settings.db"), vault.clone()).unwrap();
+    client.set_port(port).unwrap();
+    // First boot: mint opens the local account and a working session.
+    assert!(client.ensure_local_session(&store).await.unwrap());
+    assert_eq!(client.snapshot().await.unwrap().status, "authenticated");
+    // Server-side "sign out everywhere" (as a phone would trigger): the
+    // desktop session dies and the vault secret is now worthless.
+    let secret = vault.read(&client.scope()).unwrap().unwrap();
+    let hash: [u8; 32] = {
+        use base64::Engine as _;
+        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&secret.token[4..])
+            .unwrap();
+        <sha2::Sha256 as sha2::Digest>::digest(&raw).into()
+    };
+    let identity = store.authenticate_native_token(&hash).unwrap();
+    store.sign_out(&identity, true).unwrap();
+    // The next snapshot hits 401: the request layer clears the vault (same
+    // as any remote revocation) and reports authentication_required.
+    let revoked = client.snapshot().await;
+    assert!(matches!(revoked, Err(e) if e.code == "authentication_required"));
+    // Self-healing: the embedded host re-mints a NEW session (login time
+    // postdates the revocation cutoff) without any user-facing login.
+    assert!(client.ensure_local_session(&store).await.unwrap());
+    assert_eq!(client.snapshot().await.unwrap().status, "authenticated");
+    shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    // Let the serve task observe the flag and drop the SQLite handle; the
+    // cleanup is best-effort (a flaked delete never fails the test).
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

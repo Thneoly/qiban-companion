@@ -41,9 +41,28 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    let gated = Router::new()
-        .route("/v1/auth/request-code", post(request_code))
-        .route("/v1/auth/verify-code", post(verify_code))
+    assemble(state, true)
+}
+
+/// The embedded composition (P1-b): the desktop process hosts the router
+/// itself. Email OTP routes are NOT registered — the embedded form has no
+/// mailer and mints its local session in-process; not mounting them (rather
+/// than disabling them) keeps the attack surface a routing fact, and the
+/// closed-invitation allowlist in NativeAuth stays as the second backstop.
+pub fn router_embedded(state: AppState) -> Router {
+    assemble(state, false)
+}
+
+fn assemble(state: AppState, email_auth: bool) -> Router {
+    let gated = Router::new();
+    let gated = if email_auth {
+        gated
+            .route("/v1/auth/request-code", post(request_code))
+            .route("/v1/auth/verify-code", post(verify_code))
+    } else {
+        gated
+    };
+    let gated = gated
         .route("/v1/me", get(profile))
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/tasks/{id}", get(get_task))

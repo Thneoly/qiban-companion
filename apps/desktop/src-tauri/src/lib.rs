@@ -3,6 +3,7 @@ mod account_vault;
 mod chat;
 mod commands;
 mod credentials;
+mod embedded;
 mod execution;
 mod instance;
 mod memory;
@@ -73,6 +74,64 @@ pub fn run() {
             remote_documents::start(app.handle().clone());
             remote_memory::start(app.handle().clone());
             reminders::start(app.handle().clone());
+            // Embedded LAN coordinator (P1-b PR-1). Boot after the loops so
+            // their first ticks race a ready server, not an absent one. The
+            // listener stays loopback-only until PR-2's browser-facing
+            // defense layer lands (Host allowlist + /api adaptation).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let Some(data_dir) = handle.path().app_local_data_dir().ok() else {
+                        return;
+                    };
+                    let Some(state) = handle.try_state::<account::AccountState>() else {
+                        return;
+                    };
+                    let preferred = state.lock().await.port();
+                    match embedded::start(&data_dir.join("coordinator.db"), preferred).await {
+                        Ok(embedded::EmbeddedCoordinator::Started {
+                            port,
+                            store,
+                            shutdown,
+                        }) => {
+                            if port != preferred {
+                                state.lock().await.migrate_port(port);
+                            }
+                            handle.manage(embedded::ShutdownHandle(shutdown));
+                            // Self-healing: ensure the desktop holds a valid
+                            // local-account session (mint on first boot, on
+                            // 24h expiry, or after a phone-side
+                            // "sign out everywhere"). Retry quietly while the
+                            // server is still warming up.
+                            let healer = handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                loop {
+                                    let account_state = healer.state::<account::AccountState>();
+                                    let outcome = {
+                                        let mut client = account_state.lock().await;
+                                        client.ensure_local_session(&store).await
+                                    };
+                                    match outcome {
+                                        Ok(_) => break,
+                                        Err(_) => {
+                                            tokio::time::sleep(std::time::Duration::from_secs(10))
+                                                .await
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        // Dev workflow: an external coordinator already owns
+                        // the port — keep the email OTP flow untouched.
+                        Ok(embedded::EmbeddedCoordinator::External { port }) => {
+                            eprintln!(
+                                "external coordinator detected on {port}; embedded server not started"
+                            );
+                        }
+                        Err(error) => eprintln!("embedded coordinator unavailable: {error}"),
+                    }
+                });
+            }
             // Fail before showing a hidden-window-only UI if the recovery tray cannot be installed.
             tray::install(app.handle())?;
             let window = app.get_webview_window("pet").ok_or("missing pet window")?;
@@ -185,6 +244,11 @@ pub fn run() {
                 app.state::<Arc<pet::PetState>>()
                     .stopped
                     .store(true, Ordering::Relaxed);
+                // Correctness never depends on the graceful window; this is
+                // the same posture as the background loops above.
+                if let Some(handle) = app.try_state::<embedded::ShutdownHandle>() {
+                    handle.0.store(true, Ordering::Relaxed);
+                }
             }
         });
 }
