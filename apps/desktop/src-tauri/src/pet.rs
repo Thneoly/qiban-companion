@@ -35,6 +35,8 @@ pub struct PetState {
     quiet: AtomicBool,
     force_hit_test: AtomicBool,
     pub stopped: AtomicBool,
+    pub expanded: AtomicBool,
+    compact_position: Mutex<Option<PhysicalPosition<i32>>>,
 }
 fn pet(app: &AppHandle) -> Result<WebviewWindow, String> {
     app.get_webview_window("pet")
@@ -104,6 +106,78 @@ pub fn restore(app: &AppHandle, reset: bool) -> Result<(), String> {
     // No set_focus: tray restoration must not repeatedly steal the working application's focus.
     window.show().map_err(message)
 }
+// The chat keeps the pet's IPC owner and live component; no second model session.
+fn chat_layout(app: &AppHandle, expanded: bool) -> Result<(), String> {
+    let window = pet(app)?;
+    let state = app.state::<Arc<PetState>>();
+    let mut saved = state
+        .compact_position
+        .lock()
+        .map_err(|_| "窗口位置不可用")?;
+    if expanded {
+        if saved.is_some() {
+            return Ok(());
+        }
+        let origin = window.outer_position().map_err(message)?;
+        let old_size = window.outer_size().map_err(message)?;
+        let monitor = window
+            .current_monitor()
+            .map_err(message)?
+            .ok_or("屏幕信息不可用")?;
+        let area = monitor.work_area();
+        let scale = window.scale_factor().map_err(message)?;
+        let width = ((760.0 * scale) as u32).min(area.size.width);
+        let height = ((720.0 * scale) as u32).min(area.size.height);
+        state.expanded.store(true, Ordering::Relaxed);
+        let result = (|| {
+            window.set_size(tauri::PhysicalSize::new(width, height))?;
+            window.set_position(PhysicalPosition::new(
+                clamp_axis(
+                    origin
+                        .x
+                        .saturating_add(old_size.width as i32)
+                        .saturating_sub(width as i32),
+                    area.position.x,
+                    area.size.width,
+                    width,
+                ),
+                clamp_axis(
+                    origin
+                        .y
+                        .saturating_add(old_size.height as i32)
+                        .saturating_sub(height as i32),
+                    area.position.y,
+                    area.size.height,
+                    height,
+                ),
+            ))?;
+            window.set_always_on_top(false)?;
+            Ok::<(), tauri::Error>(())
+        })();
+        if let Err(e) = result {
+            let _ = window.set_size(old_size);
+            let _ = window.set_position(origin);
+            let _ = window.set_always_on_top(true);
+            state.expanded.store(false, Ordering::Relaxed);
+            return Err(message(e));
+        }
+        *saved = Some(origin);
+    } else if let Some(origin) = *saved {
+        window
+            .set_size(tauri::LogicalSize::new(320.0, 440.0))
+            .map_err(message)?;
+        window.set_position(origin).map_err(message)?;
+        recover_position(&window, false).map_err(message)?;
+        window.set_always_on_top(true).map_err(message)?;
+        *saved = None;
+        state.expanded.store(false, Ordering::Relaxed);
+        if let Ok(position) = window.outer_position() {
+            crate::placement::moved(app, position);
+        }
+    }
+    state.force_hit_test.store(true, Ordering::Relaxed);
+    Ok(())
+}
 pub fn open_panel(app: &AppHandle) -> Result<(), String> {
     let panel = app.get_webview_window("main").ok_or("任务面板不可用")?;
     panel.unminimize().map_err(message)?;
@@ -129,6 +203,9 @@ pub fn quiet(app: &AppHandle) -> Result<(), String> {
 pub enum PetAction {
     Ready,
     OpenPanel,
+    OpenChat,
+    ExpandChat,
+    CompactChat,
     OpenSettings,
     OpenMemory,
     Hide,
@@ -142,6 +219,18 @@ pub fn pet_action(app: AppHandle, action: PetAction) -> Result<(), String> {
     match action {
         PetAction::Ready => pet(&app)?.show().map_err(message),
         PetAction::OpenPanel => open_panel(&app),
+        PetAction::ExpandChat => chat_layout(&app, true),
+        PetAction::CompactChat => chat_layout(&app, false),
+        PetAction::OpenChat => {
+            let window = pet(&app)?;
+            app.state::<Arc<PetState>>()
+                .quiet
+                .store(false, Ordering::Relaxed);
+            window.set_focusable(true).map_err(message)?;
+            window.emit("pet-chat-open", ()).map_err(message)?;
+            window.show().map_err(message)?;
+            window.set_focus().map_err(message)
+        }
         PetAction::OpenSettings => {
             open_panel(&app)?;
             app.get_webview_window("main")

@@ -94,7 +94,14 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "pet" {
                 if let WindowEvent::Moved(position) = event {
-                    placement::moved(window.app_handle(), *position);
+                    if !window
+                        .app_handle()
+                        .state::<Arc<pet::PetState>>()
+                        .expanded
+                        .load(Ordering::Relaxed)
+                    {
+                        placement::moved(window.app_handle(), *position);
+                    }
                 }
             }
             if let WindowEvent::CloseRequested { api, .. } = event {

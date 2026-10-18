@@ -3,6 +3,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 async function appearance(page: import('@playwright/test').Page) {
   await page.getByRole('button',{name:'和栖栖互动'}).click();
+  await page.locator('.pet-more summary').click();
   await page.getByRole('button',{name:'角色与场景',exact:true}).click();
 }
 test('missing runtime falls back, model can be removed and preferences survive reload',async({page})=>{
@@ -16,6 +17,7 @@ test('missing runtime falls back, model can be removed and preferences survive r
   await expect(page.locator('.pet-character svg')).toBeVisible();
   await page.getByRole('button',{name:'返回互动'}).click();
   await expect(page.getByRole('alert')).toContainText('已恢复栖栖');
+  await page.locator('.pet-more summary').click();
   await page.getByRole('button',{name:'角色与场景',exact:true}).click();
   await page.getByLabel('场景',{exact:true}).selectOption('none');
   await expect(page.locator('.pet-scene')).toHaveCount(0);

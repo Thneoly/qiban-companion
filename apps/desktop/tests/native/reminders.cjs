@@ -18,7 +18,8 @@ async function start(){
   for(let n=0;n<100;n++){const pages=browser.contexts().flatMap(c=>c.pages());pet=pages.find(p=>p.url().includes('tauri')&&!p.url().includes('view=panel'));panel=pages.find(p=>p.url().includes('view=panel'));if(pet&&panel)break;await delay(100);}
   assert(pet&&panel);await pet.getByRole('button',{name:'和栖栖互动'}).waitFor();
   assert(fs.existsSync(path.join(directory,'instance.lock')),'Wrong build profile; refusing mutations');
-  await invoke(pet,'pet_action',{action:'open_memory'});
+  await invoke(pet,'pet_action',{action:'open_panel'});
+  await panel.getByRole('link',{name:'日常',exact:true}).click();
   await panel.getByRole('region',{name:'应用内提醒'}).waitFor();
 }
 async function stop(){if(browser)await browser.close();browser=undefined;if(child){const process=child;child=undefined;const exited=new Promise(r=>process.once('exit',r));process.kill();await exited;}await delay(400);}

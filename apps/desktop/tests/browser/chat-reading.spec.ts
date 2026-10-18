@@ -82,7 +82,8 @@ test('reading fits pet window and new text respects manual scrolling', async ({ 
   const reader = page.getByRole('region', { name: '对话阅读区' });
   await expect(reader).toContainText('之前的问题');
   const bounds = await page.locator('.pet-dialog').boundingBox();
-  expect(bounds!.height).toBeGreaterThan(350);
+  expect(bounds!.height).toBeGreaterThan(600);
+  expect(bounds!.width).toBeGreaterThan(650);
   const overflow = await reader.evaluate(e => e.scrollWidth - e.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await page.getByLabel('和栖栖说句话').fill('请继续');
@@ -208,4 +209,33 @@ test('preview is visible before send and receipt describes the submitted snapsho
   const request=await page.evaluate(()=>(window as any).lastRequest);expect(request.expectedContextEpoch).toBe(2);expect(request.expectedScope.model).toBe('reading-fixture');expect(request).not.toHaveProperty('memories');
   await page.evaluate(()=>{const w=window as any;w.previewItems=[];w.changeMemory();});
   await expect(page.locator('.chat-memory-receipt')).toHaveCount(0);await expect(page.locator('.chat-memory-preview')).not.toContainText('合成经历');
+});
+
+
+test('wide text chat preserves draft and stream across blur, wraps lines and fits small screens', async ({ page }) => {
+  const input = page.getByLabel('和栖栖说句话');
+  await input.fill('第一段');
+  await input.press('Shift+Enter');
+  await input.press('a');
+  await expect(input).toHaveValue('第一段\na');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(input).toBeVisible();
+  await expect(input).toHaveValue('第一段\na');
+  await input.dispatchEvent('keydown', {key:'Enter',code:'Enter',isComposing:true});
+  expect(await page.evaluate(()=>(window as any).requestCount)).toBe(0);
+  await page.getByRole('button',{name:'收回气泡',exact:true}).click();
+  await expect(input).toHaveValue('第一段\na');
+  await page.getByRole('button',{name:'展开阅读',exact:true}).click();
+  await input.press('Enter');
+  await expect(page.locator('.chat-phase')).toHaveText('等待回复');
+  await page.evaluate(() => { window.dispatchEvent(new Event('blur')); (window as any).streamFixture.part('切换应用后继续回复'); });
+  await expect(page.getByRole('region', {name:'对话阅读区'})).toContainText('切换应用后继续回复');
+  await page.setViewportSize({width:390,height:620});
+  const bounds = await page.locator('.pet-dialog').boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(620);
+  await expect(input).toBeVisible();
+  await page.screenshot({path:test.info().outputPath('wide-chat-small.png')});
+  await page.evaluate(() => (window as any).streamFixture.finish());
 });

@@ -9,6 +9,7 @@ const {DatabaseSync}=require('node:sqlite');
     await h.setup();
     await assert.rejects(()=>h.invoke(h.pet,'execution_list'));checks.push('pet-window-denied');
     await h.invoke(h.pet,'pet_action',{action:'open_panel'});
+    await h.panel.getByRole('link',{name:'文档',exact:true}).click();
     await h.panel.getByRole('button',{name:'打开文档任务',exact:true}).click();
     const source=path.join(h.evidence,'source.txt');fs.writeFileSync(source,'这是第一行。\n这是第二行。\n第三行引用。');
     await h.panel.getByLabel('选择文档',{exact:true}).setInputFiles(source);

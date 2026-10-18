@@ -16,7 +16,10 @@ export function Pet() {
   const [guide, setGuide] = useState(false);
   const [needsGuide, setNeedsGuide] = useState(false);
   const [guideError, setGuideError] = useState('');
-  const [chat, setChat] = useState(false);
+  const [chat, setChat] = useState(() => !nativeDesktop && sessionStorage.getItem('qiban-open-chat') === 'true');
+  const [wideStart, setWideStart] = useState(() => !nativeDesktop && sessionStorage.getItem('qiban-open-chat') === 'true' ? 1 : 0);
+  const readingRef = useRef(false);
+  const resizeQueue = useRef(Promise.resolve());
   const [reading, setReading] = useState(false);
   const [phase, setPhase] = useState<ConversationPhase>('idle');
   const [appearanceOpen, setAppearanceOpen] = useState(false);
@@ -38,7 +41,8 @@ export function Pet() {
       .finally(() => { if (!disposed) setAvatarReady(true); });
     return () => { disposed = true; };
   }, []);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => !nativeDesktop && sessionStorage.getItem('qiban-open-chat') === 'true');
+  useEffect(() => { sessionStorage.removeItem('qiban-open-chat'); }, []);
   // A voice turn under way (transcribing or speaking) survives blur: the
   // companion finishes its sentence instead of cutting off mid-word the
   // moment the user looks elsewhere. Recording is not exempt — the voice hook
@@ -78,6 +82,7 @@ export function Pet() {
           }
           for (const [name, callback] of [
             ['pet-restored', restore],
+            ['pet-chat-open', () => { setHidden(false); setQuiet(false); setGuide(false); setAppearanceOpen(false); setChat(true); setWideStart(value => value + 1); setOpen(true); }],
             ['pet-quiet', () => { setQuiet(true); setOpen(false); }],
             // A due reminder becomes an in-app bubble (never an OS
             // notification); it retracts itself after ten seconds.
@@ -96,7 +101,7 @@ export function Pet() {
       } catch (e) { if (!disposed) { setError(errorMessage(e)); setOpen(true); } }
     }
     void initialize();
-    const blur = () => { if (!appearanceOpenRef.current && !voiceActiveRef.current) setOpen(false); };
+    const blur = () => { if (!appearanceOpenRef.current && !voiceActiveRef.current && !readingRef.current) setOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
     window.addEventListener('blur', blur);
     window.addEventListener('keydown', escape);
@@ -124,6 +129,12 @@ export function Pet() {
     return () => { disposed = true; observer.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', report); };
   }, [open, quiet, hidden, error, guide, appearanceOpen, avatar.appearance.scene, avatar.appearance.opacity, avatar.appearance.renderer, live2dFailed]);
 
+  const wide = open && chat && reading && !guide && !appearanceOpen;
+  readingRef.current = wide;
+  useEffect(() => {
+    if (!nativeDesktop) return;
+    resizeQueue.current = resizeQueue.current.catch(() => {}).then(() => petAction(wide ? 'expand_chat' : 'compact_chat')).catch(e => setError(errorMessage(e)));
+  }, [wide]);
   async function act(action: 'hide' | 'quiet' | 'open_panel' | 'open_settings' | 'open_memory') {
     setError('');
     try {
@@ -145,7 +156,7 @@ export function Pet() {
   }
   return <>
     {!nativeDesktop && <aside className="preview-desktop-note"><strong>栖伴 · 桌面角色预览</strong><p>这里模拟角色形态；真实透明悬浮、托盘和鼠标穿透请运行桌面版。</p><button onClick={restore}>恢复角色预览</button></aside>}
-    <div ref={shell} {...dragEvents} data-scene={avatar.appearance.scene} data-renderer={avatar.appearance.renderer === 'live2d' && avatar.model && !live2dFailed ? 'live2d' : 'svg'} data-dragging={dragging} data-companion-state={presence} className={`pet-shell ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
+    <div ref={shell} {...dragEvents} data-scene={avatar.appearance.scene} data-renderer={avatar.appearance.renderer === 'live2d' && avatar.model && !live2dFailed ? 'live2d' : 'svg'} data-dragging={dragging} data-companion-state={presence} className={`pet-shell ${wide ? 'pet-shell-wide' : ''} ${hidden ? 'pet-hidden' : ''} ${quiet ? 'pet-quiet' : ''}`} style={!nativeDesktop && !wide ? { transform:`translate(${offset.x}px, ${offset.y}px)` } : undefined}>
       {avatar.appearance.scene !== 'none' && avatar.appearance.opacity > 0 && <div data-pet-hit data-pet-drag style={{ opacity: avatar.appearance.opacity / 100 }} className="pet-scene" role="group" aria-label="栖栖的小天地，可拖动背景移动" title="拖动背景或栖栖来移动，轻点栖栖聊天">
         <span className="pet-scene-name">栖栖的小天地</span>
         <div className="pet-scene-window" aria-hidden="true"><i/><i/><i/></div>
@@ -155,11 +166,11 @@ export function Pet() {
         <span className="pet-scene-status">{quiet ? '安静陪伴中 · 托盘可唤回' : companionLabels[presence]}</span>
       </div>}
       {open && <section data-pet-hit className={appearanceOpen ? "pet-dialog pet-dialog-appearance" : reading || guide ? "pet-dialog pet-dialog-reading" : "pet-dialog"} aria-label="栖栖的交互气泡">
-        <header><div className="pet-presence">{reading && <span className="pet-portrait" aria-hidden="true"><AvatarArtwork state={presence}/></span>}<strong>栖栖 <span>{companionLabels[presence]}</span></strong></div><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
+        <header><div data-pet-drag={wide || undefined} className="pet-presence">{reading && <span className="pet-portrait" aria-hidden="true"><AvatarArtwork state={presence}/></span>}<strong>栖栖 <span>{companionLabels[presence]}</span></strong></div><button aria-label="收起气泡" onClick={() => setOpen(false)}>×</button></header>
         {error && <p role="alert" className="pet-error">{error}</p>}
         {appearanceOpen ? <AppearancePanel record={avatar} save={saveAvatar} close={() => setAppearanceOpen(false)}/> : guide ? <FirstUseGuide initialError={guideError} onSettings={() => void act('open_settings')} onLater={() => { setNeedsGuide(false); setGuide(false); }} onComplete={async () => { if (nativeDesktop) await invoke('guide_complete'); setGuideError(''); setNeedsGuide(false); setGuide(false); }}/>
-        : <><div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><button disabled={!avatarReady} onClick={()=>setAppearanceOpen(true)}>角色与场景</button><button onClick={()=>void act('open_settings')}>模型设置</button><button onClick={()=>void act('open_memory')}>我们的记忆</button><button onClick={() => setGuide(true)}>使用指南</button></div>
-        {chat ? <ChatBubble onPhase={setPhase} onReading={setReading} onVoiceActive={setVoiceActive} mouth={mouth}/> : <>
+        : <><div className="pet-mode"><button aria-pressed={!chat} onClick={()=>setChat(false)}>记待办</button><button aria-pressed={chat} onClick={()=>setChat(true)}>聊一聊</button><details className="pet-more"><summary>更多</summary><div><button disabled={!avatarReady} onClick={()=>setAppearanceOpen(true)}>角色与场景</button><button onClick={()=>void act('open_settings')}>模型设置</button><button onClick={()=>void act('open_memory')}>我们的记忆</button><button onClick={() => setGuide(true)}>使用指南</button></div></details></div>
+        {chat ? <ChatBubble readingRequest={wideStart} onPhase={setPhase} onReading={setReading} onVoiceActive={setVoiceActive} mouth={mouth}/> : <>
         <p className="pet-message" role="status">{note}</p>
         <form onSubmit={create}>
           <label className="sr-only" htmlFor="pet-draft">想记下什么？</label>

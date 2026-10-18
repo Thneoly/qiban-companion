@@ -19,7 +19,7 @@ test('output budget is validated, saved, and reloaded without changing provider 
       }
     } });
   });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#settings');
   const budget = page.getByLabel('最大输出 tokens', { exact: true });
   await expect(budget).toHaveValue('2048');
   for (const value of ['', '0', '8193', '256.5']) {

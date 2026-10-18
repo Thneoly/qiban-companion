@@ -124,3 +124,46 @@ html[data-runtime="preview"] .pet-shell { right:16px; bottom:16px; }
 .model-import { position:relative; }
 .model-import input[type=file] { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }
 .model-import:focus-within { outline:2px solid #a48ab6; }
+
+/* Expanded text conversation retains the same live chat and voice controller. */
+.pet-more { position:relative; font-size:10px; }
+.pet-more summary { cursor:pointer; padding:4px 6px; border-radius:6px; background:#f0e9f7; color:#6e557f; }
+.pet-more>div { display:flex; flex-wrap:wrap; gap:5px; padding-top:6px; }
+.pet-more[open] { flex-basis:100%; }
+.pet-dialog textarea { box-sizing:border-box; min-width:0; width:100%; flex:1; resize:none; border:1px solid #ded2e8; border-radius:9px; padding:8px; background:#fff; color:#51465e; font:inherit; font-size:12px; line-height:1.6; }
+.chat-model-details { flex-shrink:0; font-size:10px; color:#887792; margin-top:5px; }
+.chat-model-details summary { cursor:pointer; }
+.pet-shell-wide { width:100%; height:100%; right:0; bottom:0; }
+html[data-runtime="preview"] .pet-shell-wide { width:min(760px,calc(100vw - 24px)); height:min(720px,calc(100vh - 24px)); right:12px; bottom:12px; }
+.pet-shell-wide>.pet-character,.pet-shell-wide>.pet-scene { display:none; }
+.pet-shell-wide .pet-dialog-reading { inset:0; width:100%; height:100%; max-height:none; border-radius:20px; padding:20px 24px; background:#fffcfa; }
+.pet-shell-wide .pet-presence { flex:1; cursor:grab; touch-action:none; }
+.pet-shell-wide .pet-dialog header strong { font-size:18px; }
+.pet-shell-wide .pet-mode { margin:12px 0; gap:8px; }
+.pet-shell-wide .pet-mode button,.pet-shell-wide .pet-more summary { font-size:12px; padding:6px 10px; }
+.pet-shell-wide .chat-state-line { font-size:12px; margin:4px 0 8px; }
+.pet-shell-wide .chat-reader { min-height:90px; border:0; background:#f7f2f7; margin:0 0 12px; }
+.pet-shell-wide .chat-reading-thread { padding:20px 24px; font-size:16px; line-height:1.9; }
+.pet-shell-wide .chat-speaker { font-size:12px; margin-top:8px; }
+.pet-shell-wide .chat-turn+.chat-turn { padding-top:18px; margin-top:16px; }
+.pet-shell-wide .chat-boundary { font-size:11px; margin:6px 0; }
+.pet-shell-wide .chat-boundary-host { max-width:220px; }
+.pet-shell-wide .chat-memory-preview { font-size:11px; }
+.pet-shell-wide .chat-memory-preview>div { max-height:90px; }
+.pet-shell-wide .chat-bubble>form { display:grid; grid-template-columns:1fr auto auto; gap:8px; flex-shrink:0; }
+.pet-shell-wide textarea { grid-column:1/-1; font-size:15px; max-height:160px; }
+.chat-input-hint { font-size:11px; color:#887792; align-self:center; }
+.pet-shell-wide .pet-save,.pet-shell-wide .pet-voice { padding:9px 16px; font-size:13px; }
+.pet-shell-wide .chat-session-controls { font-size:11px; margin:8px 0 0; }
+.pet-shell-wide .chat-session-controls button,.pet-shell-wide .pet-actions button { font-size:11px; padding:6px 9px; }
+.pet-shell-wide .chat-status { font-size:11px; }
+.pet-shell-wide .chat-model-details[open] { max-height:60px; overflow:auto; }
+@media(max-width:480px),(max-height:560px) {
+  .pet-shell-wide .pet-dialog-reading { padding:12px; }
+  .pet-shell-wide .chat-reading-thread { padding:12px; font-size:14px; }
+  .pet-shell-wide .pet-mode { margin:5px 0; }
+  .pet-shell-wide textarea { max-height:74px; }
+  .pet-shell-wide .chat-input-hint { font-size:9px; }
+}
+
+.chat-state-line>button { margin-left:auto; border:1px solid #ded2e8; border-radius:7px; padding:4px 7px; font-size:11px; color:#6e557f; background:#fff; white-space:nowrap; }
