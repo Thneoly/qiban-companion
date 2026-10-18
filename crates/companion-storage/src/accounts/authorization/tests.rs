@@ -310,9 +310,18 @@ fn shared_document_confirmation_receipt_and_cancellation_are_exact() {
     s.cancel_document(&m, &cancelled.binding.action_id).unwrap();
     assert!(s.admit_action(&d, &cancelled.binding).is_err());
     s.revoke_pairing(&d, &p.id, p.revision).unwrap();
+    // Revoking now also retires the controller's session (the embedded
+    // admission semantics): the evicted phone cannot even read state — the
+    // desktop still can, proving the completed record itself is untouched.
+    assert!(matches!(
+        s.document_action(&m, &b.action_id),
+        Err(StorageError::Identity(
+            companion_core::identity::IdentityError::SessionEnded
+        ))
+    ));
     s.clock = || 301001;
     assert_eq!(
-        s.document_action(&m, &b.action_id)
+        s.document_action(&d, &b.action_id)
             .unwrap()
             .authorization
             .state,
@@ -770,4 +779,45 @@ fn malformed_capabilities_column_degrades_without_breaking_the_list() {
         "degraded, not fatal"
     );
     assert!(listed[0].desktop_online, "presence itself still readable");
+}
+#[test]
+fn exchange_trades_a_code_for_a_controller_session_and_consumes_it() {
+    // The embedded shape: ONE local NATIVE account (minted by the desktop
+    // host), no email identities at all.
+    let mut s = fixture();
+    s.mint_local_session("local-desktop", &[1; 32], None)
+        .unwrap();
+    let d = s.authenticate_native_token(&[1; 32]).unwrap();
+    s.offer_pairing(&d, "桌面").unwrap();
+    // Wrong codes burn the account budget and lock it after five tries.
+    for _ in 0..4 {
+        assert!(s.exchange_pairing_code("000000", "手机", &[9; 32]).is_err());
+    }
+    assert!(matches!(
+        s.exchange_pairing_code("000000", "手机", &[9; 32]),
+        Err(StorageError::Authorization(Error::RateLimited))
+    ));
+    // A fresh window: the right code admits the phone as controller, binds
+    // its NEW session, flips the pairing active, and consumes the code.
+    s.clock = || 301_001;
+    let offer = s.offer_pairing(&d, "桌面").unwrap();
+    let (pairing, login) = s
+        .exchange_pairing_code(&offer.code, "手机", &[7; 32])
+        .unwrap();
+    assert_eq!(pairing.status, "active");
+    assert_eq!(pairing.current_role, "controller");
+    assert!(s.authenticate_native_token(&[7; 32]).is_ok());
+    // The code is spent: a second exchange with a different hash fails.
+    assert!(s
+        .exchange_pairing_code(&offer.code, "手机", &[8; 32])
+        .is_err());
+    // Idempotent recovery: retrying with the SAME hash regains the session.
+    let (again, login_again) = s
+        .exchange_pairing_code(&offer.code, "手机", &[7; 32])
+        .unwrap();
+    assert_eq!(login.session_id, login_again.session_id);
+    assert_eq!(again.status, "active");
+    // Revoking the pairing evicts the phone's session (admission semantics).
+    s.revoke_pairing(&d, &pairing.id, pairing.revision).unwrap();
+    assert!(s.authenticate_native_token(&[7; 32]).is_err());
 }

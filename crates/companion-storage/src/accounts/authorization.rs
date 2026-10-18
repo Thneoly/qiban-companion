@@ -260,9 +260,165 @@ impl AccountStore {
             if p.status!="revoked" {
                 tx.execute("UPDATE device_pairings SET status='revoked',code_hash=NULL,revision=revision+1 WHERE account_id=?1 AND id=?2",params![a.account_id,id])?;
                 invalidate(tx,&a.account_id,"pairing_id",id)?;
+                // Revoking a pairing also retires the controller's session:
+                // in the embedded form the pairing code WAS the admission
+                // token, so "unpair this phone" must actually evict it. The
+                // controller row carries that session's id.
+                if let Some(controller) = p.controller_id.as_deref() {
+                    let session: Option<String> = tx
+                        .query_row(
+                            "SELECT session_id FROM paired_devices WHERE account_id=?1 AND id=?2",
+                            params![a.account_id, controller],
+                            |r| r.get::<_, Option<String>>(0),
+                        )
+                        .optional()?
+                        .flatten()
+                        .filter(|s| !s.is_empty());
+                    if let Some(session) = session {
+                        tx.execute(
+                            "UPDATE account_sessions SET revoked=1 WHERE account_id=?1 AND session_id=?2",
+                            params![a.account_id, session],
+                        )?;
+                        tx.execute(
+                            "DELETE FROM native_tokens WHERE account_id=?1 AND session_id=?2",
+                            params![a.account_id, session],
+                        )?;
+                    }
+                }
             }
             pair(tx,&a.account_id,id,identity,now)
         })
+    }
+    /// Embedded-only admission (P1-b): a controllerless phone trades a
+    /// pairing CODE for a full account session in ONE transaction. This is
+    /// accept_pairing's complete semantics — guarded code check with the
+    /// account's failure budget, name validation, pending-state and expiry,
+    /// controller registration, code consumption — plus session minting, in
+    /// the order mint-then-accept so the pairing row binds the NEW session.
+    /// Idempotent by token hash: a lost response is recovered by retrying
+    /// with the same client nonce (same derived hash).
+    ///
+    /// Single-account form by construction (the embedded host creates one
+    /// local account); more than one NATIVE account is refused rather than
+    /// guessing which budget a wrong code should burn.
+    pub fn exchange_pairing_code(
+        &self,
+        code: &str,
+        label: &str,
+        token_hash: &[u8],
+    ) -> Result<(Pairing, super::native_auth::NativeLogin), StorageError> {
+        let label = name(label)?.to_string();
+        let mut c = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = (self.clock)();
+        type AccountRow = (String, String);
+        let account: Option<AccountRow> = tx
+            .query_row(
+                "SELECT id,subject FROM accounts WHERE issuer=?1 ORDER BY rowid",
+                params![super::native_auth::NATIVE_ISSUER],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (account_id, subject) = account.ok_or(Error::Denied)?;
+        // A second NATIVE account means this store is not the embedded one.
+        let second: Option<String> = tx
+            .query_row(
+                "SELECT id FROM accounts WHERE issuer=?1 AND id<>?2",
+                params![super::native_auth::NATIVE_ISSUER, account_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if second.is_some() {
+            return Err(Error::Denied.into());
+        }
+        // Idempotent recovery: the same token hash regains the existing
+        // session (only the nonce holder can derive this hash).
+        if let Some(login) = super::native_auth::recover_login(&tx, token_hash, now as i64)? {
+            let identity = VerifiedIdentity::from_verified_provider(
+                super::native_auth::NATIVE_ISSUER,
+                &subject,
+                &login.session_id,
+                now,
+                login.expires_at.min(now + 1_800_000),
+            )?;
+            let pairing: Option<Pairing> = tx
+                .query_row(
+                    "SELECT id FROM device_pairings WHERE account_id=?1 AND controller_id=(SELECT id FROM paired_devices WHERE account_id=?1 AND session_id=?2)",
+                    params![account_id, login.session_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .map(|id| pair(&tx, &account_id, &id, &identity, now))
+                .transpose()?;
+            if let Some(pairing) = pairing {
+                tx.commit()?;
+                return Ok((pairing, login));
+            }
+        }
+        // The account's failure budget, mirrored from guarded_preview.
+        let limit: Option<(i64, u32)> = tx
+            .query_row(
+                "SELECT window_start,failures FROM pairing_code_limits WHERE account_id=?1",
+                [&account_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let clock = i64::try_from(now).map_err(|_| StorageError::InvalidTimestamp)?;
+        if limit.is_some_and(|(start, failures)| {
+            start < 0 || clock < start || (clock - start < 300_000 && failures >= 5)
+        }) {
+            return Err(Error::RateLimited.into());
+        }
+        let pending: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT id,offer_expires FROM device_pairings WHERE account_id=?1 AND code_hash=?2 AND status='pending'",
+                params![account_id, hash(code)?],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let pairing_id = match pending {
+            Some((id, expires)) if clock < expires => id,
+            Some(_) | None => {
+                let (start, failures) = match limit {
+                    Some((start, failures)) if clock - start < 300_000 => (start, failures + 1),
+                    _ => (clock, 1),
+                };
+                tx.execute(
+                    "INSERT INTO pairing_code_limits VALUES(?1,?2,?3) ON CONFLICT(account_id) DO UPDATE SET window_start=excluded.window_start,failures=excluded.failures",
+                    params![account_id, start, failures],
+                )?;
+                // Wrong-code attempts must SURVIVE the rejection: commit the
+                // budget before returning (guarded_preview's contract, which
+                // relied on the access layer committing inner errors).
+                tx.commit()?;
+                return Err(if failures >= 5 {
+                    Error::RateLimited.into()
+                } else {
+                    Error::Denied.into()
+                });
+            }
+        };
+        // Mint first, then accept under the new session's identity so the
+        // controller row binds THIS session.
+        let login = Self::open_session(&tx, &subject, token_hash, clock)?;
+        let identity = VerifiedIdentity::from_verified_provider(
+            super::native_auth::NATIVE_ISSUER,
+            &subject,
+            &login.session_id,
+            now,
+            login.expires_at.min(now + 1_800_000),
+        )?;
+        let controller = device(&tx, &account_id, &identity, &label)?;
+        tx.execute(
+            "UPDATE device_pairings SET controller_id=?1,status='active',revision=revision+1,code_hash=NULL WHERE account_id=?2 AND id=?3",
+            params![controller, account_id, pairing_id],
+        )?;
+        let pairing = pair(&tx, &account_id, &pairing_id, &identity, now)?;
+        tx.commit()?;
+        Ok((pairing, login))
     }
     /// Trusted executor adapter only. A concrete local resource replaces an arbitrary path.
     pub fn set_authorized_resource(

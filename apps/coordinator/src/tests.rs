@@ -1517,3 +1517,95 @@ async fn task_facts_are_phone_uncorrectable_and_capacity_splits_by_kind() {
         "a full manual pool must not block the independent fact pool"
     );
 }
+
+#[tokio::test]
+async fn shell_exchange_admits_a_phone_with_a_cookie_and_consumes_the_code() {
+    // Embedded end-to-end over the shell router: mint the local account
+    // in-process (the embedded host's path), offer a pairing from it, then
+    // admit a phone by code through the browser face.
+    let path = std::env::temp_dir().join(format!("qiban-shell-{}.db", uuid::Uuid::new_v4()));
+    let store = Arc::new(AccountStore::open(&path).unwrap());
+    let auth = NativeAuth::new(
+        store.clone(),
+        Arc::new(TestMail::default()),
+        [42; 32],
+        &["alice@example.com".into()],
+    )
+    .unwrap();
+    let app = lan_shell::shell_router(
+        AppState::new(auth, store.clone()),
+        lan_shell::ShellConfig {
+            port: 4321,
+            assets: None,
+        },
+    );
+    store
+        .mint_local_session("local-desktop", &[1; 32], None)
+        .unwrap();
+    let desktop = store.authenticate_native_token(&[1; 32]).unwrap();
+    let offer = store.offer_pairing(&desktop, "桌面").unwrap();
+
+    let client_nonce = nonce();
+    let exchange = |code: &str, nonce: &str| {
+        let app = app.clone();
+        let body = serde_json::json!({"code": code, "name": "我的手机", "nonce": nonce});
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pairings/exchange")
+                    .header("host", "192.168.1.5:4321")
+                    .header("origin", "http://192.168.1.5:4321")
+                    .header("x-qiban-request", "1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    // A wrong code is refused with the pairing budget's error and NO cookie.
+    let refused = exchange("000000", &client_nonce).await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    // The right code admits: HttpOnly cookie, no token in the body.
+    let admitted = exchange(&offer.code, &client_nonce).await;
+    assert_eq!(admitted.status(), StatusCode::OK);
+    let cookie = admitted
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .find_map(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    assert!(cookie.starts_with("qiban_local_session=qbs_") && cookie.contains("HttpOnly"));
+    let body = to_bytes(admitted.into_body(), 4096).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["authenticated"], true);
+    assert!(value.get("accessToken").is_none());
+    // The cookie rides /api/state as a working controller session.
+    let token = cookie.split(';').next().unwrap().to_string();
+    let state = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/state")
+                .header("host", "192.168.1.5:4321")
+                .header("cookie", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state.status(), StatusCode::OK);
+    let body = to_bytes(state.into_body(), 4096).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert!(value["tasks"].is_array() && value["profile"]["accountId"].is_string());
+    // The code is spent: a second exchange with a fresh nonce fails.
+    assert_ne!(
+        exchange(&offer.code, &nonce()).await.status(),
+        StatusCode::OK
+    );
+    drop(app);
+    let _ = std::fs::remove_file(&path);
+}

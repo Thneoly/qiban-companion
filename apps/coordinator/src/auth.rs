@@ -140,6 +140,25 @@ impl NativeAuth {
     // The session secret is derived from a client-chosen login nonce so a lost
     // verify response can be recovered by retrying with the same nonce; without
     // the pepper, the nonce alone never reveals or forges the token.
+    /// Validate a client nonce (43-char base64 of 32 bytes) and derive the
+    /// session token secret from it. Shared by verify-code's replay recovery
+    /// and the embedded exchange endpoint's idempotency: the same nonce
+    /// always derives the same token hash, so a lost response is recovered
+    /// by retrying.
+    pub fn derive_session_secret(&self, nonce: &str) -> Result<Zeroizing<[u8; 32]>, AuthError> {
+        if nonce.len() != 43 {
+            return Err(AuthError::InvalidCode);
+        }
+        let secret = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(nonce)
+                .map_err(|_| AuthError::InvalidCode)?,
+        );
+        if secret.len() != 32 {
+            return Err(AuthError::InvalidCode);
+        }
+        Ok(Zeroizing::new(self.token_from_nonce(&secret)))
+    }
     fn token_from_nonce(&self, nonce: &[u8]) -> [u8; 32] {
         let mut mac =
             Hmac::<Sha256>::new_from_slice(self.pepper.as_ref()).expect("HMAC accepts 32-byte key");
