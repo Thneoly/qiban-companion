@@ -30,7 +30,7 @@
       }
     },
     "resources": {
-      "../../apps/mobile-web/dist": "mobile-web/"
+      "../../mobile-web/dist": "mobile-web/"
     }
   }
 }
