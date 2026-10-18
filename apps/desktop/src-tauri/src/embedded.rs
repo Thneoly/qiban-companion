@@ -9,7 +9,7 @@
 //! until then the listener below stays loopback-only.
 use base64::Engine as _;
 use companion_coordinator::auth::{CodeMailer, MailResult, NativeAuth};
-use companion_coordinator::{router_embedded, AppState};
+use companion_coordinator::AppState;
 use companion_storage::accounts::AccountStore;
 use sha2::{Digest, Sha256};
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -52,15 +52,23 @@ pub struct ShutdownHandle(pub Arc<AtomicBool>);
 /// Boot the embedded coordinator on `preferred`, or a nearby port when it is
 /// taken by something that is NOT a coordinator. When a coordinator-looking
 /// service already listens (dev workflow), return External and start nothing.
-pub async fn start(db_path: &Path, preferred: u16) -> Result<EmbeddedCoordinator, String> {
+/// `assets` is the mobile-web dist directory for the browser face (None in
+/// dev builds without bundled resources — static paths then 404).
+pub async fn start(
+    db_path: &Path,
+    preferred: u16,
+    assets: Option<std::path::PathBuf>,
+) -> Result<EmbeddedCoordinator, String> {
     if coordinator_like(preferred).await {
         return Ok(EmbeddedCoordinator::External { port: preferred });
     }
-    // Loopback only until the defense layer lands (PR-2); the LAN listener
-    // switch is a one-line address change gated on that PR.
+    // LAN listener: the shell's defense layer (Host allowlist, CSRF
+    // posture, cookie translation, route allowlist, rate limit, security
+    // headers) shipped with this change and gates the 0.0.0.0 exposure.
     for port in candidate_ports(preferred) {
         let listener =
-            match tokio::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await
+            match tokio::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+                .await
             {
                 Ok(listener) => listener,
                 Err(_) => continue,
@@ -82,8 +90,15 @@ pub async fn start(db_path: &Path, preferred: u16) -> Result<EmbeddedCoordinator
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = shutdown.clone();
         let served = store.clone();
+        let shell = companion_coordinator::lan_shell::shell_router(
+            AppState::new(auth, served),
+            companion_coordinator::lan_shell::ShellConfig {
+                port,
+                assets: assets.filter(|dir| dir.is_dir()),
+            },
+        );
         tauri::async_runtime::spawn(async move {
-            let _ = axum::serve(listener, router_embedded(AppState::new(auth, served)))
+            let _ = axum::serve(listener, shell)
                 .with_graceful_shutdown(async move {
                     while !flag.load(Ordering::Relaxed) {
                         tokio::time::sleep(Duration::from_millis(200)).await;

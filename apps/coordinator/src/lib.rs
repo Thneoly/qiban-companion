@@ -1,6 +1,7 @@
 pub mod auth;
 mod devices;
 mod documents;
+pub mod lan_shell;
 mod memories;
 mod pairing;
 
@@ -41,7 +42,7 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    assemble(state, true)
+    with_health(assemble(state, true, "/v1"))
 }
 
 /// The embedded composition (P1-b): the desktop process hosts the router
@@ -50,52 +51,76 @@ pub fn router(state: AppState) -> Router {
 /// than disabling them) keeps the attack surface a routing fact, and the
 /// closed-invitation allowlist in NativeAuth stays as the second backstop.
 pub fn router_embedded(state: AppState) -> Router {
-    assemble(state, false)
+    with_health(assemble(state, false, "/v1"))
 }
 
-fn assemble(state: AppState, email_auth: bool) -> Router {
+// Health checks stay outside the request limiter so a saturated mail
+// pipeline cannot hide process liveness from operators and launch scripts.
+fn with_health(router: Router) -> Router {
+    router.route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
+}
+
+/// Mount the coordinator surface under `prefix` ("/v1" for the desktop's
+/// loopback client; "/api" for the embedded browser face — same handlers,
+/// two mounts, because a URI rewrite cannot re-route after matching).
+pub(crate) fn assemble(state: AppState, email_auth: bool, prefix: &str) -> Router {
+    let at = |path: &str| format!("{prefix}{path}");
     let gated = Router::new();
     let gated = if email_auth {
         gated
-            .route("/v1/auth/request-code", post(request_code))
-            .route("/v1/auth/verify-code", post(verify_code))
+            .route(at("/auth/request-code").as_str(), post(request_code))
+            .route(at("/auth/verify-code").as_str(), post(verify_code))
     } else {
         gated
     };
     let gated = gated
-        .route("/v1/me", get(profile))
-        .route("/v1/tasks", get(list_tasks).post(create_task))
-        .route("/v1/tasks/{id}", get(get_task))
-        .route("/v1/tasks/{id}/cancel", post(cancel_task))
-        .route("/v1/logout", post(sign_out))
-        .route("/v1/devices/heartbeat", post(devices::heartbeat))
-        .route("/v1/pairings", get(pairing::list))
-        .route("/v1/pairings/offer", post(pairing::offer))
-        .route("/v1/pairings/preview", post(pairing::preview))
-        .route("/v1/pairings/accept", post(pairing::accept))
-        .route("/v1/pairings/{id}/revoke", post(pairing::revoke))
-        .route("/v1/documents", get(documents::list).post(documents::share))
-        .route("/v1/documents/{id}", get(documents::get_one))
-        .route("/v1/documents/{id}/confirm", post(documents::confirm))
-        .route("/v1/documents/{id}/admit", post(documents::admit))
-        .route("/v1/documents/{id}/cancel", post(documents::cancel))
-        .route("/v1/documents/{id}/delete", post(documents::delete))
-        .route("/v1/documents/{id}/receipt", post(documents::receipt))
-        .route("/v1/memories", get(memories::list).post(memories::push))
-        .route("/v1/memories/sync", get(memories::sync))
-        .route("/v1/memories/{id}/update", post(memories::update))
-        .route("/v1/memories/{id}/delete", post(memories::delete))
+        .route(at("/me").as_str(), get(profile))
+        .route(at("/tasks").as_str(), get(list_tasks).post(create_task))
+        .route(at("/tasks/{id}").as_str(), get(get_task))
+        .route(at("/tasks/{id}/cancel").as_str(), post(cancel_task))
+        .route(at("/logout").as_str(), post(sign_out))
+        .route(at("/devices/heartbeat").as_str(), post(devices::heartbeat))
+        .route(at("/pairings").as_str(), get(pairing::list))
+        .route(at("/pairings/offer").as_str(), post(pairing::offer))
+        .route(at("/pairings/preview").as_str(), post(pairing::preview))
+        .route(at("/pairings/accept").as_str(), post(pairing::accept))
+        .route(at("/pairings/{id}/revoke").as_str(), post(pairing::revoke))
+        .route(
+            at("/documents").as_str(),
+            get(documents::list).post(documents::share),
+        )
+        .route(at("/documents/{id}").as_str(), get(documents::get_one))
+        .route(
+            at("/documents/{id}/confirm").as_str(),
+            post(documents::confirm),
+        )
+        .route(at("/documents/{id}/admit").as_str(), post(documents::admit))
+        .route(
+            at("/documents/{id}/cancel").as_str(),
+            post(documents::cancel),
+        )
+        .route(
+            at("/documents/{id}/delete").as_str(),
+            post(documents::delete),
+        )
+        .route(
+            at("/documents/{id}/receipt").as_str(),
+            post(documents::receipt),
+        )
+        .route(
+            at("/memories").as_str(),
+            get(memories::list).post(memories::push),
+        )
+        .route(at("/memories/sync").as_str(), get(memories::sync))
+        .route(at("/memories/{id}/update").as_str(), post(memories::update))
+        .route(at("/memories/{id}/delete").as_str(), post(memories::delete))
         .layer(DefaultBodyLimit::max(16384))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             response_boundary,
         ))
         .with_state(state);
-    // Health checks stay outside the request limiter so a saturated mail
-    // pipeline cannot hide process liveness from operators and launch scripts.
-    Router::new()
-        .route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
-        .merge(gated)
+    gated
 }
 
 // There is deliberately no cookie authentication, CORS wildcard, remote

@@ -1135,7 +1135,7 @@ async fn embedded_mint_self_heals_after_sign_out_everywhere() {
     let dir = std::env::temp_dir().join(format!("embedded-heal-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let preferred = 46_000 + (std::process::id() % 2_000) as u16;
-    let started = crate::embedded::start(&dir.join("coordinator.db"), preferred)
+    let started = crate::embedded::start(&dir.join("coordinator.db"), preferred, None)
         .await
         .unwrap();
     let crate::embedded::EmbeddedCoordinator::Started {
