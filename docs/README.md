@@ -8,7 +8,7 @@
 | 分类 | 文档 | 用途 |
 |---|---|---|
 | 产品 | [有限记忆设计](product/limited-memory.md) · [任务事实设计](product/task-facts.md) · [可行性报告](product/feasibility-report.md) · [商业决策](product/commercial-decision.md) | 目标客户、市场、产品形态与收益假设 |
-| 计划 | [敏捷阶段门计划](planning/agile-stage-gate-plan.md) · [交付待办](planning/delivery-backlog.md) | 目标、产能、依赖、准入准出 |
+| 计划 | [敏捷阶段门计划](planning/agile-stage-gate-plan.md) · [交付待办](planning/delivery-backlog.md) · [P1试用版方案](planning/p1-trial.md) | 目标、产能、依赖、准入准出 |
 | 架构 | [设备配对与动作授权](architecture/device-authorization.md) · [手机入口策略](architecture/mobile-client-strategy.md) · [手机伙伴接续](architecture/device-continuity.md) · [有限记忆技术设计](architecture/limited-memory.md) · [执行缝与任务事实技术设计](architecture/execution-seams.md) · [工程架构](architecture/overview.md) · [技术可行性](architecture/technical-feasibility.md) | 当前代码边界及目标架构 |
 | 质量 | [Q6执行与复核手册](quality/memory-q6-runbook.md) · [有限记忆验收设计](quality/limited-memory-acceptance.md) · [任务事实与发送审计验收设计](quality/task-fact-acceptance.md) · [M4准出评审](quality/m4-exit-review.md) · [首次使用验收单](quality/first-use-acceptance.md) · [真实设备联合验收单](quality/real-device-acceptance.md) · [设计评审](quality/design-review.md) · [测量与验收协议](quality/verification-protocol.md) | 设计缺口、处理记录、验证方法 |
 | 研究 | [基础假设审视](research/foundational-hypotheses-review.md) · [验证工具包](research/validation-kit.md) · [模拟协议](research/simulation-protocol.md) | 早期探索材料，不等同实际客户证据 |
