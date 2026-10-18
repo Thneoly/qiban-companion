@@ -33,6 +33,8 @@
     "core:event:allow-unlisten",
     "allow-model-settings-get",
     "allow-model-settings-save",
+    "allow-model-settings-test",
+    "allow-voice-settings-test",
     "allow-model-key-set",
     "allow-model-key-delete",
     "allow-memory-list",

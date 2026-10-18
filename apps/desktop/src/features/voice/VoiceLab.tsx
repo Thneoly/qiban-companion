@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
-import { decodeModelSettings, decodeVoiceResult, decodeVoiceSettings, type VoiceResult } from '@companion/contracts';
+import { decodeModelSettings, decodeModelTestOutcome, decodeVoiceResult, decodeVoiceSettings, type VoiceResult } from '@companion/contracts';
 import { nativeDesktop } from '../../lib/surface';
 import { normalizeRecording } from './audio';
 
@@ -130,6 +130,7 @@ function VoiceProbe() {
       <label><input type="checkbox" checked={useVoiceKey} onChange={e => setUseVoiceKey(e.target.checked)}/>语音服务需要 API Key</label>
       <button type="button" disabled={!voiceBase.trim() || !useVoiceKey} onClick={async () => { setKeyBusy(true); try { await invoke('voice_key_set', { baseUrl: voiceBase.trim() }); setNote('已为该语音地址保存系统密钥，文字服务设置未改动。'); } catch (e) { setNote(typeof e === 'string' ? e : '密钥设置未完成'); } finally { setKeyBusy(false); } }}>设置语音密钥</button>
       <button type="button" disabled={!voiceBase.trim() || !asr.trim() || !tts.trim() || !voice.trim()} onClick={async () => { try { await invoke('voice_settings_save', { config: { voiceBaseUrl: voiceBase.trim(), useVoiceKey, asrModel: asr.trim(), ttsModel: tts.trim(), voice: voice.trim() } }); setNote('语音配置已保存，下次打开语音实验自动填入；密钥仍单独保存在系统凭据管理器。'); } catch (e) { setNote(typeof e === 'string' ? e : '语音配置保存失败'); } }}>保存语音配置</button>
+      <button type="button" disabled={!voiceBase.trim()} onClick={async () => { try { const outcome = decodeModelTestOutcome(await invoke('voice_settings_test', { config: { voiceBaseUrl: voiceBase.trim(), useVoiceKey, asrModel: asr.trim(), ttsModel: tts.trim(), voice: voice.trim() } })); setNote(`语音服务测试${outcome.ok ? '通过' : '未通过'}：${outcome.detail}`); } catch (e) { setNote(typeof e === 'string' ? e : '语音服务测试失败'); } }}>测试语音服务</button>
       <label>识别模型<input value={asr} maxLength={160} onChange={e => setAsr(e.target.value)}/></label>
       <label>合成模型<input value={tts} maxLength={160} onChange={e => setTts(e.target.value)}/></label>
       <label>音色编码<input value={voice} maxLength={160} onChange={e => setVoice(e.target.value)}/></label>

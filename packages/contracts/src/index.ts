@@ -106,6 +106,13 @@ export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens};
 }
 
+export interface ModelTestOutcome {ok:boolean;detail:string}
+export function decodeModelTestOutcome(value:unknown):ModelTestOutcome {
+  const v=record(value);
+  if(typeof v.ok!=='boolean'||typeof v.detail!=='string'||!v.detail||[...v.detail].length>400)throw Error('模型测试结果协议不兼容');
+  return {ok:v.ok,detail:v.detail};
+}
+
 export interface VoiceSettings {voiceBaseUrl:string;useVoiceKey:boolean;asrModel:string;ttsModel:string;voice:string;hasVoiceKey:boolean}
 export function decodeVoiceSettings(value:unknown):VoiceSettings {
   const v=record(value);

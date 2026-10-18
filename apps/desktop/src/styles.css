@@ -46,3 +46,5 @@
 }
 
 .daily-welcome { overflow:hidden; }
+.model-test-ok { color:#4d7a5c; }
+.model-test-fail { color:#a45a49; }

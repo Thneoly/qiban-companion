@@ -279,9 +279,162 @@ pub fn voice_settings_save(
         .map_err(|_| "模型设置不可用")?
         .save_voice_config(config)
 }
+/// Outcome of a one-shot configuration probe: ok carries an honest verdict,
+/// detail tells the user which knob to fix (network / key / model / address).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTestOutcome {
+    pub ok: bool,
+    pub detail: String,
+}
+/// Classify a probe result into an actionable message. Pure so the mapping
+/// is unit-testable without touching the network. `status` is None when the
+/// request never got a response (connect/DNS/TLS failure).
+pub(crate) fn classify_probe(
+    status: Option<u16>,
+    body: &str,
+    send_failed: bool,
+) -> ModelTestOutcome {
+    if send_failed || status.is_none() {
+        return ModelTestOutcome {
+            ok: false,
+            detail: "无法连接服务地址：网络不通，或地址填写有误".into(),
+        };
+    }
+    let status = status.unwrap();
+    let snippet = |body: &str| -> String {
+        let trimmed: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let cut: String = trimmed.chars().take(120).collect();
+        if cut.is_empty() {
+            String::new()
+        } else {
+            format!("（服务返回：{cut}）")
+        }
+    };
+    match status {
+        200..=299 => ModelTestOutcome {
+            ok: true,
+            detail: "连接成功：服务接受了地址、密钥与模型编码。测试发送了一条 1 token 的最小请求，可能产生极小消耗。".into(),
+        },
+        401 | 403 => ModelTestOutcome {
+            ok: false,
+            detail: format!("服务拒绝了密钥：API Key 无效、过期或无权限。{}", snippet(body)),
+        },
+        404 => ModelTestOutcome {
+            ok: false,
+            detail: "地址下没有这个接口：请核对 API 基地址是否为服务商文档的根地址（不要自己加 /chat/completions）。".into(),
+        },
+        _ => ModelTestOutcome {
+            ok: false,
+            detail: format!("服务返回 HTTP {status}。{}", snippet(body)),
+        },
+    }
+}
+/// Probe the DRAFT configuration (no save required): a minimal 1-token
+/// chat/completions request against the entered address and model, with the
+/// key looked up by address from the credential manager. Closes the
+/// "configured fields ≠ reachable service" gap the first-use guide calls out.
+#[tauri::command]
+pub async fn model_settings_test(config: ModelConfig) -> Result<ModelTestOutcome, String> {
+    let config = config.validated()?;
+    let key: Option<String> = if config.use_api_key {
+        let secret = crate::credentials::read(&config.base_url)?
+            .ok_or("此地址尚未保存密钥：请先保存设置并点「设置 / 更换 API Key」，再测试")?;
+        // Zeroizing guard -> owned copy for the one-shot probe header; the
+        // guard itself is dropped right here.
+        Some(secret.to_string())
+    } else {
+        None
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| "网络组件初始化失败")?;
+    let mut request = client.post(config.endpoint()).json(&serde_json::json!({
+        "model": config.model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": false,
+    }));
+    if let Some(secret) = key {
+        request = request.bearer_auth(secret);
+    }
+    match request.send().await {
+        Err(_) => Ok(classify_probe(None, "", true)),
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            Ok(classify_probe(Some(status), &body, false))
+        }
+    }
+}
+/// Voice probe: reachability of the voice service address plus whether a key
+/// is saved for it. A full voice round-trip needs a real recording — that
+/// stays at "press and speak"; this only verifies address and key state.
+#[tauri::command]
+pub async fn voice_settings_test(config: VoiceConfig) -> Result<ModelTestOutcome, String> {
+    if config.voice_base_url.trim().is_empty() {
+        return Ok(ModelTestOutcome {
+            ok: false,
+            detail: "尚未填写语音服务地址。".into(),
+        });
+    }
+    let config = config.validated()?;
+    let key_missing =
+        config.use_voice_key && crate::credentials::read(&config.voice_base_url)?.is_none();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| "网络组件初始化失败")?;
+    let reached = client.get(&config.voice_base_url).send().await;
+    let reachable = reached.is_ok();
+    let detail = match (reachable, key_missing) {
+        (false, _) => "无法连接语音服务地址：网络不通，或地址填写有误。".to_string(),
+        (true, true) => "语音服务地址可达，但尚未保存语音服务密钥。".to_string(),
+        (true, false) => {
+            "语音服务地址可达，密钥已保存；真实识别与合成请用「按住说话」验证。".to_string()
+        }
+    };
+    Ok(ModelTestOutcome {
+        ok: reachable && !key_missing,
+        detail,
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn probe_classification_is_actionable_per_failure_class() {
+        // Transport failure → network wording, never a server verdict.
+        let network = classify_probe(None, "", true);
+        assert!(!network.ok && network.detail.contains("无法连接"));
+        let no_response = classify_probe(None, "", false);
+        assert!(!no_response.ok && no_response.detail.contains("无法连接"));
+        // Key rejected → key wording, with the server's snippet appended.
+        let key = classify_probe(
+            Some(401),
+            r#"{"error":{"code":"401","message":"invalid api key"}}"#,
+            false,
+        );
+        assert!(!key.ok && key.detail.contains("密钥") && key.detail.contains("invalid api key"));
+        let forbidden = classify_probe(Some(403), "", false);
+        assert!(!forbidden.ok && forbidden.detail.contains("密钥"));
+        // Wrong path shape → address wording.
+        let missing = classify_probe(Some(404), "not found", false);
+        assert!(!missing.ok && missing.detail.contains("基地址"));
+        // Success carries the tiny-cost honesty note.
+        let ok = classify_probe(Some(200), "", false);
+        assert!(ok.ok && ok.detail.contains("1 token"));
+        // Anything else reports the status verbatim with a bounded snippet.
+        let bad_request = classify_probe(Some(400), "  model x does not exist\n  ", false);
+        assert!(
+            !bad_request.ok
+                && bad_request.detail.contains("HTTP 400")
+                && bad_request.detail.contains("model x does not exist")
+        );
+        let long_body = classify_probe(Some(500), &"x".repeat(500), false);
+        assert!(!long_body.ok && long_body.detail.chars().count() < 200);
+    }
     #[test]
     fn voice_settings_status_short_circuits_empty_address_and_hides_keys() {
         let status = voice_status(VoiceConfig::default()).unwrap();

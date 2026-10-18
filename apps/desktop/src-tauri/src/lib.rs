@@ -151,6 +151,8 @@ pub fn run() {
             model_settings::voice_settings_save,
             model_settings::model_settings_get,
             model_settings::model_settings_save,
+            model_settings::model_settings_test,
+            model_settings::voice_settings_test,
             model_settings::model_key_set,
             model_settings::model_key_delete,
             chat::chat_config,

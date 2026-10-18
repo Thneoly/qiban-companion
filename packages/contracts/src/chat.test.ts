@@ -1,5 +1,5 @@
 import {expect,test} from 'vitest';
-import {decodeChatConfig,decodeChatDelta,decodeChatResult,decodeChatHistory,decodeModelSettings,decodeVoiceSettings,decodeVoiceTranscribe,decodeVoiceSpeakProgress} from './index';
+import {decodeChatConfig,decodeChatDelta,decodeChatResult,decodeChatHistory,decodeModelSettings,decodeModelTestOutcome,decodeVoiceSettings,decodeVoiceTranscribe,decodeVoiceSpeakProgress} from './index';
 const memoryUsage={scope:{baseUrl:'https://fixture.test',model:'m'},contextEpoch:0,memories:[],bodyChars:0,contextChars:0,personal:{status:'sent',memories:[],bodyChars:0,contextChars:0}};
 test('chat boundary rejects malformed events and preserves unknown usage',()=>{
   expect(decodeChatResult({requestId:'a',elapsedMs:5,memoryUsage,historySaved:true,usage:null}).usage).toBeNull();
@@ -30,6 +30,13 @@ test('voice settings decode saved labs config and reject missing or oversized fi
   expect(decodeVoiceSettings(saved)).toEqual(saved);
   for(const patch of [{useVoiceKey:'yes'},{asrModel:undefined},{hasVoiceKey:undefined},{hasVoiceKey:'secret'},{voiceBaseUrl:'x'.repeat(513)},{voice:'y'.repeat(161)}])
     expect(()=>decodeVoiceSettings({...saved,...patch})).toThrow();
+});
+
+test('model test outcome decode accepts honest verdicts and rejects malformed payloads',()=>{
+  expect(decodeModelTestOutcome({ok:true,detail:'连接成功：服务接受了地址、密钥与模型编码。'})).toEqual({ok:true,detail:'连接成功：服务接受了地址、密钥与模型编码。'});
+  expect(decodeModelTestOutcome({ok:false,detail:'无法连接服务地址：网络不通，或地址填写有误'}).ok).toBe(false);
+  for(const patch of [{ok:'yes'},{ok:undefined},{detail:''},{detail:undefined},{detail:'x'.repeat(401)}])
+    expect(()=>decodeModelTestOutcome({ok:true,detail:'连接成功',...patch})).toThrow();
 });
 
 test('voice transcribe decode keeps bounded text and rejects empty or malformed payloads',()=>{
