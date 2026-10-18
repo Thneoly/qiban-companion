@@ -50,5 +50,5 @@
 
 **已钉**：A1-A5（storage/core/bridge + 桌面全链集成）、B1/B5/B6（browser + storage + coordinator）、C2/C3/C5（storage roundtrip + 环形 + native 线上负断言）、D1（集成含手机列表可见与拒更正）、F1/F2（144s 重跑绿 + core 契约门）、E 组 storage 语义（fire 幂等/cancel 只对 pending）。
 **有结构保证、未专测**：B4 后半（"mock 模型声明完成不产生事实"——deposit 是唯一写入口且模型无调用路径，结构上不可伪造）；C6（远端应用的 prune 不触 dispatch_log——两表无关联路径）；C7 语音负测（voice 链不经过审计挂点）；E2 不虚报（无系统通知调用点）。
-**待补**（后续增量，不阻塞 E 组真人验收）：B3 后半（task_fact 勾选注入的 browser 钉——选择校验含 task_fact 已由域层允许，端到端未钉）；C1 的"与捕获请求体逐段相等"强断言（native 现验证行字段与空态标记，该场景无记忆注入故无可对比段）；C4 的损坏-logger mutation 钉（空态往返已钉，mutation 为人工）；D2 旧桌面模拟（旧二进制对 task_fact 的跳过是缺分支的自然结果）；D3 后半（fact 满 50 的第 51 条服务端拒绝——manual 满 30 不挡 fact 池已钉）；E1 native（桌宠气泡/重启恢复的真机钉）。
+**待补→已补（2026-10-12 补钉）**：B3 后半（browser：task_fact 经模型许可面板勾选，写入携带其 id）；C1 强断言（native：注入轮发送后，审计行 `memory_block` 与线上请求体中的记忆段**逐字节相等**——独立源对比，坏 logger 写什么都过不了）；C4 反证（同轮 `notStrictEqual` 截断串，证明相等断言有分辨力）；D2（storage：两值旧枚举解析 task_fact 事件**必须失败**的兼容性事实钉——升级为强制，服务器与桌面同仓同发）；D3 后半（storage：fact 满 50 第 51 条 `memory_capacity` 拒绝，手动池为 0 时依旧可用）；E1 native（[reminders.cjs](../../apps/desktop/tests/native/reminders.cjs)：UI 创建+坏时间校验、1 分钟提醒到期置 fired、待提醒可取消、20 分钟提醒跨重启保持 pending——验收标识 `m2-pins-20261012`）。
 **实现与设计的一处简化**：协调库无 v8——容量分列与 peer 拒更正均为查询逻辑，无需 schema 迁移（设计原文写 v8，已回写更正）。

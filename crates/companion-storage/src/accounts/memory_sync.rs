@@ -1118,4 +1118,98 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn task_fact_capacity_is_an_independent_fifty_slot_pool() {
+        let store = fixture();
+        let alice = identity("provider", "alice", "session-a", 100);
+        for index in 0..MAX_TASK_FACTS {
+            let id = uuid::Uuid::new_v4().to_string();
+            store
+                .write_memory(
+                    &alice,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &id,
+                    &MemoryWrite::Create {
+                        kind: MemoryKind::TaskFact,
+                        body: format!("把《文件{index}.txt》的摘录保存为草稿：已核验完成"),
+                        event_date: None,
+                    },
+                )
+                .unwrap();
+        }
+        // The 51st fact is refused under the fact cap — while the manual pool
+        // (0/30 used here) stays irrelevant to it.
+        let overflow = uuid::Uuid::new_v4().to_string();
+        assert!(matches!(
+            store.write_memory(
+                &alice,
+                &uuid::Uuid::new_v4().to_string(),
+                &overflow,
+                &MemoryWrite::Create {
+                    kind: MemoryKind::TaskFact,
+                    body: "把《超限.txt》的摘录保存为草稿：结果未知".into(),
+                    event_date: None,
+                }
+            ),
+            Err(StorageError::MemorySync(MemorySyncError::Capacity))
+        ));
+        // A manual create still succeeds with the fact pool full.
+        let manual = uuid::Uuid::new_v4().to_string();
+        store
+            .write_memory(
+                &alice,
+                &uuid::Uuid::new_v4().to_string(),
+                &manual,
+                &MemoryWrite::Create {
+                    kind: MemoryKind::Preference,
+                    body: "fact pool full, manual pool fine".into(),
+                    event_date: None,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_pre_task_fact_client_cannot_decode_a_task_fact_event() {
+        // Compatibility fact (D2): a pre-task-fact desktop binary parses the
+        // sync response with a two-valued MemoryKind, so a task_fact event
+        // from a newer server fails ITS deserialization — the pull errors and
+        // retries, local data is untouched, and the binary must be upgraded.
+        // Pinned here so the wire-level break is a recorded decision, not an
+        // accident: server and desktop ship together in this repo.
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OldKind {
+            Preference,
+            Experience,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct OldEvent {
+            _seq: i64,
+            _memory_id: String,
+            _op: String,
+            _revision: i64,
+            _kind: Option<OldKind>,
+            _body: Option<String>,
+            _event_date: Option<String>,
+            _occurred_at: i64,
+        }
+        let event = MemorySyncEvent {
+            seq: 1,
+            memory_id: uuid::Uuid::new_v4().to_string(),
+            op: MemorySyncOp::Upsert,
+            revision: 1,
+            kind: Some(MemoryKind::TaskFact),
+            body: Some("把《x.txt》的摘录保存为草稿：已核验完成".into()),
+            event_date: None,
+            occurred_at: 1,
+        };
+        let wire = serde_json::to_string(&event).unwrap();
+        assert!(
+            serde_json::from_str::<OldEvent>(&wire).is_err(),
+            "the two-valued legacy kind enum must reject task_fact — upgrade is mandatory"
+        );
+    }
 }
