@@ -112,7 +112,9 @@ async function uninstall() {
     const preview = await invoke(pet, 'chat_context_preview');
     await pet.evaluate(async p => {
       const n = window.__TAURI_INTERNALS__, callback = n.transformCallback(() => {});
-      await n.invoke('chat_generate', { request: { requestId: crypto.randomUUID(), prompt: '安装验收', expectedScope: p.scope, expectedContextEpoch: p.contextEpoch }, onDelta: `__CHANNEL__:${callback}` });
+      // Protocol v3: expectedPersonal is required at parse time. null = the
+      // personal-memory service is offline here, so no personal block is sent.
+      await n.invoke('chat_generate', { request: { requestId: crypto.randomUUID(), prompt: '安装验收', expectedScope: p.scope, expectedContextEpoch: p.contextEpoch, expectedPersonal: null }, onDelta: `__CHANNEL__:${callback}` });
     }, preview);
     assert.equal(requests, 1); checked('installed-ipc-save-and-local-chat');
     async function restored() {
