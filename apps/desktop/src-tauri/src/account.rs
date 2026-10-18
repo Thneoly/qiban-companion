@@ -180,6 +180,80 @@ impl AccountClient {
         self.challenge = None;
         Ok(())
     }
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+    /// Embedded-mode port move (P1-b): persist a new port and carry the
+    /// vault secret across scopes in the same breath. Boot-time only — the
+    /// user-facing set_port keeps its signed-out guard. The remote-documents
+    /// ledger and memory-sync owner directories keyed by the OLD port are
+    /// NOT migrated yet (recorded limitation; rare path — the port moves
+    /// only when a non-coordinator squats the persisted one).
+    pub(crate) fn migrate_port(&mut self, port: u16) {
+        if port == self.port || port < 1024 {
+            return;
+        }
+        let carried = self.secret().ok().flatten();
+        let _ = self
+            .db
+            .lock()
+            .map_err(|_| AccountError::new("storage"))
+            .and_then(|connection| {
+                connection
+                    .execute(
+                        "UPDATE account_settings SET port=?1 WHERE id=1",
+                        params![port],
+                    )
+                    .map_err(|_| AccountError::new("storage"))
+            });
+        self.port = port;
+        if let Some(secret) = carried {
+            let _ = self.vault.write(&self.scope(), &secret);
+        }
+        if let Ok(mut cache) = self.owner_cache.lock() {
+            *cache = None;
+        }
+    }
+    /// Embedded-mode self-healing (P1-b): with a valid session this is a
+    /// no-op probe; without one (first boot, 24h expiry, or a phone-side
+    /// "sign out everywhere") it mints a fresh local-account session
+    /// directly against the embedded store — same process, no HTTP. Returns
+    /// true when a new session was minted.
+    pub(crate) async fn ensure_local_session(
+        &mut self,
+        store: &companion_storage::accounts::AccountStore,
+    ) -> Result<bool> {
+        let previous = self.secret().ok().flatten();
+        if let Some(secret) = &previous {
+            if secret.pending_logout.is_none() {
+                match self
+                    .request(Method::GET, "/v1/me", Some(&secret.token), None)
+                    .await
+                {
+                    // Still valid — nothing to heal. A 401 falls through to
+                    // the re-mint (and request() already cleared the vault).
+                    Ok(_) => return Ok(false),
+                    Err(e) if e.code != "authentication_required" => return Err(e),
+                    Err(_) => {}
+                }
+            }
+        }
+        let token = crate::embedded::mint_local_token(
+            store,
+            previous.as_ref().map(|secret| secret.token.as_str()),
+        )
+        .map_err(|_| AccountError::new("credentials"))?;
+        self.vault
+            .write(
+                &self.scope(),
+                &SessionSecret {
+                    token,
+                    pending_logout: None,
+                },
+            )
+            .map_err(|_| AccountError::new("credentials"))?;
+        Ok(true)
+    }
     pub(crate) async fn request(
         &self,
         method: Method,

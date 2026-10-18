@@ -27,14 +27,17 @@ tokio = { version = "1", features = ["sync", "time", "macros", "net", "rt"] }
 rusqlite.workspace = true
 companion-core.workspace = true
 companion-storage.workspace = true
+# Embedded LAN coordinator (P1-b): the desktop hosts the router in-process.
+# Promoted from dev-dependency; pulls lettre+native-tls into the production
+# tree (recorded cost in docs/architecture/lan-phone-continuity.md).
+companion-coordinator = { path = "../../coordinator" }
+axum = "0.8"
 tauri-plugin-single-instance = "2"
 
 [dev-dependencies]
 # Real-service integration tests: serve the actual memory-service router on
-# an ephemeral loopback port (axum must match the service's major version).
+# an ephemeral loopback port (axum comes from the embedded dependency above).
 memory-service = { path = "../../memory-service" }
-companion-coordinator = { path = "../../coordinator" }
-axum = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Security_Credentials", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }

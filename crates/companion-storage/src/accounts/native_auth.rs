@@ -225,52 +225,61 @@ impl AccountStore {
                 subject
             }
         };
-        let account: Option<(String, i64)> = tx
-            .query_row(
-                "SELECT id,revoked_before FROM accounts WHERE issuer=?1 AND subject=?2",
-                params![NATIVE_ISSUER, subject],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let account_id = match account {
-            Some((id, cutoff)) => {
-                if now <= cutoff {
-                    return Err(IdentityError::SessionEnded.into());
-                }
-                id
-            }
-            None => {
-                let id = uuid::Uuid::new_v4().to_string();
-                tx.execute(
-                    "INSERT INTO accounts(id,issuer,subject,companion_id) VALUES(?1,?2,?3,?4)",
-                    params![id, NATIVE_ISSUER, subject, uuid::Uuid::new_v4().to_string()],
-                )?;
-                id
-            }
-        };
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let expires_at = now
-            .checked_add(SESSION_TTL as i64)
-            .ok_or(StorageError::InvalidTimestamp)?;
-        tx.execute(
-            "INSERT INTO account_sessions(account_id,session_id,authenticated_at) VALUES(?1,?2,?3)",
-            params![account_id, session_id, now],
-        )?;
-        tx.execute(
-            "DELETE FROM native_tokens WHERE expires_at<?1",
-            [now.saturating_sub(86_400_000)],
-        )?;
-        tx.execute("INSERT INTO native_tokens(hash,account_id,session_id,expires_at,last_seen) VALUES(?1,?2,?3,?4,?5)",
-            params![token_hash,account_id,session_id,expires_at,now])?;
+        let login = Self::open_session(&tx, &subject, token_hash, now)?;
         tx.execute(
             "UPDATE native_codes SET state='used',mac=NULL WHERE id=?1",
             [id],
         )?;
         tx.commit()?;
-        Ok(NativeLogin {
-            session_id,
-            expires_at: expires_at as u64,
-        })
+        Ok(login)
+    }
+
+    /// The embedded desktop's process-local account: the single NATIVE_ISSUER
+    /// account, if the embedded store has one yet. The embedded host mints
+    /// for this subject on boot (P1-b); an empty store means "create on
+    /// first mint".
+    pub fn local_account_subject(&self) -> Result<Option<String>, StorageError> {
+        let c = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        c.query_row(
+            "SELECT subject FROM accounts WHERE issuer=?1 ORDER BY rowid LIMIT 1",
+            [NATIVE_ISSUER],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Mint a session for the process-local desktop account — no email, no
+    /// OTP; the caller is the embedded host process itself (P1-b). Finds or
+    /// creates the account for `subject`, opens a fresh session, stores
+    /// `token_hash`, and optionally retires the vault's previous token in the
+    /// same transaction. A mint after "sign out everywhere" is a NEW session
+    /// whose login time postdates the revocation cutoff — that self-healing
+    /// is the intended desktop behavior in the embedded single-machine form.
+    pub fn mint_local_session(
+        &self,
+        subject: &str,
+        token_hash: &[u8; 32],
+        retire: Option<&[u8; 32]>,
+    ) -> Result<NativeLogin, StorageError> {
+        if subject.trim().is_empty() || subject.len() > 160 {
+            return Err(IdentityError::InvalidCode.into());
+        }
+        let mut c = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = i64::try_from((self.clock)()).map_err(|_| StorageError::InvalidTimestamp)?;
+        if let Some(old) = retire {
+            tx.execute("DELETE FROM native_tokens WHERE hash=?1", [old])?;
+        }
+        let login = Self::open_session(&tx, subject, token_hash.as_slice(), now)?;
+        tx.commit()?;
+        Ok(login)
     }
 
     pub fn authenticate_native_token(&self, hash: &[u8]) -> Result<VerifiedIdentity, StorageError> {
@@ -315,6 +324,58 @@ impl AccountStore {
         tx.commit()?;
         Ok(identity)
     }
+
+    /// Shared mint body: find-or-create the account for `subject`, open a
+    /// fresh session, store the token hash. `subject` resolution (email →
+    /// subject) and code consumption stay with the callers.
+    fn open_session(
+        tx: &rusqlite::Transaction,
+        subject: &str,
+        token_hash: &[u8],
+        now: i64,
+    ) -> Result<NativeLogin, StorageError> {
+        let account: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT id,revoked_before FROM accounts WHERE issuer=?1 AND subject=?2",
+                params![NATIVE_ISSUER, subject],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let account_id = match account {
+            Some((id, cutoff)) => {
+                if now <= cutoff {
+                    return Err(IdentityError::SessionEnded.into());
+                }
+                id
+            }
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO accounts(id,issuer,subject,companion_id) VALUES(?1,?2,?3,?4)",
+                    params![id, NATIVE_ISSUER, subject, uuid::Uuid::new_v4().to_string()],
+                )?;
+                id
+            }
+        };
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let expires_at = now
+            .checked_add(SESSION_TTL as i64)
+            .ok_or(StorageError::InvalidTimestamp)?;
+        tx.execute(
+            "INSERT INTO account_sessions(account_id,session_id,authenticated_at) VALUES(?1,?2,?3)",
+            params![account_id, session_id, now],
+        )?;
+        tx.execute(
+            "DELETE FROM native_tokens WHERE expires_at<?1",
+            [now.saturating_sub(86_400_000)],
+        )?;
+        tx.execute("INSERT INTO native_tokens(hash,account_id,session_id,expires_at,last_seen) VALUES(?1,?2,?3,?4,?5)",
+            params![token_hash,account_id,session_id,expires_at,now])?;
+        Ok(NativeLogin {
+            session_id,
+            expires_at: expires_at as u64,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +386,48 @@ mod tests {
             AccountStore::from_connection(Connection::open_in_memory().unwrap()).unwrap();
         store.clock = || 100_000;
         store
+    }
+    #[test]
+    fn local_mint_creates_account_reuses_it_and_retires_the_old_token() {
+        let mut store = fixture();
+        // Empty store: no local subject yet.
+        assert!(store.local_account_subject().unwrap().is_none());
+        let first = store
+            .mint_local_session("local-desktop", &[7; 32], None)
+            .unwrap();
+        assert_eq!(
+            store.local_account_subject().unwrap().as_deref(),
+            Some("local-desktop")
+        );
+        let identity = store.authenticate_native_token(&[7; 32]).unwrap();
+        assert_eq!(identity.subject(), "local-desktop");
+        // A re-mint under the same subject reuses the account, retires the
+        // stale vault token, and opens a fresh session.
+        store.clock = || 120_000;
+        let second = store
+            .mint_local_session("local-desktop", &[8; 32], Some(&[7; 32]))
+            .unwrap();
+        assert_ne!(first.session_id, second.session_id);
+        assert!(store.authenticate_native_token(&[7; 32]).is_err());
+        assert!(store.authenticate_native_token(&[8; 32]).is_ok());
+    }
+    #[test]
+    fn local_mint_self_heals_after_sign_out_everywhere() {
+        let mut store = fixture();
+        store
+            .mint_local_session("local-desktop", &[7; 32], None)
+            .unwrap();
+        let identity = store.authenticate_native_token(&[7; 32]).unwrap();
+        store.sign_out(&identity, true).unwrap();
+        // "Sign out everywhere" killed the desktop session; the embedded host
+        // mints a NEW session whose login postdates the cutoff — the intended
+        // single-machine self-healing, not a bypass (the old token stays dead).
+        store.clock = || 150_000;
+        store
+            .mint_local_session("local-desktop", &[9; 32], Some(&[7; 32]))
+            .unwrap();
+        assert!(store.authenticate_native_token(&[7; 32]).is_err());
+        assert!(store.authenticate_native_token(&[9; 32]).is_ok());
     }
     #[test]
     fn all_logout_invalidates_pending_email_codes_and_preserves_other_users() {
