@@ -9,6 +9,9 @@ export interface AccountSnapshot {
   profile: AccountProfile | null;
   tasks: Task[];
   notice?: string | null;
+  /** Embedded coordinator owns the connection (P1-b); absent = false for
+   *  pre-embedded snapshots. */
+  embedded: boolean;
 }
 export function decodeAccountSnapshot(value: unknown): AccountSnapshot {
   const invalid = () => new Error("账号响应不兼容，请更新客户端");
@@ -38,6 +41,10 @@ export function decodeAccountSnapshot(value: unknown): AccountSnapshot {
     if (!p || !uuid(p.accountId) || !uuid(p.companionId)) throw invalid();
   } else if (p !== null || tasks.length !== 0) throw invalid();
   // Explicit projection: never spread arbitrary native fields into UI state.
+  // `embedded` is read leniently (anything but literal true is false) so
+  // older snapshots decode; only the Rust side can set it.
+  if (v.embedded !== undefined && typeof v.embedded !== "boolean")
+    throw invalid();
   return {
     port: v.port as number,
     status: v.status as AccountSnapshot["status"],
@@ -48,6 +55,7 @@ export function decodeAccountSnapshot(value: unknown): AccountSnapshot {
         }
       : null,
     tasks,
+    embedded: v.embedded === true,
     ...(v.notice !== undefined ? { notice: v.notice as string | null } : {}),
   };
 }

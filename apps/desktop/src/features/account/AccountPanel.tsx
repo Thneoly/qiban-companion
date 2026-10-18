@@ -17,13 +17,16 @@ const empty: AccountSnapshot = {
   status: "signed_out",
   profile: null,
   tasks: [],
+  embedded: false,
 };
 const statusNote = (s: AccountSnapshot) =>
   s.status === "logout_pending"
     ? "已从本机退出。服务端撤销待连接恢复后完成；其他设备尚未确认退出。"
     : s.status === "authenticated"
       ? "已接续同一伙伴。共享待办每 10 秒更新，也可手动刷新。"
-      : "登录与手机相同的受邀邮箱，接续账号中的伙伴和待办。";
+      : s.embedded
+        ? "本机伙伴服务未就绪，正在自动恢复会话；无需登录操作。"
+        : "登录与手机相同的受邀邮箱，接续账号中的伙伴和待办。";
 export function AccountPanel() {
   const [snapshot, setSnapshot] = useState(empty);
   const [port, setPort] = useState("4318");
@@ -204,7 +207,9 @@ export function AccountPanel() {
         </button>
       </div>
       <p>
-        用与手机相同的邮箱登录。这里的待办属于账号，可跨端查看；本地待办、聊天、记忆和外观仍留在本机。
+        {snapshot.embedded
+          ? "手机与电脑连同一 WiFi 即可接续：先在下方生成配对码，手机浏览器打开提示的地址输入即可。这里的待办属于账号，可跨端查看；本地待办、聊天、记忆和外观仍留在本机。"
+          : "用与手机相同的邮箱登录。这里的待办属于账号，可跨端查看；本地待办、聊天、记忆和外观仍留在本机。"}
       </p>
       <p className="account-notice" role="status">
         {note}
@@ -325,6 +330,19 @@ export function AccountPanel() {
         <button disabled={busy} onClick={() => void run(refresh)}>
           重试服务端撤销
         </button>
+      ) : snapshot.embedded ? (
+        // The embedded form has no email login by design; the boot task
+        // self-heals the session, so signed_out here means the in-process
+        // service is not ready yet — never a form the user could complete.
+        <div className="account-identity" data-testid="embedded-connecting">
+          <strong>本机服务启动中…</strong>
+          <p className="helper">
+            正在自动连接这台电脑上的伙伴服务并恢复会话，无需登录操作；稍候片刻或点击刷新。
+          </p>
+          <button disabled={busy} onClick={() => void run(refresh)}>
+            立即刷新
+          </button>
+        </div>
       ) : (
         <>
           <form

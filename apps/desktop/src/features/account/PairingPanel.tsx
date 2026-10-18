@@ -8,6 +8,7 @@ import {
   type PairingOffer,
 } from "@companion/contracts";
 import { errorMessage } from "../../lib/client";
+import { nativeDesktop } from "../../lib/surface";
 export function PairingPanel({
   onAuthError,
 }: {
@@ -18,6 +19,11 @@ export function PairingPanel({
   const [name, setName] = useState("我的电脑");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  // The LAN address a phone should open (P1-b embedded form); null when the
+  // embedded server is absent (dev/external mode keeps the old wording).
+  const [lan, setLan] = useState<{ port: number; address: string | null } | null>(
+    null,
+  );
   const alive = useRef(false),
     acting = useRef(false),
     sequence = useRef(0);
@@ -55,6 +61,17 @@ export function PairingPanel({
   useEffect(() => {
     alive.current = true;
     void refresh();
+    // The phone's entry URL (embedded form only); best-effort — the panel
+    // wording falls back when it is unavailable.
+    if (nativeDesktop) {
+      invoke("account_lan_info")
+        .then((value) => {
+          const info = value as { port: number; lanAddress: string | null };
+          if (alive.current && info)
+            setLan({ port: info.port, address: info.lanAddress ?? null });
+        })
+        .catch(() => {});
+    }
     const tick = () => {
       if (!acting.current && document.visibilityState === "visible")
         void refresh();
@@ -127,7 +144,17 @@ export function PairingPanel({
       </form>
       {offer && (
         <div className="account-notice">
-          <p>在手机的「连接电脑」输入这六位数字，再核对设备并确认。</p>
+          {lan?.address ? (
+            <p>
+              手机与电脑连同一 WiFi，在手机浏览器打开{" "}
+              <code data-testid="pairing-url">
+                http://{lan.address}:{lan.port}
+              </code>
+              ，输入这六位数字完成配对。
+            </p>
+          ) : (
+            <p>在手机的「连接电脑」输入这六位数字，再核对设备并确认。</p>
+          )}
           <code className="pairing-code" data-testid="pairing-code">
             {offer.code}
           </code>

@@ -104,6 +104,7 @@ pub fn run() {
                             if port != preferred {
                                 state.lock().await.migrate_port(port);
                             }
+                            state.lock().await.set_embedded();
                             handle.manage(embedded::ShutdownHandle(shutdown));
                             // Self-healing: ensure the desktop holds a valid
                             // local-account session (mint on first boot, on
@@ -185,6 +186,7 @@ pub fn run() {
             account::account_pairing_offer,
             account::account_pairing_revoke,
             account::account_snapshot,
+            account::account_lan_info,
             account::account_port_save,
             account::account_code_request,
             account::account_login,

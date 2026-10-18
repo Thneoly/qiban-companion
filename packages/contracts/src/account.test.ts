@@ -18,6 +18,7 @@ describe("native account boundary", () => {
       status: "authenticated",
       profile,
       tasks: [],
+      embedded: false,
     });
   });
   it("rejects data attached to signed-out/pending snapshots and invalid identity/ports", () => {
@@ -33,5 +34,16 @@ describe("native account boundary", () => {
       },
     ])
       expect(() => decodeAccountSnapshot(v)).toThrow();
+  });
+});
+
+describe("embedded snapshot flag", () => {
+  it("reads embedded leniently: only literal true counts, absent stays false", () => {
+    const base = { port: 4318, status: "signed_out", profile: null, tasks: [] };
+    expect(decodeAccountSnapshot({ ...base, embedded: true }).embedded).toBe(true);
+    expect(decodeAccountSnapshot(base).embedded).toBe(false);
+    expect(decodeAccountSnapshot({ ...base, embedded: undefined }).embedded).toBe(false);
+    // A malformed value is rejected rather than guessed.
+    expect(() => decodeAccountSnapshot({ ...base, embedded: "yes" })).toThrow();
   });
 });
