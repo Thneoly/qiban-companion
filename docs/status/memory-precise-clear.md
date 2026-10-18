@@ -36,4 +36,4 @@
 ## 遗留
 
 - ~~确认弹窗当前为静态口径（定性描述影响范围）~~：已于 2026-10-10 销项——弹窗打开时接入 `chat_usage_impact` 显示预计轮数（咨询值口径，含真机 ACL 验证），见[发送边界感知记录](send-boundary.md)。
-- 回填盲区已写入[产品文档 §5](../product/limited-memory.md)；跨端删除同步（G3）不受本交付影响，仍待执行。
+- 回填盲区已写入[产品文档 §5](../product/limited-memory.md)；~~跨端删除同步（G3）仍待执行~~：已于 2026-10-11 交付，见[跨端记忆删除同步](memory-cross-device-sync.md)。

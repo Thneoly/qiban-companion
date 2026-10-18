@@ -8,7 +8,7 @@
 
 协调库 schema v6 → **v7**（`companion-storage/src/accounts/memory_sync.rs`）：
 
-- **镜像与墓碑**：`account_memories` 按账号存全部行；墓碑 = body/event_date 置 NULL + deleted_at 非空（表 CHECK 强制）；kind CHECK 与本机三值一致（含 task_fact——服务端接受形状，但本机永远不会产生该类行）。**压缩只删事件、永不删行**——被删的 id 永远不能复活。
+- **镜像与墓碑**：`account_memories` 按账号存全部行；墓碑 = body/event_date 置 NULL + deleted_at 非空（表 CHECK 强制）；kind CHECK 与本机三值一致（含 task_fact——服务端接受形状；注记：#59 起桌面已以 executor 来源产生并推送该类行）。**压缩只删事件、永不删行**——被删的 id 永远不能复活。
 - **事件流**：`memory_events` 全局 AUTOINCREMENT seq；`memory_devices` 按会话记确认游标；`memory_accounts` 记代际与 watermark。**游标推进只认客户端下一轮申报**（at-least-once）：pull 递出事件不动游标，丢失响应只会导致重拉，压缩不会删掉没人确认过的事件。谎报超前游标（超出服务端发行过的最大 seq）降级为快照。
 - **写路径**：桌面 push 与手机更正/删除共用同一规则集；`memory_requests` 幂等日志按 requestId 重放（负载指纹绑定，同 id 异负载按冲突拒；每账号裁剪至恰 256 条）。版本不匹配 → `memory_revision_conflict`；写墓碑 → `memory_resurrection`；活跃满 30 → `memory_capacity`（与本机 MAX_MEMORIES 同源）。同一删除响应丢失后重放幂等（checked_add 防溢出）。
 - **压缩与窗口**（同事务）：先清扫死设备行（撤销会话，或 native issuer token 过期/闲置 30 分钟——与配对链 live() 同判活口径；**被清会话在认证意义上已死**：撤销不可刷新、闲置 token 被 verify 拒绝，回归必是新会话 → 首拉走快照，不可能从被压缩的尾巴续传）；再删所有存活设备已申报的事件；超 512 条 → 代际 +1、watermark 前移、清空。**无存活设备时事件保留**（写入者自己靠回执，但其他端仍需要事件；512 是硬上限）。落后设备（代际不符或游标低于 watermark）自动降级为快照。

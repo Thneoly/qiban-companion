@@ -56,7 +56,7 @@ npm run prepare:live2d --workspace @companion/desktop
 
 在角色设置中选择 `apps/desktop/public/live2d-local/Hiyori` 文件夹即可体验。示例不是栖伴的商业角色；条款见 [SDK](https://www.live2d.com/en/sdk/license/)和[示例素材](https://www.live2d.com/zh-CHS/learn/sample/)。示例下载清单固定版本并校验哈希，资源目录被 Git 忽略。普通开发构建仍会复制本地 public 内容；要生成不含样例的产物请使用 `npm run build:installer`。
 
-PixiJS 6.5.10 / pixi-live2d-display 0.4.0，渲染上限 30 fps。安静、隐藏文档或系统减少动画时暂停绘制；隐藏或切换形象销毁实例。模型有同名动作/表情时跟随文字状态，否则保留待机及文字提示。没有语音口型、摄像头追踪或真正的 3D 数字人。
+PixiJS 6.5.10 / pixi-live2d-display 0.4.0，渲染上限 30 fps。安静、隐藏文档或系统减少动画时暂停绘制；隐藏或切换形象销毁实例。模型有同名动作/表情时跟随文字状态，否则保留待机及文字提示。没有摄像头追踪或真正的 3D 数字人；语音口型已交付（SVG 与 Live2D，见[语音口型](../status/voice-mouth.md)）。
 
 ## 验证
 

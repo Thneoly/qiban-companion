@@ -1,6 +1,6 @@
 # 任务事实与发送审计：验收设计
 
-2026-10-11 设计稿（未实现，已经过一轮对抗审查修正）。配套[产品](../product/task-facts.md)与[技术设计](../architecture/execution-seams.md)。风格沿用 [Q6](limited-memory-acceptance.md)/[G3](../status/memory-cross-device-sync.md)：案例分载体执行并留记录；未执行前标未执行，不改名已通过。
+2026-10-11 设计稿（设计时未实现，已经过一轮对抗审查修正）；TF-A/B/C 已随 #59/#60 落地、六钉已随 #61 合并（2026-10-18 复核并修正若干钉的记录精度，见文末）。配套[产品](../product/task-facts.md)与[技术设计](../architecture/execution-seams.md)。风格沿用 [Q6](limited-memory-acceptance.md)/[G3](../status/memory-cross-device-sync.md)：案例分载体执行并留记录；未执行前标未执行，不改名已通过。
 
 ## 案例矩阵（TF 系列，24 例）
 
@@ -50,5 +50,6 @@
 
 **已钉**：A1-A5（storage/core/bridge + 桌面全链集成）、B1/B5/B6（browser + storage + coordinator）、C2/C3/C5（storage roundtrip + 环形 + native 线上负断言）、D1（集成含手机列表可见与拒更正）、F1/F2（144s 重跑绿 + core 契约门）、E 组 storage 语义（fire 幂等/cancel 只对 pending）。
 **有结构保证、未专测**：B4 后半（"mock 模型声明完成不产生事实"——deposit 是唯一写入口且模型无调用路径，结构上不可伪造）；C6（远端应用的 prune 不触 dispatch_log——两表无关联路径）；C7 语音负测（voice 链不经过审计挂点）；E2 不虚报（无系统通知调用点）。
-**待补→已补（2026-10-12 补钉）**：B3 后半（browser：task_fact 经模型许可面板勾选，写入携带其 id）；C1 强断言（native：注入轮发送后，审计行 `memory_block` 与线上请求体中的记忆段**逐字节相等**——独立源对比，坏 logger 写什么都过不了）；C4 反证（同轮 `notStrictEqual` 截断串，证明相等断言有分辨力）；D2（storage：两值旧枚举解析 task_fact 事件**必须失败**的兼容性事实钉——升级为强制，服务器与桌面同仓同发）；D3 后半（storage：fact 满 50 第 51 条 `memory_capacity` 拒绝，手动池为 0 时依旧可用）；E1 native（[reminders.cjs](../../apps/desktop/tests/native/reminders.cjs)：UI 创建+坏时间校验、1 分钟提醒到期置 fired、待提醒可取消、20 分钟提醒跨重启保持 pending——验收标识 `m2-pins-20261012`）。
+**待补→已补（2026-10-12 补钉；2026-10-18 复核修正）**：B3 后半（browser：task_fact 经模型许可面板勾选，写入携带其 id 且 `enabled=true`；预算行 `N / 5 条 · N / 800 字` 以 fact 正文计入——面板把 fact 排除出计数即失败）；C1 强断言（native：注入轮发送后，审计行 `memory_block` 与线上请求体中的记忆段**逐字节相等**，且两侧都锚定 store 地面真值——wire 段与审计行各自必须包含 `memory_list` 返回的完整正文）；C4 反证（2026-10-18 复核认定原截断 `notStrictEqual` 在严格相等已过的前提下**逻辑恒真**，已删；分辨力由三锚点结构承担：无记忆轮 `memory_block` 为 null、wire↔audit 逐字节、双方含地面真值全文——logger 侧残缺断逐字节腿，builder 侧残缺断地面真值腿）；D2（storage：**假设性兼容语义**钉——两值旧枚举形状对 task_fact 事件 fail-closed，positive control 证明失败归因于 kind 值而非字段漂移。史实澄清：两值枚举二进制从未发布，MemoryKind 自首次记忆域提交即三值、v0.1.0 亦然；已发布二进制对 task_fact 走 skipped_kind 镜像不物化（另有测试），与设计原文"旧桌面跳过物化"不矛盾）；D3 后半（storage：fact 满 50 第 51 条 `memory_capacity` 拒绝，手动池为 0 时依旧可用；字面量已钉 `assert_eq!(MAX_TASK_FACTS, 50)`——常量被改即红）；E1 native（[reminders.cjs](../../apps/desktop/tests/native/reminders.cjs)：UI 创建+坏时间校验、1 分钟提醒到期置 fired、待提醒可取消、20 分钟提醒跨重启保持 pending。桌宠气泡为**真断言**（visible 等待 + 10 秒收起复核，listener 回归即红）；行定位用 hasText 过滤不依赖列表排序。验收标识 `m2-pins-20261012`，实际留痕运行为 2026-10-14 21:27/21:33 两次全绿，证据在本地 `.cache`）。
 **实现与设计的一处简化**：协调库无 v8——容量分列与 peer 拒更正均为查询逻辑，无需 schema 迁移（设计原文写 v8，已回写更正）。
+**2026-10-18 复核补记（诚实性）**：#61 合并时隐带修复了 #60 遗留的 4 个红测试（三个迁移断言 6→7、future 拒收边界 7→8——v7.sql 落地后未同步测试），即 main@66ae89d 的 companion-storage 套件当时是红的、CI 停用期间无人察觉；#61 的提交信息未说明这一点，此处补记。同轮对六钉做上述记录精度修正（C4 恒真、D2 前提、B3 预算断言、E1 气泡与排序依赖、D3 字面量）。

@@ -65,10 +65,9 @@ test('stale model scope is rejected and failed saves retain selection',async({pa
 
 test('task facts are selectable for injection and counted in the preview', async ({ page }) => {
   // A task fact (executor-sourced) rides the same selection path as manual
-  // memories: default off, selectable, budget-counted (TF-B3). Saving with
-  // exactly the fact selected leaves enabled=false in this mock (it mirrors
-  // the host's empty-selection rule only on `enabled`), but the WRITE carries
-  // the fact id — what the injection path consumes.
+  // memories: default off, selectable, and budget-counted like any other
+  // item (TF-B3). The preview line and the WRITE both carry it — the write
+  // is what the injection path consumes.
   await page.evaluate(() => {
     const w = window as any;
     w.items = [
@@ -87,7 +86,13 @@ test('task facts are selectable for injection and counted in the preview', async
   const factCheck = checks.nth(1);
   await expect(factCheck).not.toBeChecked();
   await factCheck.check();
+  // The fact is budget-counted: the preview line must show it in both the
+  // item count and the character sum (expected chars computed from the same
+  // ground truth, so a panel that excluded facts from either counter fails).
+  const expectedChars = await page.evaluate(() => [...(window as any).items[0].body].length);
+  await expect(region).toContainText(`1 / 5 条 · ${expectedChars} / 800 字`);
   await region.getByRole('button', { name: '保存此模型的记忆设置' }).click();
   const write = await page.evaluate(() => (window as any).writes[0]);
   expect(write.selectedIds).toEqual(['00000000-0000-4000-8000-00000000000a']);
+  expect(write.enabled).toBe(true);
 });

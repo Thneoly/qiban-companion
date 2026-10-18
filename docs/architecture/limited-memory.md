@@ -1,6 +1,6 @@
 # 有限记忆技术设计：T13/T14本地增量
 
-设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，2026-09-19已完成[M2面板与导出](../status/memory-panel.md)，同日完成[M3模型使用](../status/memory-model-context.md)，M4完整验收仍待执行。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
+设计基线v0.1，2026-09-17；2026-09-18已完成[M1底层增量](../status/memory-foundation.md)，2026-09-19已完成[M2面板与导出](../status/memory-panel.md)，同日完成[M3模型使用](../status/memory-model-context.md)，M4 已于 2026-10-07 准出（Hold→Pass，见 [M4 真实模型轮](../status/memory-q6-live.md)与[准出评审](../quality/m4-exit-review.md)）。产品行为以[有限记忆设计](../product/limited-memory.md)为准，测试以[验收设计](../quality/limited-memory-acceptance.md)为准。
 
 ## 1. 决策与现有代码差距
 

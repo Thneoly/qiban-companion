@@ -2,6 +2,8 @@
 
 2026-09-19，分支`test/memory-q6-acceptance`，接续[M3](memory-model-context.md)。**本轮完成工程验收包：50/50发送边界、20/20删除与竞争案例通过；真实模型质量与非实现者体验未执行，M4仍为Hold。** 不将本地模拟正确当成来源正确率达到95%。
 
+后续：[真实模型轮](memory-q6-live.md)已于 2026-10-07 补齐两项证据，M4 评审 Hold→Pass（[m4-exit-review](../quality/m4-exit-review.md)）。
+
 ## 交付
 
 - [q6-v1固定样本](../../apps/desktop/tests/fixtures/memory-q6-v1.json)：50个独立输入、期望、问题和复核标准；本机手动资料均为合成数据。

@@ -1,6 +1,6 @@
 # 执行缝与任务事实：技术设计
 
-2026-10-11 设计稿（未实现，已经过一轮对抗审查修正）。[产品语义](../product/task-facts.md)｜[验收设计](../quality/task-fact-acceptance.md)。锚定现有代码：`ExecutionStore`（companion-storage/execution.rs）、`prepare_document`（companion-core/execution.rs，document_excerpt 的领域逻辑在此，remote_documents 只做 claim/admit/receipt 编排）、`ActionScope`/`ACTION_SCOPES`（companion-core/authorization.rs）、组装点 chat.rs 的 system+reference_block+personal_block 序列、memories 表的 `task_fact` 预留（M1 起列级 CHECK 含三值、**行级 CHECK 只允许 preference/experience 活跃行**、手动创建拒绝、跨端 v5/v7 已含其镜像与跳过物化规则）。
+2026-10-11 设计稿（设计时未实现，已经过一轮对抗审查修正）；TF-A/TF-B/TF-C 已随 #59/#60 落地、六钉验收已随 #61 合并（[验收状态](../quality/task-fact-acceptance.md)）。[产品语义](../product/task-facts.md)｜[验收设计](../quality/task-fact-acceptance.md)。锚定现有代码：`ExecutionStore`（companion-storage/execution.rs）、`prepare_document`（companion-core/execution.rs，document_excerpt 的领域逻辑在此，remote_documents 只做 claim/admit/receipt 编排）、`ActionScope`/`ACTION_SCOPES`（companion-core/authorization.rs）、组装点 chat.rs 的 system+reference_block+personal_block 序列、memories 表的 `task_fact` 预留（M1 起列级 CHECK 含三值、**行级 CHECK 只允许 preference/experience 活跃行**、手动创建拒绝、跨端 v5/v7 已含其镜像与跳过物化规则）。
 
 ## 引言：吸收的三条外部不变式
 

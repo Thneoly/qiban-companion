@@ -26,7 +26,7 @@ git push -u origin feat/desktop-pet-window
 - 合并前运行与修改相关的检查，入口见[README](../../README.md)。Windows工作流保留构建、Rust、浏览器和文档/原型验证定义；当前已暂停自动执行，按下文执行本机检查。
 - CI 失败先修复；强制分支保护以远端实际配置为准，本文不代表已开启保护。
 - 不对 main 强制推送，不提交令牌、私钥或本机数据库；密钥只使用 CI secrets 或适当的本地凭据存储。
-- 可执行文件和安装包不进入源码历史；以后经发布流程创建 Release 附件，当前不创建发布标签或 Release。
+- 可执行文件和安装包不进入源码历史；v0.1.0 已于 2026-10-11 创建 tag 与 GitHub Release（见 docs/status/windows-installer.md）；安装包附件与签名仍待发布流程补齐。
 - .gitattributes 统一文本为 LF，二进制图标保留原样。身份配置仅影响本仓库，不改全局 Git 身份。
 
 ## CI暂停（2026-09-21）
