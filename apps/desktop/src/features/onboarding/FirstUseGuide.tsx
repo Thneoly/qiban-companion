@@ -13,7 +13,7 @@ export function FirstUseGuide({ onComplete, onLater, onSettings, initialError }:
     let disposed = false;
     if (nativeDesktop) void invoke('chat_config').then(value => {
       const config = decodeChatConfig(value);
-      if (!disposed) setConfiguration(config.configured ? `已配置 ${config.model}；是否可用需由你发送第一句话验证。` : '聊天还需要模型配置；也可以先记待办。');
+      if (!disposed) setConfiguration(config.configured ? `已配置 ${config.model}；可在「设置 → 文字模型设置」点「测试连接」确认可用。` : '聊天还需要模型配置；也可以先记待办。');
     }).catch(() => { if (!disposed) setConfiguration('暂时读不到模型设置，可稍后在“模型设置”检查。'); });
     return () => { disposed = true; };
   }, []);
@@ -28,7 +28,7 @@ export function FirstUseGuide({ onComplete, onLater, onSettings, initialError }:
     <h2>初次见面，我是栖栖</h2>
     <p>我会待在桌面一角，陪你聊聊，也帮你记下想做的事。</p>
     <ol>
-      <li><strong>从一句话开始</strong><br/>在“模型设置”填写服务地址、模型和密钥，再回到“聊一聊”。发送时，内容和当前模型前文（以及你在记忆设置里勾选的记忆，如有）会交给该服务。</li>
+      <li><strong>从一句话开始</strong><br/>在「设置 → 文字模型设置」点「智谱通用 API 预设」，设置好你的 API Key，再点「测试连接」确认可用，然后回到“聊一聊”。发送时，内容和当前模型前文（以及你在记忆设置里勾选的记忆，如有）会交给该服务。</li>
       <li><strong>记录留在这台电脑</strong><br/>完整问答明文保存，重开可恢复；所有模型共6轮／1.2万字。“清空对话”删除本机全部模型记录，不删除服务商留存。待办目前只记录，不执行。</li>
       <li><strong>需要时找得到我</strong><br/>拖动栖栖或场景背景移动，轻点栖栖聊天；Esc收起。安静或隐藏后，点任务栏托盘图标唤回；右键可找回角色、退出栖伴。托盘图标可能在“^”里。</li>
     </ol>
