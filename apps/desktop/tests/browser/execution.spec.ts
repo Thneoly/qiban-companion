@@ -1,6 +1,6 @@
 import {test,expect} from '@playwright/test';
 test('browser preview explains execution boundary',async({page})=>{
-  await page.goto('/?view=panel');await page.getByRole('button',{name:'打开文档任务',exact:true}).click();
+  await page.goto('/?view=panel#tasks');await page.getByRole('button',{name:'打开文档任务',exact:true}).click();
   await expect(page.getByText('请运行桌面版来处理本地文档。浏览器预览不模拟执行成功。')).toBeVisible();
   await expect(page.getByRole('button',{name:'确认保存草稿'})).toHaveCount(0);
 });
@@ -24,7 +24,7 @@ test('document preview requires confirmation and a failed receipt preserves the 
       return 1;
     }}});
   });
-  await page.goto('/?view=panel');await page.getByRole('button',{name:'打开文档任务',exact:true}).click();
+  await page.goto('/?view=panel#tasks');await page.getByRole('button',{name:'打开文档任务',exact:true}).click();
   await page.getByLabel('选择文档',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('本机资料')});
   await page.getByRole('button',{name:'生成摘录预览',exact:true}).click();
   await expect(page.getByLabel('摘录预览',{exact:true})).toContainText('原文摘录示例');

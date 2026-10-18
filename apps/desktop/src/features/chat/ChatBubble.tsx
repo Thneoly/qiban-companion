@@ -11,7 +11,7 @@ const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等�
 const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
 /** Hostname only for the persistent boundary line; the full base URL stays in the expandable preview. */
 const hostOf = (baseUrl: string): string => { try { return new URL(baseUrl).host; } catch { return baseUrl; } };
-export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; /** Reports whether a voice turn is under way (transcribing or speaking). The pet surface uses it to keep the bubble alive across window blur — cutting speech because the user looked elsewhere reads as the companion stopping mid-sentence. */ onVoiceActive?: (active: boolean) => void; mouth?: { current: number } }) {
+export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActive, mouth }: { readingRequest?: number; onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; /** Reports whether a voice turn is under way (transcribing or speaking). The pet surface uses it to keep the bubble alive across window blur — cutting speech because the user looked elsewhere reads as the companion stopping mid-sentence. */ onVoiceActive?: (active: boolean) => void; mouth?: { current: number } }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
   const [outputBudget, setOutputBudget] = useState(1024);
@@ -20,7 +20,8 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [status, setStatus] = useState(nativeDesktop ? '正在检查模型配置…' : '浏览器预览不调用模型，请运行桌面版');
   const [busy, setBusy] = useState(false);
-  const [reading, setReading] = useState(false);
+  const [reading, setReading] = useState(readingRequest > 0);
+  useEffect(() => { if (readingRequest) setReading(true); }, [readingRequest]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [seconds, setSeconds] = useState(0);
   const [lastPrompt, setLastPrompt] = useState('');
@@ -231,7 +232,7 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     ? `和已选记忆（应用 ${preview.items.length} 条 · 个人 ${boundaryPersonal} 条）` : '';
   const boundaryOffline = preview && preview.personal.policy.enabled && preview.personal.status !== 'online' ? '；个人记忆服务未连接，本次不携带' : '';
   return <div className={reading ? 'chat-bubble chat-bubble-reading' : 'chat-bubble'}>
-    <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span>{voice.speaking && <span className="chat-speaking">栖栖正在说</span>}</div>
+    <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span>{voice.speaking && <span className="chat-speaking">栖栖正在说</span>}<button type="button" aria-expanded={reading} onClick={() => setReading(v => !v)}>{reading ? '收回气泡' : '展开阅读'}</button></div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
       : <div className="chat-output" aria-label="栖栖的回复" aria-live="polite">{reply || '想聊点什么？'}</div>}
     {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · 应用{preview.items.length}条 · 个人{!preview.personal.policy.enabled ? '未启用' : preview.personal.status === 'online' ? preview.personal.items.length + '条' : '服务未连接'}</summary><div>
@@ -253,7 +254,10 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     {preview && <p className="chat-boundary">发送将把本条消息{history.length ? `、最近 ${history.length} 轮对话` : ''}{boundaryMemory}发往模型服务 <span className="chat-boundary-host" title={preview.scope.baseUrl}>{hostOf(preview.scope.baseUrl)}</span> · {preview.scope.model}{boundaryOffline}</p>}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
-      <input id="chat-draft" maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder="和我说说…" disabled={busy}/>
+      <textarea id="chat-draft" rows={reading ? 3 : 1} maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder={reading ? '写下你想说的…' : '和我说说…'} disabled={busy} onKeyDown={e => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); if (!e.repeat) void send(draft.trim()); }
+      }}/>
+      {reading && <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>}
       <button type="button" className="pet-voice" aria-label={micLabels[voice.micState]} title={voice.micState === 'off' ? voice.guidance : undefined} disabled={voice.micState === 'off'} onClick={() => {
         if (voice.micState === 'recording') voice.finishRecording();
         else if (voice.micState === 'transcribing' || voice.micState === 'speaking') voice.stopSpeaking();
@@ -263,12 +267,11 @@ export function ChatBubble({ onPhase, onReading, onVoiceActive, mouth }: { onPha
     </form>
     <p className="chat-status" role="status">{status}</p>
     <div className="chat-session-controls">
-      <button type="button" aria-expanded={reading} onClick={() => setReading(v => !v)}>{reading ? '收回气泡' : '展开阅读'}</button>
       {reading ? <span className="chat-history-count">最近 {history.length} 轮</span> : <details><summary>最近 {history.length} 轮</summary><div className="chat-history" aria-label="本机对话记录">
         {history.length ? history.map((turn, index) => <div key={index}><p><strong>我：</strong>{turn.user}</p><p><strong>栖栖：</strong>{turn.assistant}</p></div>) : <p>还没有完整对话。</p>}
       </div></details>}
       <button type="button" title="删除本机全部模型的对话记录" onClick={() => void clear()} disabled={!nativeDesktop || busy}>清空对话</button>
     </div>
-    <small className="chat-model">{model || '未连接'} · 上限{outputBudget} tokens<br/>本机明文保存 · 重开恢复 · 全部模型共6轮/1.2万字<br/>按地址和模型隔离 · 清空删除全部记录</small>
+    <details className="chat-model-details"><summary>记录与模型信息</summary><small className="chat-model">{model || '未连接'} · 上限{outputBudget} tokens<br/>本机明文保存 · 重开恢复 · 全部模型共6轮/1.2万字<br/>按地址和模型隔离 · 清空删除全部记录</small></details>
   </div>;
 }

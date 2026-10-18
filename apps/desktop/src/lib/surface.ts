@@ -6,9 +6,10 @@ export function navigatePreview(surface: Surface) {
   history.pushState(null, '', surface === 'panel' ? '?view=panel' : location.pathname);
   dispatchEvent(new PopStateEvent('popstate'));
 }
-export async function petAction(action: 'ready' | 'open_panel' | 'open_settings' | 'open_memory' | 'hide' | 'quiet' | 'restore' | 'drag') {
+export async function petAction(action: 'ready' | 'open_panel' | 'open_settings' | 'open_memory' | 'hide' | 'quiet' | 'restore' | 'drag' | 'open_chat' | 'expand_chat' | 'compact_chat') {
   if (nativeDesktop) await invoke('pet_action', { action });
-  else if(action==='open_memory'){navigatePreview('panel');setTimeout(()=>document.getElementById('memories-title')?.scrollIntoView(),100);}
-  else if(action==='open_settings'){navigatePreview('panel');setTimeout(()=>document.getElementById('model-settings-title')?.scrollIntoView(),100);}
+  else if(action==='open_memory'){navigatePreview('panel');location.hash='memories';}
+  else if(action==='open_settings'){navigatePreview('panel');location.hash='settings';}
   else if (action === 'open_panel') navigatePreview('panel');
+  else if (action === 'open_chat') { sessionStorage.setItem('qiban-open-chat', 'true'); navigatePreview('pet'); }
 }

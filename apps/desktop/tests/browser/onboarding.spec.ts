@@ -50,6 +50,7 @@ test('skipping is session-only; successful completion survives reload and manual
   await page.getByRole('button',{name:'知道了，开始相处'}).click();
   await page.reload();await page.getByRole('button',{name:'和栖栖互动'}).click();
   await expect(page.getByLabel('初次使用指南')).toHaveCount(0);
+  await page.locator('.pet-more summary').click();
   await page.getByRole('button',{name:'使用指南',exact:true}).click();
   await expect(page.getByLabel('初次使用指南')).toBeVisible();
 });

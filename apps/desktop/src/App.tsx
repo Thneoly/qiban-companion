@@ -13,7 +13,35 @@ import { AccountPanel } from './features/account/AccountPanel';
 import { PersonalMemoryPanel } from './features/personal-memory/PersonalMemoryPanel';
 import { RemindersPanel } from './features/reminders/RemindersPanel';
 
+const sections = [
+  ['home', '日常', '今天，也一起慢慢来。', '和栖栖聊聊，或记下一件小事。'],
+  ['tasks', '文档', '一起完成一件事', '选定文档、核对预览，再决定是否保存。'],
+  ['memories', '记忆', '我们记住的事', '记忆由你决定，随时查看、更正或删除。'],
+  ['devices', '手机与设备', '把陪伴带在身边', '登录同一账号，连接手机并核对共享内容。'],
+  ['settings', '设置', '按你的习惯相处', '模型、声音与服务配置集中在这里。'],
+] as const;
+type Section = typeof sections[number][0];
+function sectionFromHash(): Section {
+  const hash = location.hash.slice(1);
+  if (hash.includes('memor')) return 'memories';
+  if (hash.includes('account') || hash === 'devices') return 'devices';
+  if (hash.includes('settings') || hash === 'voice') return 'settings';
+  if (hash.includes('execution') || hash === 'tasks') return 'tasks';
+  return 'home';
+}
 export default function App() {
+  const [section, setSection] = useState<Section>(sectionFromHash);
+  const navigate = useCallback((value: Section) => { location.hash = value; setSection(value); }, []);
+  useEffect(() => {
+    const changed = () => setSection(sectionFromHash());
+    window.addEventListener('hashchange', changed);
+    const removers: (() => void)[] = []; let disposed = false;
+    if (nativeDesktop) for (const [event, target] of [['model-settings-open', 'settings'], ['memory-open', 'memories']] as const) {
+      void listen(event, () => navigate(target)).then(remove => { if (disposed) remove(); else removers.push(remove); }).catch(() => setError('导航通知连接失败，可使用左侧入口。'));
+    }
+    return () => { disposed = true; window.removeEventListener('hashchange', changed); removers.forEach(remove => remove()); };
+  }, [navigate]);
+  const selected = sections.find(item => item[0] === section)!;
   const [info, setInfo] = useState<RuntimeInfo | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -55,36 +83,29 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <div className="app-shell">
+  return <div className="app-shell workspace-shell">
     <aside className="sidebar">
       <a className="brand" href="#home"><span className="brand-mark">✳</span><span>栖伴<small>COMPANION</small></span></a>
-      <div className="nav-label">我们的空间</div>
-      <nav aria-label="主导航"><a href="#home" className="nav-link active"><span>⌂</span>相处空间<span className="nav-dot" /></a><a href="#account-title" className="nav-link"><span>◎</span>账号与共享待办</a><a href="#tasks-title" className="nav-link"><span>☷</span>待办手记</a><a href="#execution-title" className="nav-link"><span>↗</span>文档任务</a><a href="#memories-title" className="nav-link"><span>✧</span>我们的记忆</a><a href="#personal-memories-title" className="nav-link"><span>◈</span>个人记忆</a></nav>
-      <div className="sidebar-note"><span className="mini-star">✧</span><p>一段陪伴，<br/>从小小的日常开始。</p></div>
-      <div className="build-tag"><span className="live-dot"/> 开发预览 <span>v0.1</span></div>
+      <nav aria-label="主导航">{sections.map(([id, label]) => <a key={id} href={`#${id}`} className={`nav-link ${section === id ? 'active' : ''}`} aria-current={section === id ? 'page' : undefined}>{label}</a>)}</nav>
+      <div className="sidebar-note"><p>陪伴留在桌面，<br/>琐事放在这里。</p></div>
+      <button className="workspace-chat-link" onClick={() => void petAction('open_chat').catch(e => setError(errorMessage(e)))}>与栖栖对话 ↗</button>
     </aside>
     <main id="home">
-      <header className="topbar">{nativeDesktop && <button className="text-button" onClick={() => { void petAction('restore').catch(e => setError(errorMessage(e))); }}>显示桌面角色</button>}<span>个人空间 <span className="slash">/</span> 与栖栖的日常</span><span className="environment"><span className="live-dot"/>{info?.runtime === 'desktop' ? '桌面客户端' : info?.runtime === 'preview' ? '浏览器预览' : '正在连接本地服务…'}</span></header>
+      <header className="topbar"><span>我们的空间 / {selected[1]}</span><span className="environment">{info?.runtime === 'desktop' ? '桌面客户端' : info?.runtime === 'preview' ? '浏览器预览' : '正在连接…'}</span></header>
       <div className="page-content">
-        <div className="page-heading"><div><span className="eyebrow">YOUR EVERYDAY COMPANION</span><h1>今天，也一起慢慢来。</h1><p>想法可以先记下，陪伴可以很简单。</p></div><span className="chapter">01 <span>/ 我们的起点</span></span></div>
+        <div className="page-heading"><div><h1>{selected[2]}</h1><p>{selected[3]}</p></div>{nativeDesktop && <button className="text-button" onClick={() => void petAction('restore').catch(e => setError(errorMessage(e)))}>显示桌面角色</button>}</div>
         {error && <div className="error-banner" role="alert"><span>{error}</span>{!ready && <button onClick={() => void load()}>重新连接</button>}</div>}
-        <div className="hero-grid">
-          <section className="companion-card" aria-label="角色相处空间">
-            <div className="card-top"><span className="pill"><span className="live-dot"/>在你身边</span><span className="scene-label">一隅安静的小世界</span></div>
-            <Avatar/>
-            <div className="companion-footer"><div><h2>栖栖 <span>QIQI</span></h2><p>安静陪伴 · 一点点好奇心</p></div><span className="small-badge">互动样机</span></div>
-          </section>
-          <aside className="today-card"><span className="eyebrow">HERE & NOW</span><h2>从一个小念头开始</h2><p className="today-intro">我们先建立一个可靠的起点：把想做的事记下来，随时回来看看。</p><div className="detail-item"><span className="detail-icon">✎</span><div><strong>待办有迹可循</strong><p>创建、查看与取消</p></div></div><div className="detail-item"><span className="detail-icon">◇</span><div><strong>{info?.persistence === 'sqlite' ? '记录留在这台电脑' : '当前为临时预览'}</strong><p>{info?.persistence === 'sqlite' ? 'SQLite 本地保存，重启可恢复' : '浏览器刷新后，待办会清空'}</p></div></div><div className="connection-note"><span className="outline-dot"/><div><strong>手机接续 · 账号共享待办</strong><p>在下方“账号与共享待办”登录，与手机接续同一伙伴；可配对手机并确认电脑分享的文档摘录。</p></div></div><p className="preview-note">可在角色气泡中交流，完整问答在本机保存并可清空；桌宠语音与通用远程执行尚未接入。</p></aside>
-        </div>
-        <AccountPanel/>
-        <MemoryPanel/>
-        <ModelSettings/>
-        <VoiceLab/>
-        <ExecutionPanel/>
-        <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
-        <PersonalMemoryPanel/>
-        <RemindersPanel/>
-        <footer className="page-footer"><span>栖伴 · 给想法一个停靠的地方</span><span>本地设置 / 模型服务由你选择</span></footer>
+        <section hidden={section !== 'home'} aria-label="日常空间">
+          <div className="daily-welcome"><Avatar/><div><span className="eyebrow">和栖栖在一起</span><h2>有话，慢慢说。</h2><p>打开宽敞的对话空间，读一段回复，也写下你的想法。</p><button className="workspace-primary" onClick={() => void petAction('open_chat').catch(e => setError(errorMessage(e)))}>打开文字对话 ↗</button><p className="workspace-hint">也可以轻点桌面角色，用语音聊聊。</p></div></div>
+          <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
+          <RemindersPanel/>
+          <p className="workspace-hint">{info?.persistence === 'sqlite' ? '待办保存在这台电脑，重开可恢复。' : '浏览器刷新后，待办会清空'}</p>
+        </section>
+        <section hidden={section !== 'tasks'} aria-label="文档空间"><ExecutionPanel/></section>
+        <section hidden={section !== 'memories'} aria-label="记忆空间"><MemoryPanel/><PersonalMemoryPanel/></section>
+        <section hidden={section !== 'devices'} aria-label="设备空间"><AccountPanel/></section>
+        <section hidden={section !== 'settings'} aria-label="设置空间"><ModelSettings/><VoiceLab/></section>
+        <footer className="page-footer"><span>栖伴 · 给日常一点陪伴</span><span>模型服务由你选择</span></footer>
       </div>
     </main>
   </div>;

@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
       },
     } });
   });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#settings');
   await page.getByRole('button', { name: '打开语音实验' }).click();
   await page.getByLabel('语音 API 基地址', { exact: true }).fill('https://example.com/v1');
   await page.getByLabel('语音服务需要 API Key', { exact: true }).uncheck();

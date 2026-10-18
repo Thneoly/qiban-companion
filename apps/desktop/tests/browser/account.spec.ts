@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test("preview never offers real account credential access", async ({
   page,
 }) => {
-  await page.goto("/?view=panel");
+  await page.goto("/?view=panel#devices");
   await expect(
     page.getByRole("button", { name: "获取登录验证码", exact: true }),
   ).toBeDisabled();
@@ -210,7 +210,7 @@ test("native account UI separates local data, deduplicates retry and clears late
       },
     });
   });
-  await page.goto("/?view=panel");
+  await page.goto("/?view=panel#devices");
   const panel = page.locator(".account-panel");
   await page.getByLabel("账号邮箱", { exact: true }).fill("alice@example.com");
   await page

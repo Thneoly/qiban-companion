@@ -26,7 +26,7 @@ test.beforeEach(async({page})=>{
       return 1;
     }}});
   });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
 });
 test('requires explicit selection, enforces budgets, and confirms revocation',async({page})=>{
   const region=page.getByRole('region',{name:'模型记忆许可'}),checks=region.getByRole('checkbox');

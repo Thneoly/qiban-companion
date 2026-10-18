@@ -12,3 +12,37 @@
 .voice-probe th,.voice-probe td { text-align:left; padding:8px; border-bottom:1px solid #e5ddeb; }
 .voice-probe button { margin:4px 8px 4px 0; }
 .voice-probe .voice-phase { color:#5f447b; font-weight:600; }
+
+/* One destination at a time; keep mounted forms so navigation preserves drafts. */
+.workspace-shell [hidden] { display:none !important; }
+.workspace-shell .sidebar nav { width:100%; display:grid; gap:7px; margin-top:36px; }
+.workspace-shell .nav-link { display:flex; font-size:14px; padding:13px 16px; }
+.workspace-shell .page-content { max-width:1080px; margin:0 auto; }
+.workspace-shell .page-heading h1 { font-size:28px; }
+.workspace-shell .page-heading p { font-size:14px; }
+.workspace-shell .page-heading { margin-bottom:24px; }
+.workspace-chat-link,.workspace-primary { border:0; border-radius:12px; background:#765c91; color:white; padding:12px 20px; font-size:14px; cursor:pointer; }
+.workspace-chat-link { width:100%; font-size:12px; padding:12px 8px; }
+.daily-welcome { display:grid; grid-template-columns:260px 1fr; align-items:center; border:1px solid #e3d9e8; border-radius:22px; background:linear-gradient(120deg,#eee7f4,#fffcf6); padding:16px 26px; }
+.daily-welcome .avatar-scene { height:240px; }
+.daily-welcome h2 { font-size:26px; margin:10px 0; }
+.daily-welcome p { font-size:14px; line-height:1.8; max-width:360px; }
+.workspace-hint { color:#81718d; font-size:12px!important; line-height:1.7; }
+.workspace-shell .model-settings,.workspace-shell .task-panel { margin-top:16px; }
+.workspace-shell button:focus-visible,.workspace-shell a:focus-visible { outline:2px solid #765c91; outline-offset:3px; }
+@media(max-width:760px) {
+  .workspace-shell .sidebar { position:static; width:auto; padding:16px; align-items:stretch; }
+  .workspace-shell { display:block; }
+  .workspace-shell .sidebar .brand { display:none; }
+  .workspace-shell .sidebar nav { display:flex; flex-wrap:wrap; margin:0; gap:6px; }
+  .workspace-shell .nav-link { font-size:12px; padding:9px 12px; }
+  .workspace-shell .sidebar-note,.workspace-shell .workspace-chat-link { display:none; }
+  .workspace-shell>main { margin-left:0; }
+  .workspace-shell .page-content { padding:20px 16px; }
+  .daily-welcome { grid-template-columns:1fr; padding:18px; }
+  .daily-welcome .avatar-scene { height:190px; }
+  .daily-welcome .avatar-button { width:155px; }
+  .daily-welcome .orb { display:none; }
+}
+
+.daily-welcome { overflow:hidden; }

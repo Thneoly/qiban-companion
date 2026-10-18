@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('offline state names the service and never shows sample data', async ({ page }) => {
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
   const panel = page.getByRole('region', { name: '个人记忆' });
   await expect(panel.getByRole('status').filter({ hasText: '个人记忆服务未运行' })).toBeVisible();
   await expect(panel).toContainText('http://127.0.0.1:4322');
@@ -53,7 +53,7 @@ test('online search shows cards and the supersession chain detail', async ({ pag
   const superseded = record(1, { supersededBy: 2, seq: 3 });
   const current = record(2, { title: '决定 2（现行）', seq: 4 });
   const another = record(3, { title: '决定 3', seq: 5, type: 'fact' });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
   const panel = page.getByRole('region', { name: '个人记忆' });
   // The page starts offline (the init default); flip the fixture and reconnect.
   await page.evaluate(([overview, results, detail]) => {
@@ -84,7 +84,7 @@ test('browser preview shows a preview-only note and issues no IPC', async ({ pag
   // Registered after the beforeEach mock, so it wins and turns the surface
   // back into a plain browser preview.
   await page.addInitScript(() => { Object.defineProperty(window, 'isTauri', { value: false, configurable: true }); });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
   const panel = page.getByRole('region', { name: '个人记忆' });
   await expect(panel).toContainText('浏览器仅预览界面，不连接个人记忆服务');
   await expect(panel.getByRole('button', { name: '重新连接' })).toHaveCount(0);
@@ -143,7 +143,7 @@ test('injection policy panel: selection, budget guard, removal confirmation, off
       return baseInvoke(cmd, args);
     };
   }, [[personalRecord(1, '洞察一'), personalRecord(2, '洞察二'), personalRecord(3, '洞察三')]]);
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
   const panel = page.getByRole('region', { name: '个人记忆' });
   const section = page.locator('.personal-memory-injection');
   await expect(section).toContainText('已保存状态：关闭');

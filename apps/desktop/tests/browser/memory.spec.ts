@@ -41,7 +41,7 @@ test.beforeEach(async ({ page }) => {
       }
     } });
   });
-  await page.goto('/?view=panel');
+  await page.goto('/?view=panel#memories');
 });
 
 test('saves explicit memories, confirms corrections and deletes without claiming model use', async ({ page }) => {
