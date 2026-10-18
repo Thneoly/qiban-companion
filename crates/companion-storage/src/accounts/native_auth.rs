@@ -65,7 +65,7 @@ fn limited(
     Ok(())
 }
 
-fn recover_login(
+pub(super) fn recover_login(
     tx: &Transaction<'_>,
     hash: &[u8],
     now: i64,
@@ -328,7 +328,7 @@ impl AccountStore {
     /// Shared mint body: find-or-create the account for `subject`, open a
     /// fresh session, store the token hash. `subject` resolution (email →
     /// subject) and code consumption stay with the callers.
-    fn open_session(
+    pub(super) fn open_session(
         tx: &rusqlite::Transaction,
         subject: &str,
         token_hash: &[u8],

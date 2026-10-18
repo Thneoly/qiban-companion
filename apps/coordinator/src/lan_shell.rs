@@ -193,6 +193,7 @@ pub fn shell_router(state: AppState, config: ShellConfig) -> Router {
     let assets = shell.clone();
     let api = Router::new()
         .route("/api/state", get(api_state))
+        .route("/api/pairings/exchange", post(api_exchange))
         .with_state(state.clone());
     Router::new()
         .merge(router_embedded(state.clone()))
@@ -280,6 +281,11 @@ async fn shell_gate(shell: &Arc<ShellState>, request: Request, next: Next) -> Re
             return shell_failure(StatusCode::TOO_MANY_REQUESTS, "busy");
         }
     }
+    // The admission endpoint is deliberately anonymous — the pairing code IS
+    // the credential. It keeps every other gate (Host, CSRF, rate limit).
+    if path == "/api/pairings/exchange" {
+        return finish(next, request, false).await;
+    }
     let token = cookie_token(&headers);
     let token = match token {
         Some(token) if valid_session_token(&token) => token,
@@ -305,6 +311,35 @@ async fn finish(next: Next, request: Request, clear_cookie: bool) -> Response {
         }
     }
     response
+}
+
+/// The embedded admission's browser face: pairing code → session, issued as
+/// the gateway issued verify-code's — an HttpOnly cookie plus a bare
+/// `{authenticated: true}` (the token never enters page JavaScript).
+async fn api_exchange(
+    State(s): State<AppState>,
+    b: Result<Json<super::pairing::Exchange>, JsonRejection>,
+) -> Response {
+    let grant = match super::pairing::exchange(State(s), b).await {
+        Ok(Json(token)) => token,
+        Err(error) => return error.into_response(),
+    };
+    let max_age = grant.expires_at.saturating_sub(now_ms()).min(86_400) / 1000;
+    let mut response = Json(json!({"authenticated": true})).into_response();
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}",
+        grant.access_token
+    )) {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+    response
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Aggregate the gateway's `/api/state`: one profile read plus one task
