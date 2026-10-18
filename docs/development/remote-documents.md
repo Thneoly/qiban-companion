@@ -46,4 +46,4 @@ npm run desktop
 
 ## 自动验证
 
-`npm run test:desktop-account` 使用独立测试数据库、内存测试邮箱和临时 Windows 凭据，验证原生 Rust 执行与手机页面；不调用真实 SMTP 或模型。`npm run test:browser` 覆盖桌面选择文件、预览后显式分享、退出后清理界面，账号 IPC 为测试替身。真实 Tauri 窗口与用户手机联合验收仍需人工进行。
+`npm run test:desktop-account` 使用独立测试数据库、内存测试邮箱和临时 Windows 凭据，验证原生 Rust 执行与手机页面；不调用真实 SMTP 或模型。`npm run test:browser` 覆盖桌面选择文件、预览后显式分享、退出后清理界面，账号 IPC 为测试替身。真实 Tauri 窗口与用户手机联合验收第一轮已于 2026-10-07 完成（B5 由执行人裁剪）；任务事实相关 E 组第二轮待执行，见[真实设备验收单](../quality/real-device-acceptance.md)。

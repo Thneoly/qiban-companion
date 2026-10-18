@@ -1,6 +1,6 @@
 # Windows 安装包与数据保留
 
-2026-09-19。当前为内部试用的Windows x64 NSIS安装包，未签名、未创建Release，安装包通过不等于产品准出。实际结果见[安装验收记录](../status/windows-installer.md)。
+2026-09-19。当前为内部试用的Windows x64 NSIS安装包，未签名；v0.1.0 已发布 GitHub Release（未附安装包二进制），安装包通过不等于产品准出。实际结果见[安装验收记录](../status/windows-installer.md)。
 
 ## 构建与使用
 
