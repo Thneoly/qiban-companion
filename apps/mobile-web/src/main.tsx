@@ -61,6 +61,8 @@ function App() {
   const [error, setError] = useState("");
   const [synced, setSynced] = useState("");
   const [cooldown, setCooldown] = useState(0);
+  const [pairCode, setPairCode] = useState("");
+  const [phoneName, setPhoneName] = useState("我的手机");
   const epoch = useRef(0);
   const refreshSequence = useRef(0);
   const acting = useRef(false);
@@ -166,6 +168,21 @@ function App() {
       setCooldown(60);
     });
   }
+  /// The embedded admission (P1-b): trade the desktop's six-digit pairing
+  /// code for a session cookie. The answer body never carries the token.
+  async function exchange() {
+    await action(async () => {
+      await api("/pairings/exchange", {
+        code: pairCode,
+        name: phoneName.trim(),
+        nonce: nonce(),
+      });
+      setPairCode("");
+      await refresh();
+    });
+  }
+  /// The advanced path (external account service): email OTP, kept for the
+  /// dev/external workflow behind the login gate's details fold.
   async function login() {
     await action(async () => {
       await api("/auth/verify-code", {
@@ -230,7 +247,7 @@ function App() {
           <p>
             {profile
               ? "想到的事，我们一起记住。"
-              : "用同一个邮箱登录，接续同一个伙伴和待办。"}
+              : "在电脑上生成配对码，六个数字接回同一个伙伴。"}
           </p>
         </div>
         <Companion />
@@ -241,7 +258,7 @@ function App() {
             ? "正在找回你的伙伴…"
             : profile
               ? `已同步 · ${synced} · 页面打开时每 10 秒更新`
-              : "仅对受邀邮箱开放。验证码有效期为 10 分钟。")}
+              : "输入电脑上的六位配对码即可连接；高级入口保留账号服务登录。")}
       </div>
       {!ready ? (
         <button onClick={() => void refresh(true)}>重新连接</button>
@@ -252,74 +269,108 @@ function App() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void (challenge ? login() : requestCode());
+              void exchange();
             }}
           >
-            <label htmlFor="email">邮箱</label>
+            <p className="hint">
+              在电脑的「设备配对与权限」里生成配对码（六位数字，五分钟有效），
+              手机与电脑连同一 WiFi 时输入即可。
+            </p>
+            <label htmlFor="phone-name">这台手机的名称</label>
             <input
-              id="email"
-              type="email"
-              autoComplete="email"
+              id="phone-name"
               required
-              maxLength={254}
-              value={email}
-              disabled={busy || !!challenge}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="你已配置的受邀邮箱"
+              maxLength={40}
+              value={phoneName}
+              disabled={busy}
+              onChange={(e) => setPhoneName(e.target.value)}
             />
-            {challenge && (
-              <>
-                <p className="hint">
-                  如果邮箱在邀请名单内，验证码将发送到你的收件箱。
-                </p>
-                <label htmlFor="code">8 位验证码</label>
-                <input
-                  id="code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{8}"
-                  maxLength={8}
-                  required
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                />
-              </>
-            )}
-            <button
-              className="primary"
-              disabled={busy || (!challenge && cooldown > 0)}
-            >
-              {busy
-                ? "请稍候…"
-                : challenge
-                  ? "与栖栖会合"
-                  : cooldown
-                    ? `${cooldown} 秒后可重发`
-                    : "获取验证码"}
+            <label htmlFor="pair-code">电脑上的六位配对码</label>
+            <input
+              id="pair-code"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              required
+              value={pairCode}
+              disabled={busy}
+              onChange={(e) => setPairCode(e.target.value.replace(/\D/g, ""))}
+            />
+            <button className="primary" disabled={busy || pairCode.length !== 6}>
+              {busy ? "请稍候…" : "与电脑配对"}
             </button>
-            {challenge && (
-              <div className="row">
-                <button
-                  type="button"
-                  disabled={busy || cooldown > 0}
-                  onClick={() => void requestCode()}
-                >
-                  {cooldown ? `${cooldown} 秒后重发` : "重新获取验证码"}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setChallenge("");
-                    setCode("");
-                    loginNonce.current = "";
-                  }}
-                >
-                  更换邮箱
-                </button>
-              </div>
-            )}
           </form>
+          <details>
+            <summary>高级：使用账号服务登录（受邀邮箱）</summary>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void (challenge ? login() : requestCode());
+              }}
+            >
+              <label htmlFor="email">邮箱</label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                required
+                maxLength={254}
+                value={email}
+                disabled={busy || !!challenge}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="你已配置的受邀邮箱"
+              />
+              {challenge && (
+                <>
+                  <p className="hint">
+                    如果邮箱在邀请名单内，验证码将发送到你的收件箱。
+                  </p>
+                  <label htmlFor="code">8 位验证码</label>
+                  <input
+                    id="code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{8}"
+                    maxLength={8}
+                    required
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  />
+                </>
+              )}
+              <button disabled={busy || (!challenge && cooldown > 0)}>
+                {busy
+                  ? "请稍候…"
+                  : challenge
+                    ? "与栖栖会合"
+                    : cooldown
+                      ? `${cooldown} 秒后可重发`
+                      : "获取验证码"}
+              </button>
+              {challenge && (
+                <div className="row">
+                  <button
+                    type="button"
+                    disabled={busy || cooldown > 0}
+                    onClick={() => void requestCode()}
+                  >
+                    {cooldown ? `${cooldown} 秒后重发` : "重新获取验证码"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setChallenge("");
+                      setCode("");
+                      loginNonce.current = "";
+                    }}
+                  >
+                    更换邮箱
+                  </button>
+                </div>
+              )}
+            </form>
+          </details>
         </section>
       ) : (
         <div className="dashboard">

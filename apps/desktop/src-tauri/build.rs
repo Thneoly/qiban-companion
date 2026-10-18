@@ -7,6 +7,7 @@ fn main() {
         "account_pairing_offer",
         "account_pairing_revoke",
         "account_snapshot",
+        "account_lan_info",
         "account_port_save",
         "account_code_request",
         "account_login",

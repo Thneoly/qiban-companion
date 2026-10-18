@@ -62,6 +62,10 @@ pub struct Snapshot {
     profile: Option<Profile>,
     tasks: Vec<Task>,
     notice: Option<&'static str>,
+    /// True when the embedded coordinator owns the connection (P1-b): the
+    /// email OTP form is unreachable by design and the boot task self-heals
+    /// the session, so a signed_out snapshot means "service not ready yet".
+    embedded: bool,
 }
 struct Challenge {
     id: String,
@@ -74,6 +78,7 @@ pub struct AccountClient {
     http: Client,
     vault: Arc<dyn SessionVault>,
     challenge: Option<Challenge>,
+    embedded: bool,
     /// Cached "{port}-{account_id}" for the sync loop's per-tick use. Set on
     /// first resolution, cleared on a 401 so it never outlives the session
     /// it names — the loop must not turn /v1/me into a recurring call inside
@@ -126,6 +131,7 @@ impl AccountClient {
             http,
             vault,
             challenge: None,
+            embedded: false,
             owner_cache: std::sync::Mutex::new(None),
         })
     }
@@ -151,7 +157,16 @@ impl AccountClient {
             profile: None,
             tasks: vec![],
             notice: None,
+            embedded: self.embedded,
         }
+    }
+    /// Mark the connection as owned by the embedded coordinator (set once at
+    /// boot when the embedded server starts; never unset).
+    pub(crate) fn set_embedded(&mut self) {
+        self.embedded = true;
+    }
+    pub(crate) fn is_embedded(&self) -> bool {
+        self.embedded
     }
     fn require_signed_out(&self) -> Result<()> {
         if let Some(secret) = self.secret()? {
@@ -433,6 +448,7 @@ impl AccountClient {
             profile: Some(profile),
             tasks,
             notice: None,
+            embedded: self.embedded,
         })
     }
     pub(crate) fn active_secret(&self) -> Result<SessionSecret> {
@@ -692,4 +708,32 @@ pub async fn account_pairing_revoke(
     state: State<'_, AccountState>,
 ) -> Result<()> {
     state.lock().await.pairing_revoke(id, revision).await
+}
+
+/// Where a phone should connect: the embedded port plus the machine's LAN
+/// address (P1-b). Address is None when no default route exists.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanInfo {
+    port: u16,
+    embedded: bool,
+    lan_address: Option<String>,
+}
+#[tauri::command]
+pub async fn account_lan_info(
+    state: State<'_, AccountState>,
+) -> std::result::Result<LanInfo, AccountError> {
+    let (port, embedded) = {
+        let client = state.lock().await;
+        (client.port(), client.is_embedded())
+    };
+    Ok(LanInfo {
+        port,
+        embedded,
+        lan_address: if embedded {
+            crate::embedded::lan_address()
+        } else {
+            None
+        },
+    })
 }

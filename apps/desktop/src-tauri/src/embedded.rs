@@ -179,6 +179,21 @@ fn token_hash(token: &str) -> Option<[u8; 32]> {
     (raw.len() == 32).then(|| Sha256::digest(&raw).into())
 }
 
+/// The LAN address a phone should point at: the default-route egress IP
+/// (UdpSocket connect trick — no packet is actually sent). None when there
+/// is no route at all; the UI falls back to the generic pairing wording.
+pub fn lan_address() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let address = socket.local_addr().ok()?;
+    match address.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => {
+            Some(ip.to_string())
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
