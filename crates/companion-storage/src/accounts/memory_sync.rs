@@ -1121,6 +1121,9 @@ mod tests {
 
     #[test]
     fn task_fact_capacity_is_an_independent_fifty_slot_pool() {
+        // Pin the literal: the acceptance case is "fifty", not "whatever the
+        // constant holds" — a silent change to the constant must fail here.
+        assert_eq!(MAX_TASK_FACTS, 50);
         let store = fixture();
         let alice = identity("provider", "alice", "session-a", 100);
         for index in 0..MAX_TASK_FACTS {
@@ -1171,13 +1174,19 @@ mod tests {
     }
 
     #[test]
-    fn a_pre_task_fact_client_cannot_decode_a_task_fact_event() {
-        // Compatibility fact (D2): a pre-task-fact desktop binary parses the
-        // sync response with a two-valued MemoryKind, so a task_fact event
-        // from a newer server fails ITS deserialization — the pull errors and
-        // retries, local data is untouched, and the binary must be upgraded.
-        // Pinned here so the wire-level break is a recorded decision, not an
-        // accident: server and desktop ship together in this repo.
+    fn a_two_valued_kind_enum_fails_closed_on_task_fact_events() {
+        // Hypothetical-compatibility pin (D2): a client whose MemoryKind only
+        // has the two original values fails ITS deserialization on a
+        // task_fact event — the pull errors, local data is untouched, and
+        // nothing is silently misread. Historical note, kept honest: no such
+        // binary was ever shipped. MemoryKind has carried TaskFact since the
+        // first memory-domain commit (5e1ae9e, before any sync code), so
+        // every released desktop — v0.1.0 included — decodes task_fact fine
+        // and skips materializing it via skipped_kind (covered by
+        // task_fact_entries_are_mirrored_but_never_materialized). This pin
+        // records the fail-closed semantics for any future kind split, and
+        // the positive control below attributes the failure to the kind
+        // value, not to field-shape drift in this fixture's copy.
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "snake_case")]
         enum OldKind {
@@ -1196,7 +1205,7 @@ mod tests {
             _event_date: Option<String>,
             _occurred_at: i64,
         }
-        let event = MemorySyncEvent {
+        let fact = MemorySyncEvent {
             seq: 1,
             memory_id: uuid::Uuid::new_v4().to_string(),
             op: MemorySyncOp::Upsert,
@@ -1206,10 +1215,26 @@ mod tests {
             event_date: None,
             occurred_at: 1,
         };
-        let wire = serde_json::to_string(&event).unwrap();
+        let wire = serde_json::to_string(&fact).unwrap();
         assert!(
             serde_json::from_str::<OldEvent>(&wire).is_err(),
-            "the two-valued legacy kind enum must reject task_fact — upgrade is mandatory"
+            "a two-valued kind enum must fail closed on task_fact"
+        );
+        // Positive control: the same wire shape decodes cleanly for the
+        // kinds the old enum does know, so the failure above is the task_fact
+        // variant — not a stale field name or casing in this fixture.
+        let preference = MemorySyncEvent {
+            seq: fact.seq,
+            memory_id: fact.memory_id.clone(),
+            op: MemorySyncOp::Upsert,
+            revision: fact.revision,
+            kind: Some(MemoryKind::Preference),
+            body: fact.body.clone(),
+            event_date: None,
+            occurred_at: fact.occurred_at,
+        };
+        assert!(
+            serde_json::from_str::<OldEvent>(&serde_json::to_string(&preference).unwrap()).is_ok()
         );
     }
 }

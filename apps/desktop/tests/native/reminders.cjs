@@ -33,7 +33,7 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await contentInput(section).fill('验收：该喝水了');
   await minutesInput(section).fill('1');
   await section().getByRole('button',{name:'设置提醒'}).click();
-  const row=section().locator('li').first();
+  const row=section().locator('li').filter({hasText:'验收：该喝水了'});
   await expect(row).toContainText('验收：该喝水了');
   await expect(row).toContainText('待提醒');
   await expect(row.getByRole('button',{name:'取消',exact:true})).toHaveCount(1);
@@ -50,12 +50,13 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await panel.screenshot({path:path.join(evidence,'reminders-panel.png'),fullPage:true});
   // Case 3 — due reminder fires ONCE as a pet bubble (the firing loop runs
   // every 15s; a 1-minute reminder fires within ~75s) and settles to 已提醒.
+  // The bubble is the user-visible firing evidence, so it is asserted for
+  // real — a silent regression of the pet-window listener fails here, not
+  // just in the database.
+  await expect(pet.getByText(/⏰|验收：该喝水了/).first()).toBeVisible({timeout:90_000});
   await expect(row).toContainText('已提醒',{timeout:90_000});
-  await expect(pet.getByText(/⏰|验收：该喝水了/).first()).toBeVisible({timeout:5_000}).catch(()=>{});
-  // The bubble retracts itself after ten seconds (best-effort check; the
-  // database state below is the authoritative pin).
-  await delay(10_500);
-  await expect(pet.getByText('验收：该喝水了')).toHaveCount(0).catch(()=>{});
+  // The bubble retracts itself after ten seconds.
+  await expect(pet.getByText('验收：该喝水了')).toHaveCount(0,{timeout:20_000});
   // Cancel the pending 30-minute one.
   const pending=section().locator('li').filter({hasText:'重启后仍待提醒'});
   await pending.getByRole('button',{name:'取消',exact:true}).click();

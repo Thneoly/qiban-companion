@@ -88,12 +88,18 @@ async function exportFile(destination,overwrite=false){
   }
   const emptyExport=path.join(evidence,'empty.json');await exportFile(emptyExport);assert.deepEqual(JSON.parse(fs.readFileSync(emptyExport,'utf8')).items,[]);
   // Injection round (TF-C1): rebuild a memory, enable the selection, send,
-  // and prove the audit row's memory_block is BYTE-EQUAL to the memory
-  // segment that actually rode the wire — an independent-source equality,
-  // so a logger writing anything else cannot pass.
+  // and anchor the audit row to THREE independent points: the store's
+  // ground truth (memory_list), the segment that rode the wire, and the
+  // audit row itself. A corrupted logger fails the byte-equality below; a
+  // corrupted selection/builder path fails the ground-truth bridge —
+  // either failure mode fires the pin. (C4's original truncated-not-equal
+  // counter-check was logically vacuous given the strictEqual — anything
+  // passing the equality necessarily differs from its own truncation — so
+  // the ground-truth bridge replaces it with substance.)
   {
     await invoke(panel,'memory_mutate',{request:{action:'create',draft:{kind:'preference',body:'注入验收：跨端记忆',eventDate:null},expectedEpoch:(await invoke(panel,'memory_list')).contextEpoch}});
     const listed=(await invoke(panel,'memory_list')).items;
+    assert.equal(listed[0].body,'注入验收：跨端记忆','ground truth from the store, not just a marker');
     assert.equal(listed.length,1,'exactly the injected memory exists');
     const scope=(await invoke(pet,'chat_context_preview')).scope;
     try {
@@ -115,23 +121,32 @@ async function exportFile(destination,overwrite=false){
     assert(JSON.stringify(requests[1]).includes('注入验收'),'the wire carried the memory block');
     const memoryMessage=requests[1].messages.find(m=>typeof m.content==='string'&&m.content.includes('注入验收'));
     assert(memoryMessage,'memory segment found in the wire body');
+    // Ground-truth bridge (builder side): the wire segment carries the
+    // store's full body — a selection or builder path that truncated or
+    // substituted the memory fails here, even though wire and audit would
+    // agree with each other.
+    assert(memoryMessage.content.includes(listed[0].body),'the wire segment carries the full ground-truth body');
     const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});
     const rows=db.prepare('SELECT request_id,outcome,memory_block,memory_count,memory_chars,prompt FROM chat_dispatch_log ORDER BY seq').all();
     db.close();
     assert.equal(rows.length,2);
     assert.equal(rows[1].request_id,'m2-inject');assert.equal(rows[1].outcome,'sent');
-    // The strong pin: the audit's memory_block IS the wire's memory segment.
+    // The strong pin (logger side): the audit's memory_block IS the wire's
+    // memory segment.
     assert.strictEqual(rows[1].memory_block,memoryMessage.content);
     assert.equal(rows[1].memory_count,1);
     assert.equal(rows[1].memory_chars,[...memoryMessage.content].length);
     assert.equal(rows[1].prompt,'带记忆的一轮');
-    // And the equality is discriminating (C4): a corrupted logger writing a
-    // truncated block cannot satisfy it.
-    assert.notStrictEqual(rows[1].memory_block,memoryMessage.content.slice(0,-1));
+    // Second anchoring of the same row to the ground truth, independently
+    // of the wire: the audit carries the store's full body too. Together
+    // with the no-memory round above (memory_block null), these show the
+    // equality assertions discriminate: null, truncated, and substituted
+    // blocks each fail a different leg of the bridge.
+    assert(rows[1].memory_block.includes(listed[0].body),'the audit row anchors to the ground-truth body');
   }
   await stop();await start();assert.deepEqual((await invoke(panel,'memory_list')).items.map(m=>m.body),['注入验收：跨端记忆']);
   await stop();
   const db=new DatabaseSync(path.join(directory,'chat-history.db'),{readOnly:true});assert.equal(db.prepare('SELECT count(*) AS n FROM memories WHERE deleted_at IS NOT NULL AND body IS NULL AND source_label IS NULL').get().n,1);db.close();
-  const result={passed:true,identifier:id,localhostRequests:requests.length,cases:['create and restart','window permission and confirmation','native export cancel/save/overwrite','correct and clear','delete during stream','restart empty and tombstone','empty export without deleted text','sent audit byte-equals the wire memory segment']};
+  const result={passed:true,identifier:id,localhostRequests:requests.length,cases:['create and restart','window permission and confirmation','native export cancel/save/overwrite','correct and clear','delete during stream','restart empty and tombstone','empty export without deleted text','sent audit byte-equals the wire segment and both anchor to the store ground truth']};
   fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await stop();server.closeAllConnections();server.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
