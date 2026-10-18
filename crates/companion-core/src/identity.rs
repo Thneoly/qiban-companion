@@ -26,6 +26,7 @@ pub enum IdentityError {
 /// type. `authenticated_at` is the original login time, NOT token refresh time.
 /// `session_id` must remain stable across refreshes and change on a new login.
 /// No access/refresh tokens or email addresses are retained here.
+#[derive(Clone)]
 pub struct VerifiedIdentity {
     issuer: String,
     subject: String,

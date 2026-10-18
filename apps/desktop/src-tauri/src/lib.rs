@@ -88,7 +88,14 @@ pub fn run() {
                         return;
                     };
                     let preferred = state.lock().await.port();
-                    match embedded::start(&data_dir.join("coordinator.db"), preferred).await {
+                    // Bundled mobile-web dist (release builds); dev builds
+                    // have no resources and the static face 404s.
+                    let assets = handle
+                        .path()
+                        .resource_dir()
+                        .ok()
+                        .map(|dir| dir.join("mobile-web"));
+                    match embedded::start(&data_dir.join("coordinator.db"), preferred, assets).await {
                         Ok(embedded::EmbeddedCoordinator::Started {
                             port,
                             store,
