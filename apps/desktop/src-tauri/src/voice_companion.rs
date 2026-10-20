@@ -22,7 +22,6 @@ use tokio::sync::watch;
 const FRAME_MS: usize = 20;
 const WINDOW_FRAMES: usize = 130; // analyse at most the first 2.6 s
 const SPAN_FRAMES: usize = 85; // the three segments end within 1.7 s
-const HEAD_FRAMES: usize = 2; // allowed leading silence before segment one
 const SILENCE_RMS: f64 = 3e-3;
 const MIN_SEGMENTS: [usize; 3] = [4, 15, 5];
 const MAX_SEGMENTS: [usize; 3] = [10, 25, 12];
@@ -147,64 +146,119 @@ fn trim_leading_tone(wav: &[u8], first_sentence: bool) -> (Cow<'_, [u8]>, bool) 
             3
         }
     };
-    let mut cursor = 0;
-    if runs
-        .first()
-        .is_some_and(|run| run.2 && run.1 - run.0 > HEAD_FRAMES)
-    {
-        return keep();
-    }
-    if runs.first().is_some_and(|run| run.2) {
-        cursor = 1;
-    }
-    // The three tone segments, each followed by a real silent gap.
+    // Leading silence (any length) simply precedes whatever comes next; the
+    // passes below decide on tone/speech shape alone. An early "too much
+    // leading silence" bail used to shield the exact signature — it also
+    // blocked the loose pass on clips that merely started quietly.
+    let mut cursor = usize::from(runs.first().is_some_and(|run| run.2));
+    // Exact pass: the three known tone segments, each followed by a real
+    // silent gap. Any mismatch falls through to the looser second pass —
+    // the provider's tone shape has drifted on real machines before (every
+    // sentence beeped again), so an exact-signature-only trim is a
+    // regression waiting for the next drift.
     let mut segment_end = 0;
-    for (index, (min, max)) in MIN_SEGMENTS.iter().zip(MAX_SEGMENTS.iter()).enumerate() {
+    let mut exact = true;
+    'exact: for (index, (min, max)) in MIN_SEGMENTS.iter().zip(MAX_SEGMENTS.iter()).enumerate() {
         let Some(run) = runs.get(cursor) else {
-            return keep();
+            exact = false;
+            break 'exact;
         };
         let length = run.1 - run.0;
         if kind_of(*run) != 1 || length < *min || length > *max {
-            return keep();
+            exact = false;
+            break 'exact;
         }
         segment_end = run.1;
         if index == 2 {
             break;
         }
-        let Some(gap) = runs.get(cursor + 1) else {
-            return keep();
-        };
-        let Some(next) = runs.get(cursor + 2) else {
-            return keep();
+        let (Some(gap), Some(next)) = (runs.get(cursor + 1), runs.get(cursor + 2)) else {
+            exact = false;
+            break 'exact;
         };
         if kind_of(*gap) != 0 || gap.1 - gap.0 < MIN_GAP_FRAMES || kind_of(*next) != 1 {
-            return keep();
+            exact = false;
+            break 'exact;
         }
         cursor += 2;
     }
-    if segment_end > SPAN_FRAMES {
-        return keep();
+    let mut trim_frame = None;
+    if exact && segment_end <= SPAN_FRAMES {
+        // After the tone: silence is fine, but the first sound must look
+        // like speech (variable envelope); another steady segment means the
+        // signature does not match this clip.
+        cursor += 1;
+        let mut speech_start = None;
+        while let Some(run) = runs.get(cursor) {
+            if !run.2 {
+                if kind_of(*run) == 2 {
+                    speech_start = Some(run.0);
+                }
+                break;
+            }
+            cursor += 1;
+        }
+        if let Some(speech_start) = speech_start {
+            trim_frame = Some(
+                speech_start
+                    .saturating_sub(SPEECH_PAD_FRAMES)
+                    .max(segment_end),
+            );
+        }
     }
-    // After the tone: silence is fine, but the first sound must look like
-    // speech (variable envelope); another steady segment means the signature
-    // does not match this clip.
-    cursor += 1;
-    let mut speech_start = None;
-    while let Some(run) = runs.get(cursor) {
-        if !run.2 {
-            if kind_of(*run) == 2 {
-                speech_start = Some(run.0);
+    // Loose pass: a leading run of constant-tone segments totalling 60 ms–1 s
+    // ms with real energy, then a silent gap, then natural speech. The
+    // must-find-speech guard keeps a pure-tone clip (or a shouted lead-in
+    // with no gap after it) untouched.
+    if trim_frame.is_none() {
+        let mut cursor = usize::from(runs.first().is_some_and(|run| run.2));
+        let mut tone_frames = 0usize;
+        let mut tone_end = 0usize;
+        let mut energetic = false;
+        while let Some(run) = runs.get(cursor) {
+            if kind_of(*run) != 1 {
+                break;
+            }
+            let length = run.1 - run.0;
+            let mean = rms[run.0..run.1].iter().sum::<f64>() / length as f64;
+            energetic |= mean >= 0.01;
+            tone_frames += length;
+            tone_end = run.1;
+            cursor += 1;
+            if let Some(gap) = runs.get(cursor) {
+                if gap.2 && gap.1 - gap.0 >= MIN_GAP_FRAMES {
+                    cursor += 1;
+                    continue;
+                }
             }
             break;
         }
-        cursor += 1;
+        if energetic && (3..=50).contains(&tone_frames) {
+            let mut speech_start = None;
+            while let Some(run) = runs.get(cursor) {
+                if !run.2 {
+                    if kind_of(*run) == 2 {
+                        speech_start = Some(run.0);
+                    }
+                    break;
+                }
+                cursor += 1;
+            }
+            if let Some(speech_start) = speech_start {
+                trim_frame = Some(speech_start.saturating_sub(SPEECH_PAD_FRAMES).max(tone_end));
+            }
+        }
+        // Diagnosis: an energetic steady segment survived BOTH passes —
+        // dump the frame kinds so the next report ships the provider's
+        // actual tone shape instead of another guess.
+        if trim_frame.is_none() && runs.iter().take(30).any(|run| kind_of(*run) == 1) {
+            let kinds: Vec<u8> = runs.iter().take(24).map(|run| kind_of(*run)).collect();
+            eprintln!("qiban voice: leading tone survived both passes; frame kinds {kinds:?}");
+        }
     }
-    let Some(speech_start) = speech_start else {
+    let Some(trim_frame) = trim_frame else {
         return keep();
     };
-    let trim_frame = speech_start
-        .saturating_sub(SPEECH_PAD_FRAMES)
-        .max(segment_end);
     let trim_offset = format.data_offset + trim_frame * frame_bytes;
     if trim_offset <= format.data_offset || trim_offset >= data_end {
         return keep();
@@ -503,33 +557,58 @@ mod tests {
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
     }
     #[test]
-    fn keeps_audio_when_the_signature_does_not_match() {
-        let mut long_gap = Vec::new();
-        long_gap.extend_from_slice(&layout(6, 19, 7, 3));
-        // Third segment would end at frame 86, past the 1.7 s span bound.
-        long_gap[3] = (Seg::Silence, 46);
-        let mut leading_silence = vec![(Seg::Silence, 3)];
-        leading_silence.extend(layout(6, 19, 7, 3));
-        let mut fourth_steady = Vec::new();
-        fourth_steady.extend(layout(6, 19, 7, 3).into_iter().take(6));
-        fourth_steady.extend_from_slice(&[(Seg::Tone, 6), (Seg::Silence, 3), (Seg::Speech, 30)]);
+    fn keeps_audio_without_a_leading_tone() {
+        let mut tone_without_speech = Vec::new();
+        tone_without_speech.extend(layout(6, 19, 7, 3).into_iter().take(6));
+        // Tone present but nothing speech-like follows: never trim (the
+        // must-find-speech guard is what keeps pure-tone clips intact).
+        tone_without_speech.extend_from_slice(&[
+            (Seg::Tone, 6),
+            (Seg::Silence, 3),
+            (Seg::Silence, 40),
+        ]);
+        let mut tone_past_the_budget = Vec::new();
+        tone_past_the_budget.extend(layout(6, 19, 7, 3).into_iter().take(6));
+        // Total tone ≈ 58 frames ≈ 1.16 s: past the loose pass's 1 s
+        // budget, and a steady segment sits where speech should start.
+        tone_past_the_budget.extend_from_slice(&[
+            (Seg::Tone, 26),
+            (Seg::Silence, 3),
+            (Seg::Speech, 30),
+        ]);
         for segments in [
             vec![(Seg::Speech, 30)], // speech from the start
-            layout(6, 19, 7, 3).into_iter().take(5).collect::<Vec<_>>(), // only two tone segments
+            layout(6, 19, 7, 3).into_iter().take(5).collect::<Vec<_>>(), // tone, then the clip ends
             vec![(Seg::Speech, 3)],  // shorter than any window
-            layout(3, 19, 7, 3),     // first segment too short
-            layout(11, 19, 7, 3),    // first segment too long
-            layout(6, 14, 7, 3),     // second segment too short
-            layout(6, 26, 7, 3),     // second segment too long
-            layout(6, 19, 13, 3),    // third segment too long
-            long_gap,                // third segment ends past 1.7 s
-            leading_silence,         // more than two leading silence frames
-            fourth_steady,           // a steady segment where speech should start
+            tone_without_speech,
+            tone_past_the_budget,
         ] {
             let wav = build_wav(&segments, false);
             let (trimmed, did) = trim_leading_tone(&wav, false);
             assert!(!did, "{segments:?}");
             assert_eq!(trimmed.into_owned(), wav);
+        }
+    }
+    #[test]
+    fn drifted_tone_shapes_still_trim_through_the_loose_pass() {
+        // The provider's tone has drifted on real machines: segment lengths
+        // outside the exact signature made EVERY sentence beep again. The
+        // loose pass trims any energetic constant-tone lead-in within
+        // 60–600 ms that is followed by a gap and natural speech.
+        let mut leading_silence = vec![(Seg::Silence, 3)];
+        leading_silence.extend(layout(6, 19, 7, 3));
+        for segments in [
+            layout(3, 19, 7, 3),  // first segment shorter than the signature
+            layout(11, 19, 7, 3), // first segment longer
+            layout(6, 14, 7, 3),  // second segment shorter
+            layout(6, 26, 7, 3),  // second segment longer
+            layout(6, 19, 13, 3), // third segment longer
+            leading_silence,      // a little leading silence before the tone
+        ] {
+            let wav = build_wav(&segments, false);
+            let (trimmed, did) = trim_leading_tone(&wav, false);
+            assert!(did, "{segments:?}");
+            assert!(trimmed.len() < wav.len(), "{segments:?}");
         }
     }
     #[test]
