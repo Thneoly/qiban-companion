@@ -711,13 +711,14 @@ pub async fn account_pairing_revoke(
 }
 
 /// Where a phone should connect: the embedded port plus the machine's LAN
-/// address (P1-b). Address is None when no default route exists.
+/// addresses (P1-b), ranked most-likely first. A default-route probe alone
+/// reports proxy TUN fake-ips, so real interfaces are enumerated instead.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LanInfo {
     port: u16,
     embedded: bool,
-    lan_address: Option<String>,
+    lan_addresses: Vec<String>,
 }
 #[tauri::command]
 pub async fn account_lan_info(
@@ -730,10 +731,10 @@ pub async fn account_lan_info(
     Ok(LanInfo {
         port,
         embedded,
-        lan_address: if embedded {
-            crate::embedded::lan_address()
+        lan_addresses: if embedded {
+            crate::embedded::lan_addresses()
         } else {
-            None
+            vec![]
         },
     })
 }

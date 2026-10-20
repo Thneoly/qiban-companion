@@ -179,19 +179,54 @@ fn token_hash(token: &str) -> Option<[u8; 32]> {
     (raw.len() == 32).then(|| Sha256::digest(&raw).into())
 }
 
-/// The LAN address a phone should point at: the default-route egress IP
-/// (UdpSocket connect trick — no packet is actually sent). None when there
-/// is no route at all; the UI falls back to the generic pairing wording.
-pub fn lan_address() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let address = socket.local_addr().ok()?;
-    match address.ip() {
-        std::net::IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => {
-            Some(ip.to_string())
+/// Real RFC1918 candidates from the enumerated interfaces, most-likely
+/// first (192.168 home routers, then 10., then 172.16-31). Excludes, with a
+/// test to keep it honest: the proxy fake-ip range 198.18.0.0/15 (a TUN
+/// adapter OWNING the default route made the earlier single-probe version
+/// report exactly that on a real machine), link-local, loopback, and the
+/// unspecified address.
+pub fn lan_addresses() -> Vec<String> {
+    let interfaces = local_ip_address::list_afinet_netifas()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, address)| match address {
+            std::net::IpAddr::V4(ip) => Some(ip),
+            std::net::IpAddr::V6(_) => None,
+        })
+        .collect();
+    rank_lan_addresses(interfaces)
+        .into_iter()
+        .map(|ip| ip.to_string())
+        .collect()
+}
+
+/// Pure ranking/filtering so the exclusion rules are unit-testable.
+pub(crate) fn rank_lan_addresses(candidates: Vec<std::net::Ipv4Addr>) -> Vec<std::net::Ipv4Addr> {
+    let is_fake_ip = |ip: std::net::Ipv4Addr| {
+        let octets = ip.octets();
+        octets[0] == 198 && (octets[1] & 0xFE) == 18
+    };
+    let private_kind = |ip: std::net::Ipv4Addr| -> Option<u8> {
+        let octets = ip.octets();
+        if ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() || is_fake_ip(ip) {
+            return None;
         }
-        _ => None,
-    }
+        if octets[0] == 192 && octets[1] == 168 {
+            Some(0)
+        } else if octets[0] == 10 {
+            Some(1)
+        } else if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+            Some(2)
+        } else {
+            None
+        }
+    };
+    let mut ranked: Vec<(u8, std::net::Ipv4Addr)> = candidates
+        .into_iter()
+        .filter_map(|ip| private_kind(ip).map(|kind| (kind, ip)))
+        .collect();
+    ranked.sort_by_key(|(kind, ip)| (*kind, ip.octets()));
+    ranked.into_iter().map(|(_, ip)| ip).collect()
 }
 
 #[cfg(test)]
@@ -218,5 +253,40 @@ mod tests {
             .is_ok());
         drop(store);
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod lan_rank_tests {
+    use super::rank_lan_addresses;
+    use std::net::Ipv4Addr;
+    fn ip(literal: &str) -> Ipv4Addr {
+        literal.parse().unwrap()
+    }
+    #[test]
+    fn ranking_drops_proxy_fake_ips_and_orders_home_routers_first() {
+        // A real machine's interface list the day this was fixed: the proxy
+        // TUN owned the default route and reported 198.18.0.1 as THE lan
+        // address — the phone could never reach it.
+        let ranked = rank_lan_addresses(vec![
+            ip("198.18.0.1"),  // proxy TUN fake-ip — excluded
+            ip("127.0.0.1"),   // loopback — excluded
+            ip("169.254.7.7"), // link-local — excluded
+            ip("0.0.0.0"),     // unspecified — excluded
+            ip("8.8.8.8"),     // public — excluded
+            ip("172.20.0.1"),  // WSL-style 172.16-31 — kept, ranked last
+            ip("10.11.12.13"), // corporate 10. — kept, ranked second
+            ip("192.168.1.5"), // home router — kept, ranked first
+            ip("192.168.1.2"),
+        ]);
+        let strings: Vec<String> = ranked.into_iter().map(|v| v.to_string()).collect();
+        assert_eq!(
+            strings,
+            vec!["192.168.1.2", "192.168.1.5", "10.11.12.13", "172.20.0.1"]
+        );
+    }
+    #[test]
+    fn the_whole_fake_ip_block_is_excluded_not_just_one_address() {
+        assert!(rank_lan_addresses(vec![ip("198.18.0.1"), ip("198.19.255.254")]).is_empty());
     }
 }

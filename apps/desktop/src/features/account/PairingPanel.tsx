@@ -19,9 +19,10 @@ export function PairingPanel({
   const [name, setName] = useState("我的电脑");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  // The LAN address a phone should open (P1-b embedded form); null when the
-  // embedded server is absent (dev/external mode keeps the old wording).
-  const [lan, setLan] = useState<{ port: number; address: string | null } | null>(
+  // The LAN addresses a phone might open (P1-b embedded form), ranked
+  // most-likely first; empty when the embedded server is absent (dev/
+  // external mode keeps the old wording).
+  const [lan, setLan] = useState<{ port: number; addresses: string[] } | null>(
     null,
   );
   const alive = useRef(false),
@@ -66,9 +67,9 @@ export function PairingPanel({
     if (nativeDesktop) {
       invoke("account_lan_info")
         .then((value) => {
-          const info = value as { port: number; lanAddress: string | null };
-          if (alive.current && info)
-            setLan({ port: info.port, address: info.lanAddress ?? null });
+          const info = value as { port: number; lanAddresses: string[] };
+          if (alive.current && info && Array.isArray(info.lanAddresses))
+            setLan({ port: info.port, addresses: info.lanAddresses });
         })
         .catch(() => {});
     }
@@ -144,16 +145,24 @@ export function PairingPanel({
       </form>
       {offer && (
         <div className="account-notice">
-          {lan?.address ? (
+          {lan && lan.addresses.length > 0 ? (
             <p>
               手机与电脑连同一 WiFi，在手机浏览器打开{" "}
               <code data-testid="pairing-url">
-                http://{lan.address}:{lan.port}
+                http://{lan.addresses[0]}:{lan.port}
               </code>
               ，输入这六位数字完成配对。
             </p>
           ) : (
             <p>在手机的「连接电脑」输入这六位数字，再核对设备并确认。</p>
+          )}
+          {lan && lan.addresses.length > 1 && (
+            <p className="helper">
+              打不开？你的电脑可能有多个网络，依次试试：
+              {lan.addresses
+                .slice(1)
+                .map((address) => ` http://${address}:${lan.port}`)}
+            </p>
           )}
           <code className="pairing-code" data-testid="pairing-code">
             {offer.code}
