@@ -35,6 +35,8 @@ pub fn run() {
                 eprintln!("restore existing instance: {error}");
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
         .manage(voice::VoiceState::default())
         .manage(voice_companion::VoiceTurnState::default())
