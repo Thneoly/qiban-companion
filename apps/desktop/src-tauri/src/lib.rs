@@ -69,7 +69,21 @@ pub fn run() {
                         saved
                     }
                     Err(error) => {
-                        eprintln!("pet placement unavailable; using default position: {error}");
+                        // In-memory fallback: position defaults (as before)
+                        // AND the guide flag stays session-usable — a broken
+                        // settings database must not reshow the onboarding
+                        // guide on every boot.
+                        eprintln!(
+                            "pet placement unavailable; falling back to in-memory settings: {error}"
+                        );
+                        match placement::PlacementStore::in_memory() {
+                            Ok(store) => {
+                                app.manage(std::sync::Mutex::new(store));
+                            }
+                            Err(memory_error) => {
+                                eprintln!("in-memory settings also failed: {memory_error}");
+                            }
+                        }
                         None
                     }
                 };
