@@ -30,7 +30,7 @@ git push -u origin feat/desktop-pet-window
 
 ## 版本管理（2026-10-20 起）
 
-单一版本源：**仓库根 `package.json`、根 `Cargo.toml` 的 `[workspace.package]`、以及 `apps/desktop/package.json` 三处保持同值**（当前 0.2.0；tauri 打包的版本号取自 app 的 package.json，漏改它产物名会留在旧版本——已实际踩过）。产品内三处展示/使用都从它来：安装包文件名（tauri 打包取 Cargo workspace 版本）、顶栏"桌面客户端 · vX.Y.Z"（`get_runtime_info` 的 `appVersion` ← `env!("CARGO_PKG_VERSION")`）、浏览器预览（vite `define` 注入根 package.json 版本）。
+单一版本源：**仓库根 `package.json` 与根 `Cargo.toml` 的 `[workspace.package]` 保持同值**（当前 0.2.0）。tauri.conf.json **不放 version 字段**——它优先级最高，漏看它会让产物名停在旧版本（已实际踩过两次：app package.json 与该字段各坑一次）；去掉后 tauri 从 Cargo workspace 解析。产品内三处展示/使用都从它来：安装包文件名（tauri 打包取 Cargo workspace 版本）、顶栏"桌面客户端 · vX.Y.Z"（`get_runtime_info` 的 `appVersion` ← `env!("CARGO_PKG_VERSION")`）、浏览器预览（vite `define` 注入根 package.json 版本）。
 
 - **语义**（0.x 阶段）：minor = 一批面向用户的能力合入（0.2.0 = P1 试用版）；patch = 修复与文案。1.0 另行评审。
 - **升版步骤**：同 commit 改根 `package.json` 与根 `Cargo.toml` → 跑全套门禁 → commit `chore(release): bump version to X.Y.Z` → 需要分发时打 tag `vX.Y.Z` 并附 Release Notes（诚实边界：未签名、附件哈希写入说明）。
