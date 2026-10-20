@@ -22,7 +22,7 @@ test('navigation is available on narrow screens and supports direct links and ba
   await page.setViewportSize({width:390,height:844});
   await page.goto('/?view=panel#memories');
   await expect(page.getByLabel('记忆空间', {exact:true})).toBeVisible();
-  await page.getByRole('link', {name:'手机与设备',exact:true}).click();
+  await page.getByRole('link', {name:'设备',exact:true}).click();
   await expect(page.getByLabel('设备空间', {exact:true})).toBeVisible();
   await page.goBack();
   await expect(page.getByLabel('记忆空间', {exact:true})).toBeVisible();
