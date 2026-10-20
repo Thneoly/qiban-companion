@@ -5,7 +5,7 @@ export function createPreviewClient(): CompanionClient {
   const tasks = new Map<string, Task>();
   return {
     async getRuntimeInfo() {
-      return { protocolVersion: PROTOCOL_VERSION, appVersion: '0.1.0', runtime: 'preview', persistence: 'memory', executorAvailable: false };
+      return { protocolVersion: PROTOCOL_VERSION, appVersion: import.meta.env.PACKAGE_VERSION ?? 'dev', runtime: 'preview', persistence: 'memory', executorAvailable: false };
     },
     async listTasks() { return [...tasks.values()].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id)).map(t => ({ ...t })); },
     async createTask(title) {

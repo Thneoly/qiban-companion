@@ -44,6 +44,17 @@ export function PairingPanel({
   }
   async function refresh() {
     const id = ++sequence.current;
+    // The phone's entry URL rides the same 10 s cadence as the pairing
+    // list, so a DHCP change shows up without regenerating a code.
+    if (nativeDesktop) {
+      invoke("account_lan_info")
+        .then((value) => {
+          const info = value as { port: number; lanAddresses: string[] };
+          if (alive.current && info && Array.isArray(info.lanAddresses))
+            setLan({ port: info.port, addresses: info.lanAddresses });
+        })
+        .catch(() => {});
+    }
     try {
       const rows = decodePairings(await invoke("account_pairings"));
       if (!alive.current || id !== sequence.current) return;
@@ -62,17 +73,6 @@ export function PairingPanel({
   useEffect(() => {
     alive.current = true;
     void refresh();
-    // The phone's entry URL (embedded form only); best-effort — the panel
-    // wording falls back when it is unavailable.
-    if (nativeDesktop) {
-      invoke("account_lan_info")
-        .then((value) => {
-          const info = value as { port: number; lanAddresses: string[] };
-          if (alive.current && info && Array.isArray(info.lanAddresses))
-            setLan({ port: info.port, addresses: info.lanAddresses });
-        })
-        .catch(() => {});
-    }
     const tick = () => {
       if (!acting.current && document.visibilityState === "visible")
         void refresh();
@@ -105,6 +105,18 @@ export function PairingPanel({
   return (
     <section className="pairing-panel" aria-labelledby="pairing-title">
       <h3 id="pairing-title">设备配对与权限</h3>
+      {lan && lan.addresses.length > 0 && (
+        <p className="helper" data-testid="phone-entry">
+          手机入口（同一 WiFi）：
+          {lan.addresses.map((address, index) => (
+            <span key={address}>
+              {index > 0 && " 或 "}
+              <code>http://{address}:{lan.port}</code>
+            </span>
+          ))}
+          ；地址随网络变化自动更新。
+        </p>
+      )}
       <p className="helper">
         仅用于文档摘录协作，每个动作仍需单独确认。电脑选定并分享预览后，可在手机确认保存。配对不授予任意文件、聊天或记忆访问。
       </p>

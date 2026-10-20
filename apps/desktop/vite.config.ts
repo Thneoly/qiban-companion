@@ -1,11 +1,16 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'node:fs';
+import rootPackage from '../../package.json' with { type: 'json' };
 import runtime from './scripts/live2d-runtime-manifest.json' with { type: 'json' };
 
 export default defineConfig(({ mode }) => ({
   // Installer artifacts contain only reviewed source assets, never local research downloads.
   publicDir: mode === 'installer' ? false : 'public',
+  // Single version source for the UI (the workspace root package.json,
+  // kept in lockstep with the Cargo workspace version): the preview client
+  // reports it as appVersion.
+  define: { PACKAGE_VERSION: JSON.stringify(rootPackage.version) },
   plugins: [react(), ...(mode === 'installer' ? [{
     name: 'reviewed-live2d-runtime',
     generateBundle() {

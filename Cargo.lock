@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "companion-coordinator"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "companion-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "companion-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "companion-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "companion-core",
  "rusqlite",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "memory-service"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "reqwest 0.12.28",

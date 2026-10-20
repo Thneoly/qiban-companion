@@ -27,6 +27,14 @@ git push -u origin feat/desktop-pet-window
 - CI 失败先修复；强制分支保护以远端实际配置为准，本文不代表已开启保护。
 - 不对 main 强制推送，不提交令牌、私钥或本机数据库；密钥只使用 CI secrets 或适当的本地凭据存储。
 - 可执行文件和安装包不进入源码历史；v0.1.0 已于 2026-10-11 创建 tag 与 GitHub Release（见 docs/status/windows-installer.md）；安装包附件与签名仍待发布流程补齐。
+
+## 版本管理（2026-10-20 起）
+
+单一版本源：**仓库根 `package.json` 与根 `Cargo.toml` 的 `[workspace.package]` 保持同值**（当前 0.2.0）。产品内三处展示/使用都从它来：安装包文件名（tauri 打包取 Cargo workspace 版本）、顶栏"桌面客户端 · vX.Y.Z"（`get_runtime_info` 的 `appVersion` ← `env!("CARGO_PKG_VERSION")`）、浏览器预览（vite `define` 注入根 package.json 版本）。
+
+- **语义**（0.x 阶段）：minor = 一批面向用户的能力合入（0.2.0 = P1 试用版）；patch = 修复与文案。1.0 另行评审。
+- **升版步骤**：同 commit 改根 `package.json` 与根 `Cargo.toml` → 跑全套门禁 → commit `chore(release): bump version to X.Y.Z` → 需要分发时打 tag `vX.Y.Z` 并附 Release Notes（诚实边界：未签名、附件哈希写入说明）。
+- **不做**：不逐 PR 升版；子包（packages/apps 内部）版本与产品版本解耦，不随动。
 - .gitattributes 统一文本为 LF，二进制图标保留原样。身份配置仅影响本仓库，不改全局 Git 身份。
 
 ## CI暂停（2026-09-21）

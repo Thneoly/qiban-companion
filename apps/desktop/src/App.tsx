@@ -91,7 +91,7 @@ export default function App() {
       <button className="workspace-chat-link" onClick={() => void petAction('open_chat').catch(e => setError(errorMessage(e)))}>与栖栖对话 ↗</button>
     </aside>
     <main id="home">
-      <header className="topbar"><span>我们的空间 / {selected[1]}</span><span className="environment">{info?.runtime === 'desktop' ? '桌面客户端' : info?.runtime === 'preview' ? '浏览器预览' : '正在连接…'}</span></header>
+      <header className="topbar"><span>我们的空间 / {selected[1]}</span><span className="environment">{info?.runtime === 'desktop' ? `桌面客户端 · v${info.appVersion}` : info?.runtime === 'preview' ? '浏览器预览' : '正在连接…'}</span></header>
       <div className="page-content">
         <div className="page-heading"><div><h1>{selected[2]}</h1><p>{selected[3]}</p></div>{nativeDesktop && <button className="text-button" onClick={() => void petAction('restore').catch(e => setError(errorMessage(e)))}>显示桌面角色</button>}</div>
         {error && <div className="error-banner" role="alert"><span>{error}</span>{!ready && <button onClick={() => void load()}>重新连接</button>}</div>}
