@@ -21,6 +21,8 @@
     "@companion/contracts": "*",
     "@pixi/unsafe-eval": "6.5.10",
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-process": "2.4.0",
+    "@tauri-apps/plugin-updater": "2.14.0",
     "pixi.js": "6.5.10",
     "react": "19.3.0",
     "react-dom": "19.3.0"

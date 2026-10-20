@@ -10,6 +10,8 @@ import { Avatar } from './features/companion/Avatar';
 import { ExecutionPanel } from './features/tasks/ExecutionPanel';
 import { TaskPanel } from './features/tasks/TaskPanel';
 import { AccountPanel } from './features/account/AccountPanel';
+import { UpdateChecker } from './features/settings/UpdateChecker';
+import { Announcements } from './features/settings/Announcements';
 import { PersonalMemoryPanel } from './features/personal-memory/PersonalMemoryPanel';
 import { RemindersPanel } from './features/reminders/RemindersPanel';
 
@@ -93,6 +95,8 @@ export default function App() {
     <main id="home">
       <header className="topbar"><span>我们的空间 / {selected[1]}</span><span className="environment">{info?.runtime === 'desktop' ? `桌面客户端 · v${info.appVersion}` : info?.runtime === 'preview' ? '浏览器预览' : '正在连接…'}</span></header>
       <div className="page-content">
+        <UpdateChecker/>
+        <Announcements/>
         <div className="page-heading"><div><h1>{selected[2]}</h1><p>{selected[3]}</p></div>{nativeDesktop && <button className="text-button" onClick={() => void petAction('restore').catch(e => setError(errorMessage(e)))}>显示桌面角色</button>}</div>
         {error && <div className="error-banner" role="alert"><span>{error}</span>{!ready && <button onClick={() => void load()}>重新连接</button>}</div>}
         <section hidden={section !== 'home'} aria-label="日常空间">

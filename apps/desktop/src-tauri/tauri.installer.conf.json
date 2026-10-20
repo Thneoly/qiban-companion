@@ -32,5 +32,16 @@
     "resources": {
       "../../mobile-web/dist": "mobile-web/"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFNjA0MEI1Q0QxQkJFMjIKUldRaXZodk50VUJnem55cDNrU3F1dnhIZit5V01xaThhTHQxSkd4VFUrelhwWU5MbHpZamVOOGcK",
+      "endpoints": [
+        "https://github.com/Thneoly/qiban-companion/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

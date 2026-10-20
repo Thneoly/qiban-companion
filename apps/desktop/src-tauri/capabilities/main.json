@@ -14,6 +14,8 @@
     "allow-account-pairing-revoke",
     "allow-account-snapshot",
     "allow-account-lan-info",
+    "updater:default",
+    "process:allow-restart",
     "allow-account-port-save",
     "allow-account-code-request",
     "allow-account-login",
