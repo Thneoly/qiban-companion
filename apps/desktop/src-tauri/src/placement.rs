@@ -19,12 +19,22 @@ pub struct PlacementStore {
     pending: Option<(Position, Instant)>,
 }
 impl PlacementStore {
+    /// In-memory fallback for when the on-disk settings database cannot be
+    /// opened: pet position uses defaults and the guide flag lives only for
+    /// this session (an honest "may reappear" instead of a broken panel).
+    pub fn in_memory() -> rusqlite::Result<Self> {
+        let connection = Connection::open_in_memory()?;
+        Self::from_connection(connection)
+    }
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
-        let mut connection = Connection::open(path)?;
+        let connection = Connection::open(path)?;
         // Exit of the previous instance (placement flush, journal cleanup) can
         // still hold the file when the next one starts; 250ms lost that race
         // (real case 2026-10-07: guide_status read failure on quick restart).
         connection.busy_timeout(Duration::from_secs(5))?;
+        Self::from_connection(connection)
+    }
+    fn from_connection(mut connection: Connection) -> rusqlite::Result<Self> {
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version > 2 {
             return Err(rusqlite::Error::InvalidQuery);
@@ -101,9 +111,11 @@ pub fn guide_status(app: tauri::AppHandle) -> Result<bool, String> {
         .try_state::<PlacementState>()
         .ok_or("使用指南状态不可用，请检查本机设置后重启")?;
     let store = state.lock().map_err(|_| "本机设置不可用")?;
-    store
-        .guide_completed()
-        .map_err(|_| "读取使用指南状态失败".to_string())
+    store.guide_completed().map_err(|error| {
+        // The real cause rides the message — a silent map_err sent us
+        // debugging blind once already.
+        format!("读取使用指南状态失败：{error}")
+    })
 }
 #[tauri::command]
 pub fn guide_complete(app: tauri::AppHandle) -> Result<(), String> {
@@ -113,7 +125,7 @@ pub fn guide_complete(app: tauri::AppHandle) -> Result<(), String> {
     let store = state.lock().map_err(|_| "本机设置不可用")?;
     store
         .complete_guide()
-        .map_err(|_| "保存使用指南状态失败，可稍后再试".to_string())
+        .map_err(|error| format!("保存使用指南状态失败，可稍后再试：{error}"))
 }
 
 pub fn moved(app: &tauri::AppHandle, position: PhysicalPosition<i32>) {
