@@ -3,7 +3,8 @@ import {listen} from '@tauri-apps/api/event';
 import {invoke} from '@tauri-apps/api/core';
 import {nativeDesktop} from '../../lib/surface';
 import {decodeModelSettings,decodeModelTestOutcome,type ModelSettingsConfig,type ModelTestOutcome} from '@companion/contracts';
-const initial:ModelSettingsConfig={baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-5.3',useApiKey:true,hasApiKey:false,maxOutputTokens:1024};
+const initial:ModelSettingsConfig={baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-5.3',useApiKey:true,hasApiKey:false,maxOutputTokens:1024,protocol:'openai'};
+const anthropic:ModelSettingsConfig={baseUrl:'https://api.anthropic.com/v1',model:'claude-sonnet-4-5',useApiKey:true,hasApiKey:false,maxOutputTokens:1024,protocol:'anthropic'};
 export function ModelSettings() {
   const [saved,setSaved]=useState(initial);
   const [draft,setDraft]=useState(initial);
@@ -23,7 +24,7 @@ export function ModelSettings() {
     const maxOutputTokens=Number(budget);
     if(!Number.isInteger(maxOutputTokens)||maxOutputTokens<128||maxOutputTokens>8192){setNote("最大输出 tokens 需要是128～8192之间的整数");return;}
     setBusy(true);
-    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,maxOutputTokens}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；记录按地址和模型隔离，切换不会把旧前文发送给新服务。');}
+    try{await invoke('model_settings_save',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,protocol:draft.protocol,maxOutputTokens}});await refresh();setNote('已保存。重新打开角色气泡后，新对话使用此配置；记录按地址和模型隔离，切换不会把旧前文发送给新服务。');}
     catch(e){setNote(typeof e==='string'?e:'保存失败');}finally{setBusy(false);}
   }
   async function key(action:'model_key_set'|'model_key_delete') {
@@ -36,7 +37,7 @@ export function ModelSettings() {
   // and setting its key first — the outcome text says so when relevant.
   async function testConnection() {
     setTesting(true);setTestResult(null);
-    try{setTestResult(decodeModelTestOutcome(await invoke('model_settings_test',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey}})));}
+    try{setTestResult(decodeModelTestOutcome(await invoke('model_settings_test',{config:{baseUrl:draft.baseUrl,model:draft.model,useApiKey:draft.useApiKey,protocol:draft.protocol}})));}
     catch(e){setTestResult({ok:false,detail:typeof e==='string'?e:'测试请求失败，请稍后重试'});}
     finally{setTesting(false);}
   }
@@ -45,7 +46,8 @@ export function ModelSettings() {
     <p>填写服务商提供的 API 基地址与模型编码。发送对话时，内容会传给这里配置的服务。</p>
     <form onSubmit={save}>
       <fieldset disabled={busy||!nativeDesktop}>
-        <div className="model-presets"><button type="button" onClick={()=>{setDraft({...initial});setBudget(String(initial.maxOutputTokens));}}>智谱通用 API 预设</button><span>也可直接填写其他兼容服务</span></div>
+        <div className="model-presets"><button type="button" onClick={()=>{setDraft({...initial});setBudget(String(initial.maxOutputTokens));}}>智谱通用 API 预设</button><button type="button" onClick={()=>{setDraft({...anthropic});setBudget(String(anthropic.maxOutputTokens));}}>Anthropic 预设</button><span>也可直接填写其他兼容服务</span></div>
+        <label>兼容协议<select value={draft.protocol} onChange={e=>setDraft({...draft,protocol:e.target.value as ModelSettingsConfig['protocol']})}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></label>
         <label>API 基地址<input value={draft.baseUrl} onChange={e=>setDraft({...draft,baseUrl:e.target.value})} placeholder="https://your-provider.example/v1" maxLength={512}/></label>
         <label>模型编码<input value={draft.model} onChange={e=>setDraft({...draft,model:e.target.value})} maxLength={160}/></label>
         <label>最大输出 tokens<input type="number" required min={128} max={8192} step={1} value={budget} onChange={e=>setBudget(e.target.value)} aria-describedby="output-budget-help"/></label>

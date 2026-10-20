@@ -4,12 +4,24 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
+/// The wire protocol the configured service speaks. The default keeps
+/// every existing store decoding as OpenAI-compatible; Anthropic shapes
+/// the request body, auth headers, and the SSE event grammar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelProtocol {
+    #[default]
+    OpenAi,
+    Anthropic,
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelConfig {
     pub base_url: String,
     pub model: String,
     pub use_api_key: bool,
+    #[serde(default)]
+    pub protocol: ModelProtocol,
     #[serde(default = "default_output_tokens")]
     pub max_output_tokens: u32,
 }
@@ -22,6 +34,7 @@ impl Default for ModelConfig {
             base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
             model: "glm-5.3".into(),
             use_api_key: true,
+            protocol: ModelProtocol::OpenAi,
             max_output_tokens: default_output_tokens(),
         }
     }
@@ -53,14 +66,26 @@ impl ModelConfig {
         {
             return Err("请填写有效的模型编码".into());
         }
-        if self.base_url.ends_with("/chat/completions") {
-            return Err("请填写 API 基地址，不包含 /chat/completions".into());
+        match self.protocol {
+            ModelProtocol::OpenAi if self.base_url.ends_with("/chat/completions") => {
+                return Err("请填写 API 基地址，不包含 /chat/completions".into());
+            }
+            ModelProtocol::Anthropic if self.base_url.ends_with("/messages") => {
+                return Err("请填写 API 基地址（到 /v1 为止），不包含 /messages".into());
+            }
+            _ => {}
         }
         self.base_url = url.to_string().trim_end_matches('/').into();
         Ok(self)
     }
     pub fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.base_url)
+        match self.protocol {
+            ModelProtocol::OpenAi => format!("{}/chat/completions", self.base_url),
+            // Anthropic Messages: the base URL carries the version segment
+            // (https://api.anthropic.com/v1), mirroring how OpenAI-compatible
+            // bases carry theirs.
+            ModelProtocol::Anthropic => format!("{}/messages", self.base_url),
+        }
     }
 }
 pub struct ModelStore {
@@ -350,14 +375,26 @@ pub async fn model_settings_test(config: ModelConfig) -> Result<ModelTestOutcome
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|_| "网络组件初始化失败")?;
-    let mut request = client.post(config.endpoint()).json(&serde_json::json!({
+    let body = serde_json::json!({
         "model": config.model,
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
         "stream": false,
-    }));
+    });
+    let mut request = client.post(config.endpoint()).json(&body);
     if let Some(secret) = key {
-        request = request.bearer_auth(secret);
+        match config.protocol {
+            // Anthropic Messages auth: key header + pinned API version,
+            // never a Bearer.
+            ModelProtocol::Anthropic => {
+                request = request
+                    .header("x-api-key", secret)
+                    .header("anthropic-version", "2023-06-01");
+            }
+            ModelProtocol::OpenAi => {
+                request = request.bearer_auth(secret);
+            }
+        }
     }
     match request.send().await {
         Err(_) => Ok(classify_probe(None, "", true)),
@@ -622,6 +659,7 @@ mod tests {
                     base_url: "https://example.com/v1/".into(),
                     model: "org/custom:model".into(),
                     use_api_key: false,
+                    protocol: ModelProtocol::OpenAi,
                     max_output_tokens: 4096,
                 })
                 .unwrap();

@@ -99,11 +99,13 @@ export function decodeChatResult(value:unknown):ChatResult {
   return {requestId:v.requestId,elapsedMs:v.elapsedMs,usage,historySaved:v.historySaved===true,memoryUsage:decodeMemoryUsage(v.memoryUsage)};
 }
 
-export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean;maxOutputTokens:number}
+export type ModelProtocol='openai'|'anthropic';
+export interface ModelSettingsConfig {baseUrl:string;model:string;useApiKey:boolean;hasApiKey:boolean;maxOutputTokens:number;protocol:ModelProtocol}
 export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   const v=record(value);
   if(typeof v.baseUrl!=='string'||typeof v.model!=='string'||typeof v.useApiKey!=='boolean'||typeof v.hasApiKey!=='boolean'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型设置协议不兼容');
-  return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens};
+  if(v.protocol!==undefined&&v.protocol!=='openai'&&v.protocol!=='anthropic')throw Error('模型设置协议不兼容');
+  return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens,protocol:v.protocol==='anthropic'?'anthropic':'openai'};
 }
 
 export interface ModelTestOutcome {ok:boolean;detail:string}
