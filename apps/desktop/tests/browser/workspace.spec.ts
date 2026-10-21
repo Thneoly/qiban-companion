@@ -18,6 +18,29 @@ test('workspace shows one destination, preserves drafts, and opens a wide conver
   await page.screenshot({path:test.info().outputPath('wide-chat.png')});
 });
 
+test('the desktop surface suppresses the WebView context menu', async ({page}) => {
+  await page.addInitScript(() => {
+    (window as unknown as { isTauri: boolean }).isTauri = true;
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: () => 1, unregisterCallback: () => {},
+      invoke: async (cmd: string) => {
+        if (cmd === 'get_runtime_info')
+          return { protocolVersion: 3, appVersion: '0.2.0', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        return [];
+      },
+    } });
+  });
+  await page.goto('/?view=panel');
+  await expect(page.getByLabel('日常空间', {exact:true})).toBeVisible();
+  // The listener lives on document; a cancelable event must come back suppressed.
+  const prevented = await page.evaluate(() => {
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(prevented).toBe(true);
+});
+
 test('navigation is available on narrow screens and supports direct links and back', async ({page}) => {
   await page.setViewportSize({width:390,height:844});
   await page.goto('/?view=panel#memories');
