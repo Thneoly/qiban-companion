@@ -1,4 +1,4 @@
-# Release pipeline for the trial form (P1): build the signed installer,
+﻿# Release pipeline for the trial form (P1): build the signed installer,
 # produce latest.json for the updater, and upload a GitHub Release.
 # CI is intentionally paused; this script is THE release process.
 #
@@ -73,6 +73,10 @@ try {
 
   $draftFlag = if ($Draft) { '--draft' } else { '' }
   Invoke-Expression "gh release create $tag `"$releaseSetup`" `"$latestPath`" `"$notesPath`" --title `"栖伴 $tag`" --notes-file `"$notesPath`" $draftFlag"
+  # $ErrorActionPreference does NOT cover native exit codes: a gh network
+  # hiccup (seen on v0.2.2: "unexpected EOF") must fail the release loudly,
+  # not print "Released" over a missing GitHub release.
+  if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit $LASTEXITCODE) — artifacts are in $setupDir, retry the gh command manually." }
   Write-Host "Released $tag. SHA256 $sha256"
 } finally {
   Pop-Location
