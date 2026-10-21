@@ -47,8 +47,13 @@ try {
   $signature = (Get-Content $sigFile -Raw).Trim()
   $sha256 = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
 
-  # Updater manifest: the platform key matches tauri's Windows x64 target.
-  $releaseAssetName = [uri]::EscapeDataString($setup.Name)
+  # Release assets get an ASCII name: passing the CJK product name through
+  # PowerShell → gh drops the prefix (verified on v0.2.1), and an ASCII URL
+  # keeps the updater download simple. The manifest must have NO BOM —
+  # serde_json rejects it and every updater check would silently fail.
+  $releaseAssetName = "qiban_${version}_x64-setup.exe"
+  $releaseSetup = Join-Path $setupDir $releaseAssetName
+  Copy-Item $setup.FullName $releaseSetup -Force
   $latest = [ordered]@{
     version = $version
     pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -60,14 +65,14 @@ try {
     }
   }
   $latestPath = Join-Path $setupDir 'latest.json'
-  $latest | ConvertTo-Json -Depth 5 | Set-Content $latestPath -Encoding utf8
+  [IO.File]::WriteAllText($latestPath, ($latest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 
   $notes = "栖伴 $tag`n`n安装包 SHA256：$sha256`n`n- 未签名安装包：首次运行请按验收单的 SmartScreen 引导操作。`n- 更新包经 minisign 验签后静默安装；老版本会自动提示升级。`n"
   $notesPath = Join-Path $setupDir 'RELEASE_NOTES.md'
   Set-Content $notesPath $notes -Encoding utf8
 
   $draftFlag = if ($Draft) { '--draft' } else { '' }
-  Invoke-Expression "gh release create $tag `"$($setup.FullName)`" `"$latestPath`" `"$notesPath`" --title `"栖伴 $tag`" --notes-file `"$notesPath`" $draftFlag"
+  Invoke-Expression "gh release create $tag `"$releaseSetup`" `"$latestPath`" `"$notesPath`" --title `"栖伴 $tag`" --notes-file `"$notesPath`" $draftFlag"
   Write-Host "Released $tag. SHA256 $sha256"
 } finally {
   Pop-Location
