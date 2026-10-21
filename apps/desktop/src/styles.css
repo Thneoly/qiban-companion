@@ -48,3 +48,30 @@
 .daily-welcome { overflow:hidden; }
 .model-test-ok { color:#4d7a5c; }
 .model-test-fail { color:#a45a49; }
+/* Panel-wide form-control baseline (P1 trial feedback): the pet window is
+   outside .workspace-shell, and panels carrying their own rules (task-form,
+   model-settings, account-panel, memory-panel…) outrank this :where()
+   selector — it only lifts the BARE controls (reminders inputs, execution
+   and voice buttons) off browser defaults. Buttons additionally gate on
+   :not([class]) so single-class buttons (.primary, .text-button…) keep
+   their own look despite equal specificity. */
+.workspace-shell :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]), select, textarea) {
+  padding: 10px 12px;
+  border: 1px solid #ded2e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #655c70;
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+}
+.workspace-shell :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]))::placeholder { color: #b0a5b7; }
+.workspace-shell :where(button:not([class])) {
+  padding: 10px 14px;
+  border: 1px solid #ded2e8;
+  border-radius: 8px;
+  background: #f0e9f7;
+  color: #614d73;
+  font: inherit;
+  font-size: 12px;
+}
