@@ -3,7 +3,7 @@ test('output budget is validated, saved, and reloaded without changing provider 
   await page.addInitScript(() => {
     const w = window as any;
     Object.defineProperty(window, 'isTauri', { value: true });
-    let config = { baseUrl: 'https://example.com/v1', model: 'custom-model', useApiKey: true, hasApiKey: true, maxOutputTokens: 2048 };
+    let config = { baseUrl: 'https://example.com/v1', model: 'custom-model', useApiKey: true, hasApiKey: true, maxOutputTokens: 2048, protocol: 'openai' };
     w.savedBudgets = [];
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
@@ -31,7 +31,7 @@ test('output budget is validated, saved, and reloaded without changing provider 
   await budget.fill('4096');
   await page.getByRole('button', { name: '保存模型设置', exact: true }).click();
   await expect(page.locator('.model-settings-note')).toContainText('已保存');
-  expect(await page.evaluate(() => (window as any).savedBudgets)).toEqual([{ baseUrl: 'https://example.com/v1', model: 'custom-model', useApiKey: true, maxOutputTokens: 4096 }]);
+  expect(await page.evaluate(() => (window as any).savedBudgets)).toEqual([{ baseUrl: 'https://example.com/v1', model: 'custom-model', useApiKey: true, maxOutputTokens: 4096, protocol: 'openai' }]);
   await expect(budget).toHaveValue('4096');
   await expect(page.getByLabel('模型编码', { exact: true })).toHaveValue('custom-model');
 });
@@ -64,7 +64,7 @@ test('test connection probes the draft values and reports the classified outcome
   await page.getByLabel('模型编码', { exact: true }).fill('draft-model');
   await test.click();
   await expect(page.locator('.model-test-ok')).toContainText('连接成功');
-  expect(await page.evaluate(() => (window as any).probes)).toEqual([{ baseUrl: 'https://example.com/v1', model: 'draft-model', useApiKey: true }]);
+  expect(await page.evaluate(() => (window as any).probes)).toEqual([{ baseUrl: 'https://example.com/v1', model: 'draft-model', useApiKey: true, protocol: 'openai' }]);
   // A failing probe renders the honest verdict under the fail style.
   await page.evaluate(() => { (window as any).probeOutcome = { ok: false, detail: '服务拒绝了密钥：API Key 无效、过期或无权限。' }; });
   await test.click();
