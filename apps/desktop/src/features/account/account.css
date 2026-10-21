@@ -1,10 +1,10 @@
 .account-panel {
-  background: var(--surface, #fffdf7);
-  border: 1px solid var(--line, #e4e8dc);
+  background: var(--surface, #fffcfa);
+  border: 1px solid var(--line, #e5ddeb);
   border-radius: 22px;
   padding: 28px;
   margin: 24px 0;
-  color: #354237;
+  color: #5b5266;
 }
 .account-panel > p {
   font-size: 14px;
@@ -13,14 +13,14 @@
 .account-panel button {
   padding: 9px 14px;
   min-height: 40px;
-  border: 1px solid #d6dfce;
+  border: 1px solid #ded2e8;
   border-radius: 10px;
   cursor: pointer;
   background: #f4f7ef;
-  color: #344b36;
+  color: #614d73;
 }
 .account-panel button.primary {
-  background: #49674b;
+  background: #8a70aa;
   color: white;
 }
 .account-panel button:disabled {
@@ -30,7 +30,7 @@
 .account-panel input {
   width: 100%;
   padding: 12px;
-  border: 1px solid #d6dfce;
+  border: 1px solid #ded2e8;
   border-radius: 10px;
   background: #fff;
   font: inherit;
@@ -55,7 +55,7 @@
   white-space: nowrap;
 }
 .account-notice {
-  background: #edf2e7;
+  background: #f0ebf5;
   padding: 12px 16px;
   border-radius: 12px;
 }
@@ -89,7 +89,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  border-bottom: 1px solid #e9eddf;
+  border-bottom: 1px solid #eee9f0;
   padding: 16px 0;
 }
 .account-tasks strong {
@@ -98,7 +98,7 @@
 }
 .account-tasks small {
   display: block;
-  color: #78886d;
+  color: #9a919e;
   margin-top: 5px;
 }
 .account-panel details {
@@ -112,14 +112,14 @@
   margin-right: 12px;
 }
 .account-panel .helper {
-  color: #78816f;
+  color: #9a919e;
   font-size: 12px;
 }
 
-.pairing-panel { border-block: 1px solid #d6dfce; padding-block: 16px; margin-block: 16px; }
+.pairing-panel { border-block: 1px solid #ded2e8; padding-block: 16px; margin-block: 16px; }
 .pairing-code { display:block; font-size:30px; font-weight:700; letter-spacing:.18em; font-variant-numeric:tabular-nums; user-select:all; }
 
-.remote-documents {border-block:1px solid #d6dfce;margin-block:16px;padding-block:16px;}
+.remote-documents {border-block:1px solid #ded2e8;margin-block:16px;padding-block:16px;}
 .remote-documents pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;}
 .remote-documents select{max-width:100%;padding:10px;}
 .remote-documents button{margin:8px 8px 8px 0;}

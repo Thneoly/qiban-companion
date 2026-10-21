@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 
 /**
- * Product announcements from the repository's announcements.json (raw on
- * main) — publishing is a commit, not a release. Read state lives in
- * localStorage; a failed fetch is silent (offline looks like no news).
- * The file is authored content from the project, rendered as TEXT only —
- * no HTML from the feed is ever injected.
+ * Product announcements from the repository's announcements.json —
+ * publishing is a commit, not a release. Raw on main is authoritative and
+ * instant but often unreachable from CN networks; jsDelivr mirrors the same
+ * file with CDN reachability at the cost of cache lag, so it is the
+ * fallback. Read state lives in localStorage; a failed fetch is silent
+ * (offline looks like no news). The file is authored content from the
+ * project, rendered as TEXT only — no HTML from the feed is ever injected.
  */
-const FEED_URL =
-  "https://raw.githubusercontent.com/Thneoly/qiban-companion/main/announcements.json";
+const FEED_URLS = [
+  "https://raw.githubusercontent.com/Thneoly/qiban-companion/main/announcements.json",
+  "https://cdn.jsdelivr.net/gh/Thneoly/qiban-companion@main/announcements.json",
+];
 const READ_KEY = "qiban-read-announcements";
 
 type Item = { id: string; date: string; title: string; body: string };
@@ -49,18 +53,24 @@ export function Announcements() {
     let disposed = false;
     // Wait out the startup burst, same as the update check.
     const timer = setTimeout(() => {
-      fetch(FEED_URL, { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : Promise.reject(new Error("status"))))
-        .then((value: unknown) => {
-          if (disposed) return;
-          const list = Array.isArray((value as { items?: unknown })?.items)
-            ? ((value as { items: unknown[] }).items.filter(isItem) as Item[])
-            : [];
-          setItems(list.slice(0, 20));
-        })
-        .catch(() => {
+      const attempt = (index: number) => {
+        const url = FEED_URLS[index];
+        if (url === undefined) {
           if (!disposed) setFailed(true);
-        });
+          return;
+        }
+        fetch(url, { cache: "no-store" })
+          .then((response) => (response.ok ? response.json() : Promise.reject(new Error("status"))))
+          .then((value: unknown) => {
+            if (disposed) return;
+            const list = Array.isArray((value as { items?: unknown })?.items)
+              ? ((value as { items: unknown[] }).items.filter(isItem) as Item[])
+              : [];
+            setItems(list.slice(0, 20));
+          })
+          .catch(() => attempt(index + 1));
+      };
+      attempt(0);
     }, 6000);
     return () => {
       disposed = true;
