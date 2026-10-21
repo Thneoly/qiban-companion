@@ -23,12 +23,15 @@ try {
   Write-Host "Releasing $tag"
 
   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $key -Raw
-  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
   try {
+    # NOTE: the bundle-time signature step cannot prompt for this key's EMPTY
+    # password unattended ($env:X = '' removes the var on Windows, so tauri
+    # falls back to an interactive prompt that dies without a console). The
+    # build still exits 0 without a .sig; we re-sign via the signer CLI below,
+    # where the empty password rides as a real argv entry through cmd.
     npm run build:installer
   } finally {
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
   }
 
   $setupDir = Join-Path $root 'target\release\bundle\nsis'
@@ -36,7 +39,11 @@ try {
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $setup) { throw 'Installer not found after build.' }
   $sigFile = "$($setup.FullName).sig"
-  if (-not (Test-Path $sigFile)) { throw "Signature file missing: $sigFile (the updater config requires signed bundles)." }
+  if (-not (Test-Path $sigFile)) {
+    Write-Host "Bundle unsigned after build; signing $($setup.Name) via signer CLI…"
+    cmd /c "npx tauri signer sign -f `"%USERPROFILE%\.qiban\updater.key`" -p `"`" `"$($setup.FullName)`""
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sigFile)) { throw "Signing failed for $sigFile" }
+  }
   $signature = (Get-Content $sigFile -Raw).Trim()
   $sha256 = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
 
