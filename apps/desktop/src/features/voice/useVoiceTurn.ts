@@ -117,7 +117,6 @@ export function useVoiceTurn(options: {
     const existing = fetches.current.get(clip.seq);
     if (existing) return existing;
     const requestId = `${turn}-s${clip.seq}`;
-    const first = clip.seq === 0;
     const epoch = generation.current;
     const progress = new Channel<unknown>();
     progress.onmessage = value => {
@@ -127,9 +126,9 @@ export function useVoiceTurn(options: {
         if (flag.requestId === requestId && flag.trimmed === false) stats.current.untrimmed++;
       } catch { /* progress is advisory; the audio itself is authoritative */ }
     };
-    if (!first) stats.current.later++;
+    stats.current.later++;
     const promise = invoke('voice_speak', {
-      request: { requestId, turnId: turn, expectedBaseUrl: baseUrl.current, seq: clip.seq, text: clip.text, first },
+      request: { requestId, turnId: turn, expectedBaseUrl: baseUrl.current, seq: clip.seq, text: clip.text },
       onProgress: progress,
     }).then(toWav);
     fetches.current.set(clip.seq, promise);
