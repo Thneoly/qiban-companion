@@ -60,9 +60,9 @@ async function mockVoiceChat(page: Page) {
           return { requestId: args.request.requestId, transcript: w.transcript ?? '今天过得怎么样', recognitionMs: 9 };
         }
         if (cmd === 'voice_speak') {
-          const request = { requestId: args.request.requestId, turnId: args.request.turnId, expectedBaseUrl: args.request.expectedBaseUrl, seq: args.request.seq, text: args.request.text, first: args.request.first };
+          const request = { requestId: args.request.requestId, turnId: args.request.turnId, expectedBaseUrl: args.request.expectedBaseUrl, seq: args.request.seq, text: args.request.text };
           w.speakCalls.push(request);
-          args.onProgress?.onmessage({ requestId: request.requestId, trimmed: request.first ? null : (w.trimFlag ?? true) });
+          args.onProgress?.onmessage({ requestId: request.requestId, trimmed: w.trimFlag ?? true });
           if ((w.speakFailSeqs ?? []).includes(request.seq)) return Promise.reject('fixture synthesis failed');
           if (w.speakDelays?.[request.seq] === 'hang') return new Promise(resolve => { (w.hangSpeakResolvers ??= []).push(resolve); });
           // The wav's first data byte (index 44) carries the seq so tests can
@@ -223,8 +223,8 @@ test('clips play in sentence order with one-ahead prefetch', async ({ page }) =>
   await expect.poll(() => page.evaluate(() => (window as any).playLog.length === 1 && (window as any).speakCalls.length === 2)).toBe(true);
   await page.evaluate(() => (window as any).releasePlays());
   await expect.poll(() => page.evaluate(() => (window as any).playLog.length)).toBe(3);
-  const calls = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq, first: c.first })));
-  expect(calls).toEqual([{ seq: 0, first: true }, { seq: 1, first: false }, { seq: 2, first: false }]);
+  const calls = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq })));
+  expect(calls).toEqual([{ seq: 0 }, { seq: 1 }, { seq: 2 }]);
   // The played blob URLs map back to sentence order, not just count.
   const played = await page.evaluate(() => (window as any).playLog.map((src: string) => (window as any).urlBytes.get(src)?.[44]));
   expect(played).toEqual([0, 1, 2]);
@@ -375,7 +375,7 @@ test('blur during transcription keeps the turn; leaving chat mode releases the e
   await expect(page.getByLabel('栖栖的交互气泡')).toBeHidden();
 });
 
-test('the first clip keeps its tone, later clips report trimming, and the untrimmed fallback engages', async ({ page }) => {
+test('every clip reports trimming and the untrimmed fallback engages', async ({ page }) => {
   await mockVoiceChat(page);
   await page.goto('/');
   await page.evaluate(() => {
@@ -388,9 +388,9 @@ test('the first clip keeps its tone, later clips report trimming, and the untrim
   await expect(mic(page)).toHaveText('结束录音');
   await mic(page).click();
   await expect(mic(page)).toHaveText('语音说话');
-  const turn1 = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq, first: c.first })));
-  expect(turn1).toEqual([{ seq: 0, first: true }, { seq: 1, first: false }, { seq: 2, first: false }]);
-  // Both later clips came back untrimmed → the next turn speaks whole text once.
+  const turn1 = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq })));
+  expect(turn1).toEqual([{ seq: 0 }, { seq: 1 }, { seq: 2 }]);
+  // Every clip (including seq 0) came back untrimmed → the next turn speaks whole text once.
   await page.evaluate(() => { (window as any).replyDeltas = ['这一整段回复没有任何句号却要一次说完']; });
   await mic(page).click();
   await expect(mic(page)).toHaveText('结束录音');
@@ -398,7 +398,7 @@ test('the first clip keeps its tone, later clips report trimming, and the untrim
   await expect(mic(page)).toHaveText('语音说话');
   const calls = await page.evaluate(() => (window as any).speakCalls);
   expect(calls.length).toBe(4);
-  expect(calls[3].first).toBe(true);
+  expect(calls[3].seq).toBe(0);
   expect(calls[3].text).toBe('这一整段回复没有任何句号却要一次说完');
 });
 

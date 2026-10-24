@@ -128,11 +128,11 @@ export function decodeVoiceTranscribe(value:unknown):VoiceTranscript {
   if(typeof v.requestId!=='string'||!v.requestId||typeof v.transcript!=='string'||!v.transcript||[...v.transcript].length>1800||!integer(v.recognitionMs))throw Error('语音识别协议不兼容');
   return {requestId:v.requestId,transcript:v.transcript,recognitionMs:v.recognitionMs};
 }
-export interface VoiceSpeakProgress {requestId:string;trimmed:boolean|null}
+export interface VoiceSpeakProgress {requestId:string;trimmed:boolean}
 export function decodeVoiceSpeakProgress(value:unknown):VoiceSpeakProgress {
   const v=record(value);
-  if(typeof v.requestId!=='string'||!v.requestId||(v.trimmed!==null&&typeof v.trimmed!=='boolean'))throw Error('语音朗读进度协议不兼容');
-  return {requestId:v.requestId,trimmed:v.trimmed as boolean|null};
+  if(typeof v.requestId!=='string'||!v.requestId||typeof v.trimmed!=='boolean')throw Error('语音朗读进度协议不兼容');
+  return {requestId:v.requestId,trimmed:v.trimmed};
 }
 export interface ChatTurn {user:string;assistant:string}
 export function decodeChatHistory(value:unknown):ChatTurn[] {

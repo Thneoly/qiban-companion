@@ -84,15 +84,13 @@ impl VoiceTurnState {
     }
 }
 
-/// Trim the provider's leading tone only when the measured three-segment
-/// signature matches exactly; any doubt keeps the original bytes.
-/// `first_sentence` keeps the tone on purpose: on the first clip it works as
-/// the "about to speak" notification instead of masking latency.
-fn trim_leading_tone(wav: &[u8], first_sentence: bool) -> (Cow<'_, [u8]>, bool) {
+/// Trim the provider's leading tone on EVERY clip. The tone once doubled as
+/// an "about to speak" notification on the first clip, but trial feedback
+/// (twice) was that users hear it as noise — so the exemption is gone and
+/// only the must-find-speech guard remains: any doubt keeps the original
+/// bytes, we never trim into actual speech.
+fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
     let keep = || (Cow::Borrowed(wav), false);
-    if first_sentence {
-        return keep();
-    }
     let format = match wav_format(wav) {
         Ok(format) => format,
         Err(_) => return keep(),
@@ -300,15 +298,15 @@ pub struct SpeakRequest {
     expected_base_url: String,
     seq: u32,
     text: String,
-    first: bool,
 }
-/// `None` means the first clip (tone kept on purpose); `Some(trimmed)` reports
-/// whether the trim matched for later clips.
+/// Reports whether the leading-tone trim matched for this clip. The old
+/// `None` variant meant "first clip, tone kept on purpose" — that exemption
+/// was removed after trial feedback.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeakProgress {
     request_id: String,
-    trimmed: Option<bool>,
+    trimmed: bool,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -388,7 +386,7 @@ async fn run_speak<P>(
     progress: P,
 ) -> Result<Vec<u8>, String>
 where
-    P: Fn(Option<bool>) -> Result<(), String>,
+    P: Fn(bool) -> Result<(), String>,
 {
     if !valid_id(&request.request_id) || !valid_id(&request.turn_id) {
         return Err("语音请求标识无效".into());
@@ -405,12 +403,11 @@ where
     let (_guard, mut cancelled) = inflight;
     let tts_model = voice.tts_model.clone();
     let speaker = voice.voice.clone();
-    let first = request.first;
     let text = trimmed_text.to_string();
     let work = async {
         let (wav, _) = client.synthesize(&tts_model, &speaker, &text).await?;
-        let (wav, trimmed) = trim_leading_tone(&wav, first);
-        progress(if first { None } else { Some(trimmed) })?;
+        let (wav, trimmed) = trim_leading_tone(&wav);
+        progress(trimmed)?;
         Ok(wav.into_owned())
     };
     tokio::select! {
@@ -538,7 +535,7 @@ mod tests {
         // Measured signature: 6/19/7 frames at 20 ms → third segment ends at
         // frame 74; speech starts at 77, so the trim keeps 60 ms of pad.
         let wav = build_wav(&layout(6, 19, 7, 3), false);
-        let (trimmed, did) = trim_leading_tone(&wav, false);
+        let (trimmed, did) = trim_leading_tone(&wav);
         assert!(did);
         let trimmed = trimmed.into_owned();
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
@@ -546,7 +543,7 @@ mod tests {
         // Ancillary chunks before data survive the rewrite untouched; only
         // the RIFF size field (bytes 4..8) legitimately changes.
         let marked = build_wav(&layout(6, 19, 7, 3), true);
-        let (trimmed, did) = trim_leading_tone(&marked, false);
+        let (trimmed, did) = trim_leading_tone(&marked);
         assert!(did);
         let trimmed = trimmed.into_owned();
         assert_eq!(&trimmed[..4], &marked[..4]);
@@ -584,7 +581,7 @@ mod tests {
             tone_past_the_budget,
         ] {
             let wav = build_wav(&segments, false);
-            let (trimmed, did) = trim_leading_tone(&wav, false);
+            let (trimmed, did) = trim_leading_tone(&wav);
             assert!(!did, "{segments:?}");
             assert_eq!(trimmed.into_owned(), wav);
         }
@@ -606,28 +603,30 @@ mod tests {
             leading_silence,      // a little leading silence before the tone
         ] {
             let wav = build_wav(&segments, false);
-            let (trimmed, did) = trim_leading_tone(&wav, false);
+            let (trimmed, did) = trim_leading_tone(&wav);
             assert!(did, "{segments:?}");
             assert!(trimmed.len() < wav.len(), "{segments:?}");
         }
     }
     #[test]
-    fn first_sentence_never_trims() {
+    fn every_clip_trims_including_the_first() {
+        // The first-clip exemption ("about to speak" notification) was
+        // removed after trial feedback heard the tone as noise twice.
         let wav = build_wav(&layout(6, 19, 7, 3), false);
-        let (trimmed, did) = trim_leading_tone(&wav, true);
-        assert!(!did);
-        assert_eq!(trimmed.into_owned(), wav);
+        let (trimmed, did) = trim_leading_tone(&wav);
+        assert!(did);
+        assert!(trimmed.len() < wav.len());
     }
     #[test]
     fn trims_at_tolerance_bounds() {
         let wav = build_wav(&layout(4, 15, 5, 3), false);
-        let (trimmed, did) = trim_leading_tone(&wav, false);
+        let (trimmed, did) = trim_leading_tone(&wav);
         assert!(did);
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
         // Up to two leading silence frames are tolerated before segment one.
         let mut with_head = vec![(Seg::Silence, 2)];
         with_head.extend(layout(6, 19, 7, 3));
-        let (_, did) = trim_leading_tone(&build_wav(&with_head, false), false);
+        let (_, did) = trim_leading_tone(&build_wav(&with_head, false));
         assert!(did);
     }
 
@@ -809,7 +808,7 @@ mod tests {
         let (path, settings) = store_with_voice(&base);
         let state = VoiceTurnState::default();
         let seen = Mutex::new(Vec::new());
-        let first = run_speak(
+        let clip0 = run_speak(
             &state,
             &settings,
             SpeakRequest {
@@ -818,7 +817,6 @@ mod tests {
                 expected_base_url: base.clone(),
                 seq: 0,
                 text: "第一句话".into(),
-                first: true,
             },
             |flag| {
                 seen.lock().unwrap().push(flag);
@@ -827,7 +825,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(first, fixture);
+        assert!(clip0.len() < fixture.len()); // the first clip trims too now
         let later = run_speak(
             &state,
             &settings,
@@ -837,7 +835,6 @@ mod tests {
                 expected_base_url: base,
                 seq: 1,
                 text: "第一句话".into(),
-                first: false,
             },
             |flag| {
                 seen.lock().unwrap().push(flag);
@@ -847,8 +844,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(later.len(), fixture.len() - 74 * 640);
-        assert!(later.len() < first.len());
-        assert_eq!(*seen.lock().unwrap(), vec![None, Some(true)]);
+        assert!(later.len() <= clip0.len());
+        assert_eq!(*seen.lock().unwrap(), vec![true, true]);
         server.join().unwrap();
         drop(settings); // close SQLite before the Windows file delete
         std::fs::remove_file(path).unwrap();
@@ -891,7 +888,6 @@ mod tests {
                     expected_base_url: base.to_string(),
                     seq: 0,
                     text: "被取消的句子".into(),
-                    first: true,
                 },
                 |_| Ok(()),
             )
@@ -937,7 +933,6 @@ mod tests {
                 expected_base_url: base.clone(),
                 seq: 0,
                 text: "x".repeat(501),
-                first: true,
             },
             SpeakRequest {
                 request_id: "t-1".into(),
@@ -945,7 +940,6 @@ mod tests {
                 expected_base_url: base.clone(),
                 seq: 0,
                 text: "   ".into(),
-                first: true,
             },
             SpeakRequest {
                 request_id: "t-2".into(),
@@ -953,7 +947,6 @@ mod tests {
                 expected_base_url: base.clone(),
                 seq: 65,
                 text: "句子".into(),
-                first: false,
             },
             SpeakRequest {
                 request_id: "t-3".into(),
@@ -961,7 +954,6 @@ mod tests {
                 expected_base_url: "https://changed.example".into(),
                 seq: 0,
                 text: "句子".into(),
-                first: false,
             },
         ];
         for case in cases {

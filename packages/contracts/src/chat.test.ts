@@ -45,9 +45,11 @@ test('voice transcribe decode keeps bounded text and rejects empty or malformed 
     expect(()=>decodeVoiceTranscribe({requestId:'turn-1',transcript:'你好栖栖',recognitionMs:314,...patch})).toThrow();
 });
 
-test('voice speak progress decode allows null flag for the kept first clip only as sent',()=>{
-  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:null}).trimmed).toBeNull();
+test('voice speak progress decode takes a plain boolean trim flag',()=>{
   expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true}).trimmed).toBe(true);
-  for(const patch of [{trimmed:'yes'},{trimmed:undefined},{requestId:''}])
+  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:false}).trimmed).toBe(false);
+  // The old null variant meant "first clip, tone kept on purpose" — that
+  // exemption is gone, so null must now be rejected.
+  for(const patch of [{trimmed:'yes'},{trimmed:undefined},{trimmed:null},{requestId:''}])
     expect(()=>decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true,...patch})).toThrow();
 });
