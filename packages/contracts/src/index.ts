@@ -63,7 +63,7 @@ export function validateTitle(title: string): string {
   return cleaned;
 }
 
-export interface ChatConfig {configured:boolean;model:string;maxOutputTokens:number}
+export interface ChatConfig {configured:boolean;model:string;maxOutputTokens:number;localSearchEnabled:boolean}
 export interface VoiceResult {
   requestId: string; transcript: string; reply: string; wav: number[];
   recognitionMs: number; generationMs: number; synthesisMs: number;
@@ -79,17 +79,18 @@ export function decodeVoiceResult(value: unknown): VoiceResult {
       !Array.isArray(v.wav) || v.wav.length < 44 || v.wav.length > 8 * 1024 * 1024 || !v.wav.every(b => integer(b) && b <= 255)) throw Error('语音响应协议不兼容');
   return v as unknown as VoiceResult;
 }
-export interface ChatDelta {requestId:string;text:string;memoryUsage:MemoryUsage|null}
+export interface ChatDelta {requestId:string;text:string;toolStatus?:string|null;memoryUsage:MemoryUsage|null}
 export interface ChatResult {requestId:string;elapsedMs:number;usage:null|{total_tokens:number|null};historySaved:boolean;memoryUsage:MemoryUsage}
 export function decodeChatConfig(value:unknown):ChatConfig {
   const v=record(value);
   if(typeof v.configured!=='boolean'||typeof v.model!=='string'||!integer(v.maxOutputTokens)||v.maxOutputTokens<128||v.maxOutputTokens>8192)throw Error('模型配置协议不兼容');
-  return {configured:v.configured,model:v.model,maxOutputTokens:v.maxOutputTokens};
+  return {configured:v.configured,model:v.model,maxOutputTokens:v.maxOutputTokens,localSearchEnabled:v.localSearchEnabled===true};
 }
 export function decodeChatDelta(value:unknown):ChatDelta {
   const v=record(value);
   if(typeof v.requestId!=='string'||typeof v.text!=='string')throw Error('回复协议不兼容');
-  return {requestId:v.requestId,text:v.text,memoryUsage:v.memoryUsage===null?null:decodeMemoryUsage(v.memoryUsage)};
+  if(v.toolStatus!==undefined&&v.toolStatus!==null&&typeof v.toolStatus!=='string')throw Error('回复协议不兼容');
+  return {requestId:v.requestId,text:v.text,toolStatus:v.toolStatus==null?null:v.toolStatus,memoryUsage:v.memoryUsage===null?null:decodeMemoryUsage(v.memoryUsage)};
 }
 export function decodeChatResult(value:unknown):ChatResult {
   const v=record(value);

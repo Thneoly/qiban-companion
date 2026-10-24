@@ -8,7 +8,7 @@
 use crate::history::HistoryStore;
 use crate::StorageError;
 use companion_core::now_ms;
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use serde::Serialize;
 
 /// Rows kept for the tool audit (one local scope, same ring idea as the
@@ -91,6 +91,37 @@ pub struct ToolInvocation<'a> {
     pub duration_ms: u64,
 }
 
+/// The shared audit INSERT + ring trim, usable on the store's own
+/// connection and on private blocking-thread connections alike.
+fn tool_log_insert(
+    connection: &rusqlite::Connection,
+    entry: &ToolInvocation<'_>,
+) -> Result<(), StorageError> {
+    connection.execute(
+        "INSERT INTO tool_invocation_log(request_id,round,tool,arguments,outcome,
+         result_chars,result_excerpt,duration_ms,occurred_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            entry.request_id,
+            entry.round as i64,
+            entry.tool,
+            entry.arguments,
+            entry.outcome.as_str(),
+            entry.result_chars as i64,
+            entry.result_excerpt,
+            entry.duration_ms as i64,
+            i64::try_from(now_ms()).map_err(|_| StorageError::InvalidTimestamp)?
+        ],
+    )?;
+    connection.execute(
+        "DELETE FROM tool_invocation_log WHERE seq <= (
+           SELECT MAX(seq) - ?1 FROM tool_invocation_log
+         )",
+        [TOOL_LOG_RING],
+    )?;
+    Ok(())
+}
+
 impl HistoryStore {
     pub fn authorized_roots(&self) -> Result<Vec<AuthorizedRoot>, StorageError> {
         let mut query = self
@@ -152,28 +183,22 @@ impl HistoryStore {
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO tool_invocation_log(request_id,round,tool,arguments,outcome,
-             result_chars,result_excerpt,duration_ms,occurred_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                entry.request_id,
-                entry.round as i64,
-                entry.tool,
-                entry.arguments,
-                entry.outcome.as_str(),
-                entry.result_chars as i64,
-                entry.result_excerpt,
-                entry.duration_ms as i64,
-                i64::try_from(now_ms()).map_err(|_| StorageError::InvalidTimestamp)?
-            ],
-        )?;
-        tx.execute(
-            "DELETE FROM tool_invocation_log WHERE seq <= (
-               SELECT MAX(seq) - ?1 FROM tool_invocation_log
-             )",
-            [TOOL_LOG_RING],
-        )?;
+        tool_log_insert(&tx, entry)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Append one tool invocation row on a PRIVATE connection. Used from
+    /// blocking threads where the shared store handle cannot travel: a
+    /// cancelled turn must never leave an executed-but-unaudited tool read.
+    pub fn tool_log_append_standalone(
+        db_path: &std::path::Path,
+        entry: &ToolInvocation<'_>,
+    ) -> Result<(), StorageError> {
+        let mut connection = Connection::open(db_path)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tool_log_insert(&tx, entry)?;
         tx.commit()?;
         Ok(())
     }

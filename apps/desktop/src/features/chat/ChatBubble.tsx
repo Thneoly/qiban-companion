@@ -26,6 +26,8 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
   const [seconds, setSeconds] = useState(0);
   const [lastPrompt, setLastPrompt] = useState('');
   const [recorded, setRecorded] = useState(false);
+  const [toolStatus, setToolStatus] = useState('');
+  const [searchEnabled, setSearchEnabled] = useState(false);
   const current = useRef<string | null>(null);
   const alive = useRef(true);
   const [preview,setPreview] = useState<ContextPreview|null>(null);
@@ -78,7 +80,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
       const [value, turns] = await Promise.all([invoke('chat_config'), loadHistory()]);
       if (alive.current && turns) {
         const config = decodeChatConfig(value);
-        setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens);
+        setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setSearchEnabled(config.localSearchEnabled);
         setHistory(turns); setReply(turns.at(-1)?.assistant ?? '');
         setStatus('记忆或会话已变化，已刷新本机记录；请重新输入后发送。');
       }
@@ -100,10 +102,17 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     if (nativeDesktop) void Promise.all([invoke('chat_config'), loadHistory()]).then(([configValue, turns]) => {
       if (disposed || !turns) return;
       const config = decodeChatConfig(configValue);
-      setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setHistory(turns);
+      setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setSearchEnabled(config.localSearchEnabled); setHistory(turns);
       setReply(turns.at(-1)?.assistant ?? '');
       setStatus(config.configured ? (turns.length ? '已恢复本机记录 · 发送时携带当前模型前文' : '完整问答自动保存在本机 · 尚无当前模型记录') : '尚未配置密钥，请打开模型设置');
     }).catch(error => { if (!disposed) setStatus(typeof error === 'string' ? error : '读取模型或本机记录失败，请检查数据目录后重启'); });
+    let unlistenRoots: (() => void) | undefined;
+    if (nativeDesktop) void listen('local-roots-changed', () => {
+      // Consent changed: the boundary disclosure follows immediately.
+      void invoke('chat_config').then(value => {
+        if (!disposed) setSearchEnabled(decodeChatConfig(value).localSearchEnabled);
+      }).catch(() => {});
+    }).then(remove => { if (disposed) remove(); else unlistenRoots = remove; }).catch(() => {});
     let unlisten: (() => void) | undefined;
     if (nativeDesktop) void listen<{ contextEpoch: number }>('memory-changed', event => {
       try { void reconcileMemory(decodeContextEpoch(event.payload.contextEpoch)); }
@@ -112,7 +121,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     const focus = () => { if (nativeDesktop) void checkEpoch().catch(() => { if (!disposed) { setConfigured(false); setStatus('无法核对当前会话，请收起后重开。'); } }); };
     window.addEventListener('focus', focus);
     return () => {
-      disposed = true; alive.current = false; historySerial.current++; unlisten?.(); window.removeEventListener('focus', focus);
+      disposed = true; alive.current = false; historySerial.current++; unlisten?.(); unlistenRoots?.(); window.removeEventListener('focus', focus);
       const id = current.current; current.current = null;
       if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
       onPhase('idle');
@@ -128,7 +137,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     const shownPreview=previewRef.current;
     const id = crypto.randomUUID();
     current.current = id;
-    setBusy(true); setReply(''); setPhase('waiting'); setStatus('正在生成…');
+    setBusy(true); setReply(''); setToolStatus(''); setPhase('waiting'); setStatus('正在生成…');
     setLastPrompt(prompt); setRecorded(false); setMemoryUsage(null);
     const channel = new Channel<unknown>();
     let received = '';
@@ -137,8 +146,10 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
       try {
         const delta = decodeChatDelta(value);
         if (delta.requestId === id && delta.memoryUsage) setMemoryUsage(delta.memoryUsage);
+        if (delta.requestId === id && delta.toolStatus) setToolStatus(delta.toolStatus);
         if (delta.requestId === id && delta.text) {
           received += delta.text;
+          setToolStatus('');
           setReply(received); setPhase('streaming');
           voice?.onDelta(delta.text);
         }
@@ -181,7 +192,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
         void refreshPreview();
       }
     } finally {
-      if (current.current === id) { if (alive.current) setBusy(false); current.current = null; }
+      if (current.current === id) { if (alive.current) { setBusy(false); setToolStatus(''); } current.current = null; }
       voice?.onDone();
     }
     return true;
@@ -235,6 +246,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     <div className="chat-state-line"><span className={`chat-phase chat-phase-${phase}`}>{phaseNames[phase]}</span><span>{generating ? `已等待 ${seconds} 秒` : (phase === 'error' || phase === 'stopped') ? '本段未作为完整前文' : '本机对话'}</span>{voice.speaking && <span className="chat-speaking">栖栖正在说</span>}<button type="button" aria-expanded={reading} onClick={() => setReading(v => !v)}>{reading ? '收回气泡' : '展开阅读'}</button></div>
     {reading ? <ConversationReader history={history} prompt={lastPrompt} reply={reply} pending={!recorded} waiting={generating} label={phase === 'complete' ? '已完成 · 未载入记录' : phaseNames[phase] + ' · 未加入前文'}/>
       : <div className="chat-output" aria-label="栖栖的回复" aria-live="polite">{reply || '想聊点什么？'}</div>}
+    {(busy || phase === 'streaming') && toolStatus && <p className="chat-subtitle" role="status">{toolStatus}</p>}
     {preview && <details className="chat-memory-preview"><summary>下次发送的记忆 · 应用{preview.items.length}条 · 个人{!preview.personal.policy.enabled ? '未启用' : preview.personal.status === 'online' ? preview.personal.items.length + '条' : '服务未连接'}</summary><div>
       <p>{preview.scope.baseUrl} · {preview.scope.model}</p>
       {preview.items.length ? preview.items.map(item=><p key={item.id}>{item.body}<br/><small>{item.sourceLabel} · 经历日期：{item.eventDate ?? '未指定'} · 确认：{new Date(item.confirmedAt).toLocaleString()}</small></p>) : <p>当前模型未选用应用记忆。</p>}
@@ -251,7 +263,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     </div></details>}
     {memoryUsage && <details className="chat-memory-preview chat-memory-receipt"><summary>本轮已提交 · 应用{memoryUsage.memories.length}条 · 个人{memoryUsage.personal.status === 'offline' ? '未含（服务未连接）' : memoryUsage.personal.memories.length + '条'}</summary><div><p>{memoryUsage.scope.baseUrl} · {memoryUsage.scope.model}</p>{memoryUsage.memories.map(item=><p key={item.id}>{preview?.items.find(m=>m.id===item.id&&m.revision===item.revision)?.body ?? '条目已变化，请刷新预览'}<br/>第{item.revision}版</p>)}{memoryUsage.personal.status === 'sent' && memoryUsage.personal.memories.map(item=><p key={item.id}>{preview?.personal.items.find(m=>m.id===item.id&&m.seq===item.seq)?.title ?? '条目已变化或服务暂不可查，请刷新预览'}<br/>seq {item.seq}</p>)}<small>附加字符：应用{memoryUsage.contextChars} · 个人{memoryUsage.personal.status === 'sent' ? memoryUsage.personal.contextChars : 0}；提交不代表模型已引用。记录仅在当前窗口保留。</small></div></details>}
     {voice.transcript ? <p className="chat-subtitle" aria-live="polite">我听到：{voice.transcript}</p> : voice.notice ? <p className="chat-subtitle" role="status">{voice.notice}</p> : null}
-    {preview && <p className="chat-boundary">发送将把本条消息{history.length ? `、最近 ${history.length} 轮对话` : ''}{boundaryMemory}发往模型服务 <span className="chat-boundary-host" title={preview.scope.baseUrl}>{hostOf(preview.scope.baseUrl)}</span> · {preview.scope.model}{boundaryOffline}</p>}
+    {preview && <p className="chat-boundary">发送将把本条消息{history.length ? `、最近 ${history.length} 轮对话` : ''}{boundaryMemory}发往模型服务 <span className="chat-boundary-host" title={preview.scope.baseUrl}>{hostOf(preview.scope.baseUrl)}</span> · {preview.scope.model}{boundaryOffline}{searchEnabled ? ' · 已授权目录的检索结果也会发送给该服务' : ''}</p>}
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor="chat-draft">和栖栖说句话</label>
       <textarea id="chat-draft" rows={reading ? 3 : 1} maxLength={2000} value={draft} onChange={e => setDraft(e.target.value)} placeholder={reading ? '写下你想说的…' : '和我说说…'} disabled={busy} onKeyDown={e => {

@@ -200,3 +200,46 @@ test('chat passes expectedPersonal and renders two-family preview and receipt', 
   const second = await page.evaluate(() => (window as any).generateRequests.at(-1));
   expect(second.expectedPersonal).toEqual([{ id: 9, seq: 4 }]);
 });
+
+test('tool status deltas render as a transient line and never join the reply', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    Object.defineProperty(window, 'isTauri', { value: true });
+    w.deltas = [];
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: () => 1, unregisterCallback: () => {},
+      invoke: async (cmd: string, args: any) => {
+        if (cmd === 'guide_status') return true;
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'list_tasks') return [];
+        if (cmd === 'personal_memory_overview') return { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' };
+        if (cmd === 'chat_context_preview') return { scope: { baseUrl: 'https://example.com/v1', model: 'fixture' }, contextEpoch: 1, items: [], memories: [], bodyChars: 0, contextChars: 0, policy: { enabled: false, revision: 0, selectedIds: [] }, personal: { status: 'offline', policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], inactiveSelectedIds: [], bodyChars: 0, contextChars: 0 } };
+        if (cmd === 'chat_history') return [];
+        if (cmd === 'chat_config') return { configured: true, model: 'fixture', maxOutputTokens: 1024, localSearchEnabled: true };
+        if (cmd === 'chat_generate') {
+          const send = args.onDelta.onmessage;
+          const id = args.request.requestId;
+          send({ requestId: id, text: '', toolStatus: '正在检索：search_names', memoryUsage: null });
+          send({ requestId: id, text: '找到了两个项目。', memoryUsage: null });
+          send({ requestId: id, text: '', toolStatus: '正在检索：read_slice', memoryUsage: null });
+          send({ requestId: id, text: '都在 D 盘。', memoryUsage: null });
+          return { requestId: id, elapsedMs: 5, usage: null, historySaved: false, memoryUsage: { scope: args.request.expectedScope, memories: [], contextChars: 0, personal: { status: 'offline', memories: [] } } };
+        }
+        return 1;
+      }
+    } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByRole('button', { name: '聊一聊', exact: true }).click();
+  await page.getByLabel('和栖栖说句话').fill('找一下我的项目');
+  await page.getByRole('button', { name: '发送' }).click();
+  // The reply accumulates exactly the text deltas — tool status never joins
+  // the text, and once the turn settles the transient line is gone.
+  await expect(page.getByLabel('栖栖的回复')).toContainText('找到了两个项目。都在 D 盘。');
+  await expect(page.getByLabel('栖栖的回复')).not.toContainText('正在检索');
+  await expect(page.locator('.chat-subtitle[role="status"]')).toHaveCount(0);
+  // With localSearchEnabled the boundary sentence discloses search results.
+  await expect(page.locator('.chat-boundary')).toContainText('已授权目录的检索结果也会发送给该服务');
+});
