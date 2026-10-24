@@ -6,11 +6,9 @@ mod credentials;
 mod embedded;
 mod execution;
 mod instance;
+mod local_search;
 mod memory;
 mod memory_context;
-// The engine half (tool_specs/execute_tool) is wired into the chat loop in C2.
-#[allow(dead_code)]
-mod local_search;
 mod memory_export;
 mod model_settings;
 mod personal_memory;

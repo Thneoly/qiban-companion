@@ -169,6 +169,16 @@ impl ToolResult {
 }
 
 /// Execute one model-requested tool call. `roots` must be canonicalized.
+/// The answer for tool calls beyond the per-round cap: the provider still
+/// needs a reply for every tool_call_id (otherwise its next request is
+/// malformed), but the excess never executes.
+pub fn budget_rejection() -> ToolResult {
+    ToolResult {
+        outcome: ToolOutcome::Budget,
+        payload: json!({"error":"本轮工具调用过多"}).to_string(),
+    }
+}
+
 pub fn execute_tool(roots: &[PathBuf], name: &str, arguments: &str) -> ToolResult {
     let args: Value = match serde_json::from_str::<Value>(arguments) {
         Ok(value) if value.is_object() => value,
