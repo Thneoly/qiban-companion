@@ -94,3 +94,7 @@ chat-history v6 顺带 `reminders(id, due_at, message, status)`；桌宠侧到�
 - 不做交谈式提取（不扫聊天生成事实）。
 - 本批不加新 scope（T17"读取资料/引用"是阶段二，走既有配对授权面）。
 - 审计不覆盖语音链（后续单独评估）。
+
+## 附记：只读本地检索为何不进 ScopeContract（2026-10-24）
+
+本地检索（local-search，#80/#81）是**只读**能力：模型驱动的工具在用户授权目录内查文件名/内容/读片段，不产生 artifact、不写任何文件。ScopeContract 的门槛（validate_artifact 的哈希与命名门）是为**发布产物**设计的执行动作契约——把只读检索塞进去会稀释该契约的语义，因此检索不进 SCOPE_CONTRACTS，审计走自己的通道：tool_invocation_log（ring 200）按「模型可见即被记录」记**实发 8KB 摘录原文**，且**发送前写入**（含取消场景：工具在阻塞线程内完成执行+审计）。§4 的不变量由此扩展为两条：模型可见的参考资料被 dispatch 行记录（原有），模型可见的工具结果被工具日志记录（新增）。dispatch 行同步携带 tool_rounds 与轮间文本（intermediate_text），一个被取消的轮次仍可完整重构。

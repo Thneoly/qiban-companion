@@ -28,6 +28,10 @@ pub(crate) struct ChatInner {
     pub(crate) active: Option<(String, watch::Sender<bool>)>,
     pub(crate) conversation: Conversation,
     pub(crate) store: Option<HistoryStore>,
+    /// Kept so tool executions can write their audit row from a blocking
+    /// thread on a PRIVATE connection — a cancel between execution and the
+    /// next round must never leave an unaudited file read behind.
+    pub(crate) db_path: std::path::PathBuf,
 }
 pub struct ChatState(pub(crate) Mutex<ChatInner>);
 impl ChatState {
@@ -36,6 +40,7 @@ impl ChatState {
             active: None,
             conversation: Conversation::default(),
             store: HistoryStore::open(path).ok(),
+            db_path: path.to_path_buf(),
         }))
     }
 }
@@ -422,7 +427,7 @@ pub async fn chat_generate(
             .map(|stats| stats.clone())
             .unwrap_or((0, String::new()));
         let intermediate = (!intermediate.is_empty()).then(|| {
-            if intermediate.len() > INTERMEDIATE_CAP {
+            if intermediate.chars().count() > INTERMEDIATE_CAP {
                 let mut cut = intermediate
                     .char_indices()
                     .nth(INTERMEDIATE_CAP)
@@ -450,155 +455,30 @@ pub async fn chat_generate(
             intermediate_text: intermediate.as_deref(),
         });
     };
-    // The tool loop: at most MAX_TOOL_ROUNDS tool rounds (so ≤5 provider
-    // requests per turn) under the SAME cancel signal and epoch guard. Roots
-    // are re-read every round — a directory removed mid-flight is denied on
-    // the spot. Every tool result is audited BEFORE it can be sent anywhere.
-    const MAX_TOOL_ROUNDS: usize = 4;
-    let run = async {
-        let mut transcript: Vec<TranscriptEvent> = Vec::new();
-        let mut reply = String::new();
-        let mut usage_sum: Option<Value> = None;
-        let mut rounds_done = 0usize;
-        loop {
-            // Roots are re-read every round: consent is standing but live —
-            // a directory removed mid-flight becomes unreadable immediately.
-            // Tools ride the request only when at least one root exists.
-            let roots_now: Vec<std::path::PathBuf> = {
-                let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                let store = inner.store.as_ref().ok_or("本地存储不可用")?;
-                store
-                    .authorized_roots()
-                    .map_err(|_| "本地存储不可用")?
-                    .into_iter()
-                    .map(|root| std::path::PathBuf::from(root.path))
-                    .collect()
-            };
-            let tools: Vec<crate::local_search::ToolSpec> = if roots_now.is_empty() {
-                Vec::new()
-            } else {
-                crate::local_search::tool_specs()
-            };
-            let round = stream_context(
-                &endpoint,
-                key.as_deref().map(|s| s.as_str()).unwrap_or(""),
-                &selected,
-                (config.max_output_tokens, config.protocol),
-                RequestContext {
-                    history: &history,
-                    memories: &preview.items,
-                    personal: &personal_items,
-                },
-                &request.prompt,
-                &transcript,
-                &tools,
-                |event| {
-                    let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                    inner.ensure_current(&request.request_id, epoch, version)?;
-                    on_delta
-                        .send(ChatDelta {
-                            request_id: request.request_id.clone(),
-                            text: match &event {
-                                StreamEvent::Submitted => String::new(),
-                                StreamEvent::Text(text) => text.clone(),
-                            },
-                            tool_status: None,
-                            memory_usage: matches!(event, StreamEvent::Submitted)
-                                .then(|| usage_receipt.clone()),
-                        })
-                        .map_err(|_| "对话窗口已断开".to_string())
-                },
-            )
-            .await?;
-            usage_sum = merge_usage(usage_sum, round.usage);
-            if !round.text.is_empty() {
-                reply.push_str(&round.text);
-                if rounds_done > 0 || matches!(round.end, RoundEnd::Tools(_)) {
-                    // Text spoken before/between tool calls is replayed into
-                    // the next request — keep it in the transcript AND the
-                    // audit's intermediate_text (via tool_stats).
-                    transcript.push(TranscriptEvent::AssistantText(round.text.clone()));
-                    if let Ok(mut stats) = tool_stats.lock() {
-                        stats.1.push_str(&round.text);
-                    }
-                }
-            }
-            match round.end {
-                RoundEnd::Done => return Ok((usage_sum, reply)),
-                RoundEnd::Tools(calls) => {
-                    rounds_done += 1;
-                    if rounds_done > MAX_TOOL_ROUNDS {
-                        return Err("检索轮数已达上限，本段未保存；可缩小问题范围后重试".into());
-                    }
-                    if let Ok(mut stats) = tool_stats.lock() {
-                        stats.0 = rounds_done;
-                    }
-                    {
-                        let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                        inner.ensure_current(&request.request_id, epoch, version)?;
-                    }
-                    let mut executed = 0usize;
-                    for call in calls {
-                        transcript.push(TranscriptEvent::ToolCall {
-                            id: call.id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                        });
-                        emit_tool_status(
-                            &state,
-                            &request.request_id,
-                            epoch,
-                            version,
-                            &on_delta,
-                            format!("正在检索：{}", call.name),
-                        )?;
-                        let tool_started = std::time::Instant::now();
-                        let result = if executed < crate::local_search::MAX_CALLS_PER_ROUND {
-                            executed += 1;
-                            let roots_for_task = roots_now.clone();
-                            let name = call.name.clone();
-                            let arguments = call.arguments.clone();
-                            tauri::async_runtime::spawn_blocking(move || {
-                                crate::local_search::execute_tool(
-                                    &roots_for_task,
-                                    &name,
-                                    &arguments,
-                                )
-                            })
-                            .await
-                            .map_err(|_| "工具执行失败".to_string())?
-                        } else {
-                            // The provider still gets an answer for every
-                            // tool_call_id (otherwise the next request is
-                            // malformed), but the excess never executes.
-                            crate::local_search::budget_rejection()
-                        };
-                        // Audit BEFORE the result can be sent anywhere.
-                        {
-                            let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                            let store = inner.store.as_mut().ok_or("本地存储不可用")?;
-                            let _ = store.tool_log_append(
-                                &companion_storage::local_search_store::ToolInvocation {
-                                    request_id: &request.request_id,
-                                    round: rounds_done,
-                                    tool: &call.name,
-                                    arguments: &call.arguments,
-                                    outcome: result.outcome,
-                                    result_chars: result.payload.chars().count(),
-                                    result_excerpt: Some(result.payload.as_str()),
-                                    duration_ms: tool_started.elapsed().as_millis() as u64,
-                                },
-                            );
-                        }
-                        transcript.push(TranscriptEvent::ToolResult {
-                            id: call.id.clone(),
-                            content: result.payload.clone(),
-                        });
-                    }
-                }
-            }
-        }
-    };
+    // The tool loop (run_tool_turn): at most 5 provider requests per turn
+    // under this one cancel signal and 120s budget. Roots are re-read every
+    // round and every tool result is audited BEFORE it can be sent anywhere.
+    let run = run_tool_turn(
+        &state,
+        &endpoint,
+        key.as_deref().map(|s| s.as_str()).unwrap_or(""),
+        &selected,
+        (config.max_output_tokens, config.protocol),
+        &history,
+        &preview.items,
+        &personal_items,
+        &request.prompt,
+        &request.request_id,
+        epoch,
+        version,
+        &tool_stats,
+        &usage_receipt,
+        |delta| {
+            on_delta
+                .send(delta)
+                .map_err(|_| "对话窗口已断开".to_string())
+        },
+    );
     tokio::select! {
         biased;
         _ = cancelled.changed() => {
@@ -861,6 +741,16 @@ fn render_transcript_anthropic(events: &[TranscriptEvent]) -> Vec<Value> {
         }
     };
     for event in events {
+        // A new round starts once results are pending: flush so each round's
+        // text keeps its true position relative to the previous results.
+        if !results.is_empty()
+            && matches!(
+                event,
+                TranscriptEvent::AssistantText(_) | TranscriptEvent::ToolCall { .. }
+            )
+        {
+            flush(&mut out, &mut blocks, &mut results);
+        }
         match event {
             TranscriptEvent::AssistantText(text) => blocks.push(json!({"type":"text","text":text})),
             TranscriptEvent::ToolCall {
@@ -931,23 +821,223 @@ fn merge_usage(acc: Option<Value>, add: Option<Value>) -> Option<Value> {
 /// as text deltas — a stale loop must not keep painting the UI).
 #[allow(clippy::too_many_arguments)]
 fn emit_tool_status(
-    state: &State<'_, ChatState>,
+    state: &ChatState,
     request_id: &str,
     epoch: i64,
     version: u64,
-    on_delta: &tauri::ipc::Channel<ChatDelta>,
+    on_delta: &mut impl FnMut(ChatDelta) -> Result<(), String>,
     status: String,
 ) -> Result<(), String> {
     let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
     inner.ensure_current(request_id, epoch, version)?;
-    on_delta
-        .send(ChatDelta {
-            request_id: request_id.to_string(),
-            text: String::new(),
-            tool_status: Some(status),
-            memory_usage: None,
-        })
-        .map_err(|_| "对话窗口已断开".to_string())
+    on_delta(ChatDelta {
+        request_id: request_id.to_string(),
+        text: String::new(),
+        tool_status: Some(status),
+        memory_usage: None,
+    })
+}
+
+/// The turn driver: loops stream_context with tool rounds. Extracted from
+/// chat_generate so multi-round behavior is directly testable against a fake
+/// provider with a real ChatState; chat_generate supplies the Channel
+/// callback and the outer guards.
+#[allow(clippy::too_many_arguments)]
+async fn run_tool_turn(
+    state: &ChatState,
+    endpoint: &str,
+    key: &str,
+    selected: &str,
+    limits: (u32, crate::model_settings::ModelProtocol),
+    history: &[ChatTurn],
+    memories: &[Memory],
+    personal: &[PersonalMemoryRecord],
+    prompt: &str,
+    request_id: &str,
+    epoch: i64,
+    version: u64,
+    tool_stats: &std::sync::Arc<std::sync::Mutex<(usize, String)>>,
+    usage_receipt: &MemoryUsage,
+    mut on_delta: impl FnMut(ChatDelta) -> Result<(), String>,
+) -> Result<(Option<Value>, String), String> {
+    const MAX_TOOL_ROUNDS: usize = 4;
+    let mut transcript: Vec<TranscriptEvent> = Vec::new();
+    let mut reply = String::new();
+    let mut usage_sum: Option<Value> = None;
+    let mut rounds_done = 0usize;
+    loop {
+        // F2: a cancelled or epoch-bumped turn must not even START the
+        // next round's request — check before reading roots.
+        {
+            let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+            inner.ensure_current(request_id, epoch, version)?;
+        }
+        // Roots are re-read every round: consent is standing but live —
+        // a directory removed mid-flight becomes unreadable immediately.
+        // Tools ride the request only when at least one root exists.
+        let roots_now: Vec<std::path::PathBuf> = {
+            let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+            let store = inner.store.as_ref().ok_or("本地存储不可用")?;
+            store
+                .authorized_roots()
+                .map_err(|_| "本地存储不可用")?
+                .into_iter()
+                .map(|root| std::path::PathBuf::from(root.path))
+                .collect()
+        };
+        let tools: Vec<crate::local_search::ToolSpec> = if roots_now.is_empty() {
+            Vec::new()
+        } else {
+            crate::local_search::tool_specs()
+        };
+        let round = stream_context(
+            endpoint,
+            key,
+            selected,
+            limits,
+            RequestContext {
+                history,
+                memories,
+                personal,
+            },
+            prompt,
+            &transcript,
+            &tools,
+            |event| {
+                let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+                inner.ensure_current(request_id, epoch, version)?;
+                on_delta(ChatDelta {
+                    request_id: request_id.to_string(),
+                    text: match &event {
+                        StreamEvent::Submitted => String::new(),
+                        StreamEvent::Text(text) => text.clone(),
+                    },
+                    tool_status: None,
+                    memory_usage: matches!(event, StreamEvent::Submitted)
+                        .then(|| usage_receipt.clone()),
+                })
+            },
+        )
+        .await?;
+        usage_sum = merge_usage(usage_sum, round.usage);
+        // F5: the archive cap is 12000 chars per pair; a turn that is
+        // already over it can never persist — stop at the round boundary
+        // with the honest error instead of burning another request.
+        if reply.chars().count() + prompt.chars().count() > 11_000 {
+            return Err("回复长度已超过本机保存上限，已停止；可缩小问题范围后重试".into());
+        }
+        if !round.text.is_empty() {
+            reply.push_str(&round.text);
+            if matches!(round.end, RoundEnd::Tools(_)) {
+                // Text spoken before/between tool calls is replayed into
+                // the next request — keep it in the transcript AND the
+                // audit's intermediate_text (via tool_stats).
+                transcript.push(TranscriptEvent::AssistantText(round.text.clone()));
+                if let Ok(mut stats) = tool_stats.lock() {
+                    stats.1.push_str(&round.text);
+                }
+            }
+        }
+        match round.end {
+            RoundEnd::Done => return Ok((usage_sum, reply)),
+            RoundEnd::Tools(calls) if calls.is_empty() => {
+                return Err("回复未正常完成，请调整问题后重试".into());
+            }
+            RoundEnd::Tools(calls) => {
+                rounds_done += 1;
+                if rounds_done > MAX_TOOL_ROUNDS {
+                    return Err("检索轮数已达上限，本段未保存；可缩小问题范围后重试".into());
+                }
+                if let Ok(mut stats) = tool_stats.lock() {
+                    stats.0 = rounds_done;
+                }
+                {
+                    let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+                    inner.ensure_current(request_id, epoch, version)?;
+                }
+                let mut executed = 0usize;
+                for call in calls {
+                    transcript.push(TranscriptEvent::ToolCall {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    });
+                    emit_tool_status(
+                        state,
+                        request_id,
+                        epoch,
+                        version,
+                        &mut on_delta,
+                        format!("正在检索：{}", call.name),
+                    )?;
+                    let tool_started = std::time::Instant::now();
+                    let db_path = {
+                        let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+                        inner.db_path.clone()
+                    };
+                    let result = if executed < crate::local_search::MAX_CALLS_PER_ROUND {
+                        executed += 1;
+                        let roots_for_task = roots_now.clone();
+                        let name = call.name.clone();
+                        let arguments = call.arguments.clone();
+                        let audit_request_id = request_id.to_string();
+                        let audit_round = rounds_done;
+                        tauri::async_runtime::spawn_blocking(move || {
+                                let result =
+                                    crate::local_search::execute_tool(&roots_for_task, &name, &arguments);
+                                // F1: the audit row is written INSIDE the
+                                // blocking task, on a private connection —
+                                // a cancel that drops this future mid-walk
+                                // can no longer leave an executed-but-
+                                // unaudited file read behind.
+                                let duration = tool_started.elapsed().as_millis() as u64;
+                                let _ = companion_storage::history::HistoryStore::tool_log_append_standalone(
+                                    &db_path,
+                                    &companion_storage::local_search_store::ToolInvocation {
+                                        request_id: &audit_request_id,
+                                        round: audit_round,
+                                        tool: &name,
+                                        arguments: &arguments,
+                                        outcome: result.outcome,
+                                        result_chars: result.payload.chars().count(),
+                                        result_excerpt: Some(result.payload.as_str()),
+                                        duration_ms: duration,
+                                    },
+                                );
+                                result
+                            })
+                            .await
+                            .map_err(|_| "工具执行失败".to_string())?
+                    } else {
+                        // The provider still gets an answer for every
+                        // tool_call_id (otherwise the next request is
+                        // malformed), but the excess never executes.
+                        let result = crate::local_search::budget_rejection();
+                        let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
+                        if let Some(store) = inner.store.as_mut() {
+                            let _ = store.tool_log_append(
+                                &companion_storage::local_search_store::ToolInvocation {
+                                    request_id,
+                                    round: rounds_done,
+                                    tool: &call.name,
+                                    arguments: &call.arguments,
+                                    outcome: result.outcome,
+                                    result_chars: result.payload.chars().count(),
+                                    result_excerpt: Some(result.payload.as_str()),
+                                    duration_ms: 0,
+                                },
+                            );
+                        }
+                        result
+                    };
+                    transcript.push(TranscriptEvent::ToolResult {
+                        id: call.id.clone(),
+                        content: result.payload.clone(),
+                    });
+                }
+            }
+        }
+    }
 }
 
 // Nine arguments: the signature mirrors the wire request and the tests drive
@@ -965,11 +1055,20 @@ async fn stream_context(
     mut emit: impl FnMut(StreamEvent) -> Result<(), String>,
 ) -> Result<StreamRound, String> {
     let (max_output_tokens, protocol) = limits;
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "无法初始化模型连接")?;
+        .redirect(reqwest::redirect::Policy::none());
+    // A loopback endpoint never rides the system proxy: proxies routinely
+    // refuse to relay loopback targets (502 on this dev machine), and the
+    // local-fixture tests plus any local provider hit the same rule.
+    let loopback = reqwest::Url::parse(endpoint).ok().and_then(|url| {
+        url.host_str()
+            .map(|host| host == "localhost" || host == "[::1]" || host.starts_with("127."))
+    });
+    if loopback == Some(true) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|_| "无法初始化模型连接")?;
     let request = client.post(endpoint);
     let request = if key.is_empty() {
         request
@@ -1050,7 +1149,9 @@ async fn stream_context(
             .enumerate()
             .map(|(index, call)| ProviderToolCall {
                 id: if call.id.is_empty() {
-                    format!("call_{index}")
+                    // "missing_", never "call_N": providers do use call_N
+                    // ids, and a duplicate tool_call_id corrupts the replay.
+                    format!("missing_{index}")
                 } else {
                     call.id
                 },
@@ -1075,6 +1176,9 @@ async fn stream_context(
                     // reason, message_stop ends the stream.
                     match event.get("type").and_then(Value::as_str) {
                         Some("message_start") => {
+                            // Counts here are the message_start bootstrap;
+                            // Anthropic's final usage lands in message_delta
+                            // and is not parsed — a known undercount.
                             let counters = event.pointer("/message/usage");
                             usage = counters.map(|value| {
                                 json!({
@@ -1598,7 +1702,7 @@ mod tests {
         std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             socket
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 4096];
@@ -1647,7 +1751,7 @@ mod tests {
         std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             socket
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 4096];
@@ -1871,21 +1975,24 @@ mod tests {
         assert_eq!(openai[3]["tool_call_id"], "call_b");
 
         let anthropic = render_transcript_anthropic(&transcript);
-        // Assistant blocks (text + tool_use with parsed input objects), then
-        // ONE user message carrying both tool_results.
-        assert_eq!(anthropic.len(), 2);
-        let blocks = anthropic[0]["content"].as_array().unwrap();
-        assert_eq!(blocks[0]["type"], "text");
-        assert_eq!(blocks[1]["type"], "tool_use");
-        assert_eq!(blocks[1]["input"]["pattern"], "quant");
-        // Unparseable arguments degrade to {} — the paired result carries
-        // the error, the wire shape stays valid.
-        assert_eq!(blocks[2]["type"], "tool_use");
-        assert_eq!(blocks[2]["input"], json!({}));
-        let results = anthropic[1]["content"].as_array().unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0]["type"], "tool_result");
-        assert_eq!(results[0]["tool_use_id"], "call_a");
+        // Per ROUND (F4): each assistant message carries its own text+use
+        // blocks, answered by ONE user message with that round's results —
+        // the replay keeps the true ordering of text versus results.
+        assert_eq!(anthropic.len(), 4);
+        let first = anthropic[0]["content"].as_array().unwrap();
+        assert_eq!(first[0]["type"], "text");
+        assert_eq!(first[1]["type"], "tool_use");
+        assert_eq!(first[1]["input"]["pattern"], "quant");
+        let first_results = anthropic[1]["content"].as_array().unwrap();
+        assert_eq!(first_results.len(), 1);
+        assert_eq!(first_results[0]["tool_use_id"], "call_a");
+        // Second round: unparseable arguments degrade to {} — the paired
+        // result carries the error, the wire shape stays valid.
+        let second = anthropic[2]["content"].as_array().unwrap();
+        assert_eq!(second[0]["type"], "tool_use");
+        assert_eq!(second[0]["input"], json!({}));
+        let second_results = anthropic[3]["content"].as_array().unwrap();
+        assert_eq!(second_results[0]["tool_use_id"], "call_b");
     }
 
     #[test]
@@ -1982,5 +2089,343 @@ mod tests {
             _ => panic!("expected a Tools finish"),
         }
         assert!(round.usage.is_some(), "message_start usage still lands");
+    }
+
+    // ===== C3: full-loop tests driving run_tool_turn with a real ChatState,
+    // a fake provider that answers a scripted sequence, and store assertions
+    // (tool audit rows, captured request bodies). =====
+
+    /// A TCP fixture answering one scripted SSE response per connection,
+    /// capturing each request body as JSON. Steps run in order; the server
+    /// closes after the last one (extra connects would block and time out).
+    fn fixture_sequence(
+        steps: Vec<String>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let captured: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let sink = captured.clone();
+        std::thread::spawn(move || {
+            for (step, response) in steps.into_iter().enumerate() {
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let n = socket.read(&mut buffer).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = request.windows(4).position(|p| p == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let size = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + size {
+                            break;
+                        }
+                    }
+                }
+                let body_start = request.windows(4).position(|p| p == b"\r\n\r\n").unwrap() + 4;
+                let value: Value = serde_json::from_slice(&request[body_start..]).unwrap();
+                sink.lock().unwrap().push(value);
+                eprintln!("[fixture seq] step {step} served");
+                socket.write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        (base, captured)
+    }
+
+    async fn drive_turn(
+        state: &ChatState,
+        endpoint: &str,
+        request_id: &str,
+    ) -> Result<(Option<Value>, String), (usize, String)> {
+        // reqwest 0.12 honours the Windows system proxy (registry), and the
+        // dev machine runs one; the loopback fixture must stay direct.
+        std::env::set_var("NO_PROXY", "*");
+        state.0.lock().unwrap().active = Some((request_id.to_string(), watch::channel(false).0));
+        let (epoch, version, usage_receipt) = {
+            let inner = state.0.lock().unwrap();
+            let store = inner.store.as_ref().unwrap();
+            (
+                store.context_epoch().unwrap(),
+                inner.conversation.version(),
+                ContextPreview::read(
+                    &inner,
+                    MemoryScope {
+                        base_url: "https://fixture.test".into(),
+                        model: "fixture".into(),
+                    },
+                )
+                .unwrap()
+                .usage(),
+            )
+        };
+        let tool_stats = std::sync::Arc::new(std::sync::Mutex::new((0usize, String::new())));
+        let stats_back = tool_stats.clone();
+        let outcome = run_tool_turn(
+            state,
+            endpoint,
+            "",
+            "fixture",
+            (1024, crate::model_settings::ModelProtocol::OpenAi),
+            &[],
+            &[],
+            &[],
+            "找一下我的项目",
+            request_id,
+            epoch,
+            version,
+            &tool_stats,
+            &usage_receipt,
+            |_| Ok(()),
+        )
+        .await;
+        outcome.map_err(|message| {
+            let (rounds, intermediate) = stats_back.lock().map(|s| s.clone()).unwrap_or_default();
+            (
+                rounds + if intermediate.is_empty() { 0 } else { 1 },
+                message,
+            )
+        })
+    }
+
+    const OPENAI_TOOL_STEP: &str = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"list_roots\",\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+    const OPENAI_DONE_STEP: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"找到了两个目录\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\ndata: [DONE]\n\n";
+
+    #[tokio::test]
+    async fn loop_replays_tool_results_and_audits_the_exact_payload() {
+        let root_dir = std::env::temp_dir().join(format!("qiban-loop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let state = ChatState::open(
+            &std::env::temp_dir().join(format!("qiban-loop-db-{}.db", uuid::Uuid::new_v4())),
+        );
+        state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_mut()
+            .unwrap()
+            .authorized_root_add(
+                &companion_storage::local_search_store::AuthorizedRootInsert {
+                    path: &std::fs::canonicalize(&root_dir).unwrap().to_string_lossy(),
+                    label: None,
+                },
+            )
+            .unwrap();
+        let (endpoint, captured) =
+            fixture_sequence(vec![OPENAI_TOOL_STEP.into(), OPENAI_DONE_STEP.into()]);
+        let (usage, reply) = drive_turn(&state, &endpoint, "loop-1")
+            .await
+            .expect("turn completes");
+        assert_eq!(reply, "找到了两个目录");
+        // Round 1 carried no usage event, so the honest sum is unknown —
+        // merge_usage propagates None instead of guessing from one round.
+        assert!(usage.is_none());
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "one request per round");
+        // Round 1 declared tools (roots exist)…
+        assert!(requests[0]["tools"].is_array(), "tools ride round 1");
+        // …round 2 replayed the tool call and its result, verbatim.
+        assert!(requests[1]["tools"].is_array(), "tools ride round 2 too");
+        let replay = requests[1]["messages"].as_array().unwrap();
+        let tool_message = replay
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .expect("tool result message replayed");
+        assert_eq!(tool_message["tool_call_id"], "c1");
+        let assistant_with_calls = replay
+            .iter()
+            .find(|m| m["tool_calls"].is_array())
+            .expect("assistant tool_calls replayed");
+        assert_eq!(assistant_with_calls["tool_calls"][0]["id"], "c1");
+        // The audit row carries the EXACT payload that was replayed.
+        let rows = state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_ref()
+            .unwrap()
+            .tool_log_recent()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool, "list_roots");
+        assert_eq!(
+            rows[0].outcome,
+            companion_storage::local_search_store::ToolOutcome::Ok
+        );
+        assert_eq!(
+            rows[0].result_excerpt.as_deref(),
+            Some(tool_message["content"].as_str().unwrap()),
+            "audit excerpt == replayed payload"
+        );
+        std::fs::remove_dir_all(&root_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn loop_denies_path_escape_and_audits_it() {
+        let root_dir =
+            std::env::temp_dir().join(format!("qiban-escape-loop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let state = ChatState::open(
+            &std::env::temp_dir().join(format!("qiban-escape-db-{}.db", uuid::Uuid::new_v4())),
+        );
+        state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_mut()
+            .unwrap()
+            .authorized_root_add(
+                &companion_storage::local_search_store::AuthorizedRootInsert {
+                    path: &std::fs::canonicalize(&root_dir).unwrap().to_string_lossy(),
+                    label: None,
+                },
+            )
+            .unwrap();
+        let escape = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_slice\",\"arguments\":\"{\\\"path\\\":\\\"C:\\\\\\\\Windows\\\\\\\\win.ini\\\"}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+        let (endpoint, captured) = fixture_sequence(vec![escape.into(), OPENAI_DONE_STEP.into()]);
+        let (_, reply) = drive_turn(&state, &endpoint, "escape-1")
+            .await
+            .expect("turn completes");
+        assert_eq!(reply, "找到了两个目录");
+        let requests = captured.lock().unwrap().clone();
+        let tool_message = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .unwrap();
+        assert!(
+            tool_message["content"]
+                .as_str()
+                .unwrap()
+                .contains("不在授权目录内"),
+            "denied payload is replayed"
+        );
+        let rows = state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_ref()
+            .unwrap()
+            .tool_log_recent()
+            .unwrap();
+        assert_eq!(
+            rows[0].outcome,
+            companion_storage::local_search_store::ToolOutcome::Denied
+        );
+        std::fs::remove_dir_all(&root_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn loop_hits_the_round_limit_with_five_requests_and_no_persist() {
+        let root_dir =
+            std::env::temp_dir().join(format!("qiban-cap-loop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let state = ChatState::open(
+            &std::env::temp_dir().join(format!("qiban-cap-db-{}.db", uuid::Uuid::new_v4())),
+        );
+        state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_mut()
+            .unwrap()
+            .authorized_root_add(
+                &companion_storage::local_search_store::AuthorizedRootInsert {
+                    path: &std::fs::canonicalize(&root_dir).unwrap().to_string_lossy(),
+                    label: None,
+                },
+            )
+            .unwrap();
+        let (endpoint, captured) = fixture_sequence(vec![
+            OPENAI_TOOL_STEP.into(),
+            OPENAI_TOOL_STEP.into(),
+            OPENAI_TOOL_STEP.into(),
+            OPENAI_TOOL_STEP.into(),
+            OPENAI_TOOL_STEP.into(),
+        ]);
+        let error = drive_turn(&state, &endpoint, "cap-1")
+            .await
+            .expect_err("limit reached");
+        assert!(error.1.contains("检索轮数已达上限"), "{error:?}");
+        assert_eq!(captured.lock().unwrap().len(), 5, "exactly five requests");
+        // Rounds 1-4 executed their tool; round 5's request went out but the
+        // limit check aborts BEFORE executing its tool — 4 audit rows.
+        let rows = state
+            .0
+            .lock()
+            .unwrap()
+            .store
+            .as_ref()
+            .unwrap()
+            .tool_log_recent()
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        std::fs::remove_dir_all(&root_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_sequence_direct_stream() {
+        let (endpoint, captured) = fixture_sequence(vec![OPENAI_DONE_STEP.into()]);
+        let round = stream_context(
+            &endpoint,
+            "",
+            "fixture",
+            (1024, crate::model_settings::ModelProtocol::OpenAi),
+            RequestContext {
+                history: &[],
+                memories: &[],
+                personal: &[],
+            },
+            "hello",
+            &[],
+            &[],
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(round.text, "找到了两个目录");
+        assert_eq!(captured.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn loop_without_roots_sends_no_tools_key() {
+        let state = ChatState::open(
+            &std::env::temp_dir().join(format!("qiban-noro ots-{}.db", uuid::Uuid::new_v4())),
+        );
+        let (endpoint, captured) = fixture_sequence(vec![OPENAI_DONE_STEP.into()]);
+        let (_, reply) = drive_turn(&state, &endpoint, "noroot-1")
+            .await
+            .expect("turn completes");
+        assert_eq!(reply, "找到了两个目录");
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].get("tools").is_none(),
+            "no tools key without roots"
+        );
     }
 }

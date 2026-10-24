@@ -543,11 +543,14 @@ pub async fn local_roots_add(
             label: None,
         })
         .map_err(|_| "保存失败")?;
+    // The chat bubble's boundary disclosure must follow consent changes.
+    let _ = tauri::Emitter::emit(&app, "local-roots-changed", ());
     Ok(LocalRootsAddResult::Added { root })
 }
 
 #[tauri::command]
 pub fn local_roots_remove(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::chat::ChatState>,
     id: i64,
 ) -> Result<Vec<AuthorizedRoot>, String> {
@@ -556,9 +559,12 @@ pub fn local_roots_remove(
     store
         .authorized_root_remove(id)
         .map_err(|_| "本地存储不可用".to_string())?;
-    store
+    let remaining = store
         .authorized_roots()
-        .map_err(|_| "本地存储不可用".to_string())
+        .map_err(|_| "本地存储不可用".to_string())?;
+    drop(inner);
+    let _ = tauri::Emitter::emit(&app, "local-roots-changed", ());
+    Ok(remaining)
 }
 
 /// Native folder picker on a dedicated STA thread (memory_export.rs pattern,

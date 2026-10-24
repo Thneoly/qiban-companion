@@ -80,7 +80,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
       const [value, turns] = await Promise.all([invoke('chat_config'), loadHistory()]);
       if (alive.current && turns) {
         const config = decodeChatConfig(value);
-        setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens);
+        setConfigured(config.configured); setModel(config.model); setOutputBudget(config.maxOutputTokens); setSearchEnabled(config.localSearchEnabled);
         setHistory(turns); setReply(turns.at(-1)?.assistant ?? '');
         setStatus('记忆或会话已变化，已刷新本机记录；请重新输入后发送。');
       }
@@ -106,6 +106,13 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
       setReply(turns.at(-1)?.assistant ?? '');
       setStatus(config.configured ? (turns.length ? '已恢复本机记录 · 发送时携带当前模型前文' : '完整问答自动保存在本机 · 尚无当前模型记录') : '尚未配置密钥，请打开模型设置');
     }).catch(error => { if (!disposed) setStatus(typeof error === 'string' ? error : '读取模型或本机记录失败，请检查数据目录后重启'); });
+    let unlistenRoots: (() => void) | undefined;
+    if (nativeDesktop) void listen('local-roots-changed', () => {
+      // Consent changed: the boundary disclosure follows immediately.
+      void invoke('chat_config').then(value => {
+        if (!disposed) setSearchEnabled(decodeChatConfig(value).localSearchEnabled);
+      }).catch(() => {});
+    }).then(remove => { if (disposed) remove(); else unlistenRoots = remove; }).catch(() => {});
     let unlisten: (() => void) | undefined;
     if (nativeDesktop) void listen<{ contextEpoch: number }>('memory-changed', event => {
       try { void reconcileMemory(decodeContextEpoch(event.payload.contextEpoch)); }
@@ -114,7 +121,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     const focus = () => { if (nativeDesktop) void checkEpoch().catch(() => { if (!disposed) { setConfigured(false); setStatus('无法核对当前会话，请收起后重开。'); } }); };
     window.addEventListener('focus', focus);
     return () => {
-      disposed = true; alive.current = false; historySerial.current++; unlisten?.(); window.removeEventListener('focus', focus);
+      disposed = true; alive.current = false; historySerial.current++; unlisten?.(); unlistenRoots?.(); window.removeEventListener('focus', focus);
       const id = current.current; current.current = null;
       if (id) void invoke('chat_cancel', { requestId: id }).catch(() => {});
       onPhase('idle');
