@@ -246,12 +246,46 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
                 trim_frame = Some(speech_start.saturating_sub(SPEECH_PAD_FRAMES).max(tone_end));
             }
         }
-        // Diagnosis: an energetic steady segment survived BOTH passes —
+        // Diagnosis: an energetic steady segment survived the passes —
         // dump the frame kinds so the next report ships the provider's
         // actual tone shape instead of another guess.
         if trim_frame.is_none() && runs.iter().take(30).any(|run| kind_of(*run) == 1) {
             let kinds: Vec<u8> = runs.iter().take(24).map(|run| kind_of(*run)).collect();
             eprintln!("qiban voice: leading tone survived both passes; frame kinds {kinds:?}");
+        }
+    }
+    // Burst pass (2026-10-24, second drift): the provider's tone now comes
+    // as FOUR mid-energy segments whose CV can exceed the speech threshold
+    // (measured 0.37 on segments one and four), so shape-based passes miss
+    // it. The stable discriminator is ENERGY: real speech bursts around
+    // mean 0.10 while every tone segment measured ~0.035. Find the first
+    // substantial burst; any energetic material before it reads as the
+    // leading tone, whatever its shape. Guards: no tone-like lead-in → keep
+    // (a normal clip that simply starts speaking is untouched); no burst →
+    // keep (an all-tone or all-quiet clip is never trimmed into); lead cap
+    // 2.2 s. An isolated quiet interjection before a pause ("嗯。（停）正文")
+    // would be trimmed with the tone — accepted: missing it is the safer
+    // error, and connected speech stays one run and becomes the burst.
+    if trim_frame.is_none() {
+        let burst = runs.iter().find(|run| {
+            let length = run.1 - run.0;
+            if run.2 || length < 4 {
+                return false;
+            }
+            let values = &rms[run.0..run.1];
+            let mean = values.iter().sum::<f64>() / length as f64;
+            mean >= 0.06
+        });
+        if let Some(burst) = burst {
+            let lead = runs.iter().take_while(|run| run.0 < burst.0).any(|run| {
+                let length = run.1 - run.0;
+                !run.2
+                    && length >= 2
+                    && rms[run.0..run.1].iter().sum::<f64>() / length as f64 >= 0.015
+            });
+            if lead && burst.0 <= 110 {
+                trim_frame = Some(burst.0.saturating_sub(SPEECH_PAD_FRAMES).max(1));
+            }
         }
     }
     let Some(trim_frame) = trim_frame else {
@@ -474,6 +508,11 @@ mod tests {
         Silence,
         Tone,
         Speech,
+        /// 2026-10-24 drift: mid-energy tone (~0.035 frame RMS), steady.
+        SoftTone,
+        /// Same energy but wobbling — its measured CV reached 0.37, past the
+        /// speech threshold, which is exactly how the shape passes beat it.
+        WobblyTone,
     }
     /// Synthetic 16 kHz mono PCM16 WAV: steady tone segments have a constant
     /// frame RMS, speech varies its amplitude across frames (CV above 0.3).
@@ -487,6 +526,8 @@ mod tests {
                     Seg::Silence => 0.0,
                     Seg::Tone => 0.5,
                     Seg::Speech => 0.2 + 0.8 * ((f % 5) as f64 / 4.0),
+                    Seg::SoftTone => 0.055,
+                    Seg::WobblyTone => 0.03 + 0.05 * ((f % 4) as f64 / 3.0),
                 };
                 for n in 0..frame {
                     let phase = (n as f64 / frame as f64) * std::f64::consts::TAU;
@@ -553,6 +594,61 @@ mod tests {
         assert!(trimmed.windows(4).any(|w| w == b"AIGC"));
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
     }
+    #[test]
+    fn four_mid_energy_wobbly_tone_segments_trim_via_the_burst_pass() {
+        // The measured 2026-10-24 drift: four tone segments at ~0.035 frame
+        // RMS (3x quieter than real speech), two of them wobbling past the
+        // speech CV threshold (0.37) — every shape-based pass misses this;
+        // the burst pass discriminates on energy alone.
+        let wav = build_wav(
+            &[
+                (Seg::WobblyTone, 7),
+                (Seg::Silence, 7),
+                (Seg::SoftTone, 19),
+                (Seg::Silence, 34),
+                (Seg::SoftTone, 7),
+                (Seg::Silence, 8),
+                (Seg::WobblyTone, 7),
+                (Seg::Silence, 8),
+                (Seg::Speech, 24),
+            ],
+            false,
+        );
+        let (trimmed, did) = trim_leading_tone(&wav);
+        assert!(did, "the drifted shape must trim");
+        // Everything before the speech burst (~97 frames) is gone, landing a
+        // 3-frame pad before it — never mid-speech.
+        let removed = (wav.len() - trimmed.len()) / 640;
+        assert!((92..=97).contains(&removed), "removed {removed} frames");
+        // Plain mid-energy lead-ins (no wobble) also take the burst path
+        // when the shape passes refuse them.
+        let wav = build_wav(
+            &[(Seg::SoftTone, 10), (Seg::Silence, 10), (Seg::Speech, 24)],
+            false,
+        );
+        let (_, did) = trim_leading_tone(&wav);
+        assert!(did, "soft steady lead-in trims too");
+    }
+
+    #[test]
+    fn burst_pass_never_trims_into_speech_or_tone_only_clips() {
+        // Speech from frame zero: the burst IS the first run — no lead-in,
+        // nothing to trim.
+        let wav = build_wav(&[(Seg::Speech, 30)], false);
+        let (trimmed, did) = trim_leading_tone(&wav);
+        assert!(!did);
+        assert_eq!(trimmed.into_owned(), wav);
+        // Tone-only clip (all quiet-ish tone, no burst anywhere): the
+        // must-find-speech guard holds for the burst pass too.
+        let wav = build_wav(
+            &[(Seg::SoftTone, 10), (Seg::Silence, 6), (Seg::SoftTone, 10)],
+            false,
+        );
+        let (trimmed, did) = trim_leading_tone(&wav);
+        assert!(!did);
+        assert_eq!(trimmed.into_owned(), wav);
+    }
+
     #[test]
     fn keeps_audio_without_a_leading_tone() {
         let mut tone_without_speech = Vec::new();
@@ -969,5 +1065,64 @@ mod tests {
         );
         drop(settings); // close SQLite before the Windows file delete
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// Real-service diagnostic (run explicitly: `cargo test diagnose_real -- --ignored --nocapture`).
+    /// Synthesizes one sentence through the user's configured voice service,
+    /// saves the WAV, runs both trim passes and prints per-frame RMS so a
+    /// survived tone can be diagnosed from the provider's actual shape.
+    #[tokio::test]
+    #[ignore = "uses the real configured voice service and credentials"]
+    async fn diagnose_real_tts_tone_shape() {
+        let data_dir = std::env::var("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .expect("LOCALAPPDATA")
+            .join("dev.qiban.companion");
+        let store =
+            crate::model_settings::ModelStore::open(&data_dir.join("model-settings.db")).unwrap();
+        let voice = store.voice_config();
+        assert!(!voice.voice_base_url.is_empty(), "voice not configured");
+        let key = if voice.use_voice_key {
+            crate::credentials::read(&voice.voice_base_url)
+                .unwrap()
+                .expect("voice key missing")
+                .to_string()
+        } else {
+            String::new()
+        };
+        let client = SpeechClient::new(voice.voice_base_url.clone(), key).unwrap();
+        let (wav, _) = client
+            .synthesize(&voice.tts_model, &voice.voice, "我先说第一句。这是第二句。")
+            .await
+            .unwrap();
+        std::fs::write("D:/Game/.cache/diag-tts.wav", &wav).unwrap();
+        let (trimmed, did) = trim_leading_tone(&wav);
+        eprintln!(
+            "trim result: did={did}, {} -> {} bytes",
+            wav.len(),
+            trimmed.len()
+        );
+        // Per-frame RMS for the analysis window, quantized for readability.
+        let format = wav_format(&wav).unwrap();
+        let frame_bytes = format.byte_rate * FRAME_MS / 1000;
+        let data = &wav[format.data_offset..format.data_offset + format.data_len];
+        let frames = (data.len() / frame_bytes).min(WINDOW_FRAMES);
+        let mut line = String::new();
+        for frame in 0..frames {
+            let chunk = &data[frame * frame_bytes..(frame + 1) * frame_bytes];
+            let (sum, count) = chunk.chunks_exact(2).fold((0.0f64, 0.0f64), |(s, n), p| {
+                let sample = i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0;
+                (s + sample * sample, n + 1.0)
+            });
+            let rms = (sum / count).sqrt();
+            let level = match rms {
+                v if v < SILENCE_RMS => '-',
+                v if v < 0.01 => '.',
+                v if v < 0.05 => 'x',
+                _ => 'X',
+            };
+            line.push(level);
+        }
+        eprintln!("frame levels (first {frames} frames, 20ms each): {line}");
     }
 }
