@@ -5,6 +5,7 @@ import type { RuntimeInfo, Task } from '@companion/contracts';
 import { client, errorMessage } from './lib/client';
 import { MemoryPanel } from './features/memory/MemoryPanel';
 import { ModelSettings } from './features/settings/ModelSettings';
+import { LocalSearchSettings } from './features/settings/LocalSearchSettings';
 import { VoiceLab } from './features/voice/VoiceLab';
 import { Avatar } from './features/companion/Avatar';
 import { ExecutionPanel } from './features/tasks/ExecutionPanel';
@@ -108,7 +109,7 @@ export default function App() {
         <section hidden={section !== 'tasks'} aria-label="文档空间"><ExecutionPanel/></section>
         <section hidden={section !== 'memories'} aria-label="记忆空间"><MemoryPanel/><PersonalMemoryPanel/></section>
         <section hidden={section !== 'devices'} aria-label="设备空间"><AccountPanel/></section>
-        <section hidden={section !== 'settings'} aria-label="设置空间"><ModelSettings/><VoiceLab/></section>
+        <section hidden={section !== 'settings'} aria-label="设置空间"><ModelSettings/><LocalSearchSettings/><VoiceLab/></section>
         <footer className="page-footer"><span>栖伴 · 给日常一点陪伴</span><span>模型服务由你选择</span></footer>
       </div>
     </main>

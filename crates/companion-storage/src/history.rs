@@ -56,7 +56,7 @@ impl HistoryStore {
         connection.pragma_update(None, "secure_delete", "ON")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 7 {
+        if version > 8 {
             return Err(StorageError::NewerSchema);
         }
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -105,6 +105,12 @@ impl HistoryStore {
         // by dropping and recreating the still-unwritten table.
         if version < 7 {
             tx.execute_batch(include_str!("memory-schema-v7.sql"))?;
+        }
+        // v8 adds local search: standing authorized roots (consent, survives
+        // clear) and the tool invocation log (request content, cleared with
+        // the chats), plus the dispatch-log tool columns.
+        if version < 8 {
+            tx.execute_batch(include_str!("memory-schema-v8.sql"))?;
         }
         crate::memory::validate_schema(&tx)?;
         tx.commit()?;
@@ -203,7 +209,11 @@ impl HistoryStore {
         tx.execute("DELETE FROM chat_turns", [])?;
         // The audit records what was SENT; deleting every chat deletes the
         // audit with it (the same consent boundary as the turns themselves).
+        // The tool log is request content the same way — it goes with the
+        // chats, while authorized_roots (standing consent) deliberately
+        // survive and are removable only through the settings command.
         tx.execute("DELETE FROM chat_dispatch_log", [])?;
+        tx.execute("DELETE FROM tool_invocation_log", [])?;
         tx.execute(
             "UPDATE memory_meta SET context_epoch=?1 WHERE singleton=1",
             [next],
@@ -286,7 +296,7 @@ mod tests {
     #[test]
     fn refuses_future_and_corrupt_schema_without_overwrite() {
         let connection = Connection::open_in_memory().unwrap();
-        connection.pragma_update(None, "user_version", 8).unwrap();
+        connection.pragma_update(None, "user_version", 9).unwrap();
         assert!(matches!(
             HistoryStore::from_connection(connection),
             Err(StorageError::NewerSchema)
@@ -404,7 +414,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                7
+                8
             );
             let app: (i64, i64) = store
                 .0
@@ -461,7 +471,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                7
+                8
             );
             // Pre-v4 turns had no selections to backfill from: empty ledger.
             let usage: i64 = store
@@ -558,7 +568,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(marker, 1);
-            s.0.pragma_update(None, "user_version", 8).unwrap();
+            s.0.pragma_update(None, "user_version", 9).unwrap();
         }
         let before = std::fs::read(&path).unwrap();
         assert!(matches!(
@@ -624,7 +634,7 @@ mod tests {
             // would leave.
             let db = Connection::open(&path).unwrap();
             db.execute_batch(
-            "DROP TABLE chat_turn_usage;              DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              DROP TABLE IF EXISTS memory_outbox;              DROP TABLE IF EXISTS memory_sync_owners;              DROP TABLE IF EXISTS memory_server_mirror;              DROP TABLE IF EXISTS task_fact_index;              DROP TABLE IF EXISTS chat_dispatch_log;              DROP TABLE IF EXISTS reminders;              PRAGMA user_version=2;",
+            "DROP TABLE chat_turn_usage;              DROP TABLE personal_memory_selection;              DROP TABLE personal_memory_policy;              DROP TABLE IF EXISTS memory_outbox;              DROP TABLE IF EXISTS memory_sync_owners;              DROP TABLE IF EXISTS memory_server_mirror;              DROP TABLE IF EXISTS task_fact_index;              DROP TABLE IF EXISTS chat_dispatch_log;              DROP TABLE IF EXISTS reminders;              DROP TABLE IF EXISTS tool_invocation_log;              DROP TABLE IF EXISTS authorized_roots;              PRAGMA user_version=2;",
         )
         .unwrap();
             let v3_tables: i64 = db.query_row(
@@ -641,7 +651,7 @@ mod tests {
                     .0
                     .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                7
+                8
             );
             // Backfill: 3 turns x 2 selected app memories = 6 ledger rows,
             // attributed to the migration-time selection with send-time

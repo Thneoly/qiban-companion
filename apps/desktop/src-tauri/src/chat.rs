@@ -407,6 +407,9 @@ pub async fn chat_generate(
             memory_count: audit_memory_count,
             memory_chars: audit_memory_chars,
             prompt: &audit_prompt,
+            // C2 will feed the real tool numbers; the single-round turn is 0/None.
+            tool_rounds: 0,
+            intermediate_text: None,
         });
     };
     let run = stream_context(

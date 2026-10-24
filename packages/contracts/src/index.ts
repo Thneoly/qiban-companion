@@ -108,6 +108,25 @@ export function decodeModelSettings(value:unknown):ModelSettingsConfig {
   return {baseUrl:v.baseUrl,model:v.model,useApiKey:v.useApiKey,hasApiKey:v.hasApiKey,maxOutputTokens:v.maxOutputTokens,protocol:v.protocol==='anthropic'?'anthropic':'openai'};
 }
 
+export interface LocalRoot {id:number;path:string;label:string|null;addedAt:number}
+export function decodeLocalRoot(value:unknown):LocalRoot {
+  const v=record(value);
+  if(!integer(v.id)||typeof v.path!=='string'||!v.path||(v.label!==null&&typeof v.label!=='string')||!integer(v.addedAt))throw Error('授权目录协议不兼容');
+  return {id:v.id,path:v.path,label:v.label ?? null,addedAt:v.addedAt};
+}
+export function decodeLocalRoots(value:unknown):LocalRoot[] {
+  if(!Array.isArray(value)||value.length>8)throw Error('授权目录协议不兼容');
+  return value.map(decodeLocalRoot);
+}
+export type LocalRootsAddResult={status:'cancelled'}|{status:'added';root:LocalRoot}|{status:'invalid';reason:string};
+export function decodeLocalRootsAddResult(value:unknown):LocalRootsAddResult {
+  const v=record(value);
+  if(v.status==='cancelled')return {status:'cancelled'};
+  if(v.status==='added')return {status:'added',root:decodeLocalRoot(v.root)};
+  if(v.status==='invalid'&&typeof v.reason==='string'&&v.reason.length<=120)return {status:'invalid',reason:v.reason};
+  throw Error('授权目录协议不兼容');
+}
+
 export interface ModelTestOutcome {ok:boolean;detail:string}
 export function decodeModelTestOutcome(value:unknown):ModelTestOutcome {
   const v=record(value);

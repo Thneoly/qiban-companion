@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-roots-add"
+description = "Enables the local_roots_add command without any pre-configured scope."
+commands.allow = ["local_roots_add"]
+
+[[permission]]
+identifier = "deny-local-roots-add"
+description = "Denies the local_roots_add command without any pre-configured scope."
+commands.deny = ["local_roots_add"]
