@@ -26,10 +26,16 @@ try {
   try {
     # NOTE: the bundle-time signature step cannot prompt for this key's EMPTY
     # password unattended ($env:X = '' removes the var on Windows, so tauri
-    # falls back to an interactive prompt that dies without a console). The
-    # build still exits 0 without a .sig; we re-sign via the signer CLI below,
-    # where the empty password rides as a real argv entry through cmd.
-    npm run build:installer
+    # falls back to an interactive prompt). Sometimes that prompt dies
+    # quietly (v0.2.2) and sometimes it hangs forever (v0.2.1, v0.2.3) — the
+    # NSIS bundle is complete BEFORE signing, so we run the build under a
+    # timeout and let the signer-CLI fallback below handle the .sig either
+    # way (the empty password rides as a real argv entry through cmd).
+    $build = Start-Job -ScriptBlock { Set-Location $using:root; npm run build:installer 2>&1 }
+    if (Wait-Job $build -Timeout 600) { Receive-Job $build | Write-Host } else {
+      Write-Host 'Build job timed out (likely the signing prompt hang); the NSIS bundle should already exist — continuing to the signer-CLI fallback.'
+    }
+    Remove-Job $build -Force
   } finally {
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
   }
