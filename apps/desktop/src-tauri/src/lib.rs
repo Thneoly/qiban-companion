@@ -8,6 +8,9 @@ mod execution;
 mod instance;
 mod memory;
 mod memory_context;
+// The engine half (tool_specs/execute_tool) is wired into the chat loop in C2.
+#[allow(dead_code)]
+mod local_search;
 mod memory_export;
 mod model_settings;
 mod personal_memory;
@@ -216,6 +219,9 @@ pub fn run() {
             memory::chat_context_epoch,
             memory::chat_usage_impact,
             memory_export::memory_export,
+            local_search::local_roots_get,
+            local_search::local_roots_add,
+            local_search::local_roots_remove,
             reminders::reminder_list,
             reminders::reminder_add,
             reminders::reminder_cancel,

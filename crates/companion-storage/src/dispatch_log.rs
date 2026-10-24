@@ -53,6 +53,8 @@ pub struct DispatchRow {
     pub memory_count: i64,
     pub memory_chars: i64,
     pub prompt: String,
+    pub tool_rounds: i64,
+    pub intermediate_text: Option<String>,
 }
 
 /// The composition of one outgoing model request, captured at assembly time.
@@ -68,6 +70,13 @@ pub struct Dispatch<'a> {
     pub memory_count: usize,
     pub memory_chars: usize,
     pub prompt: &'a str,
+    /// How many tool rounds rode this turn (0 for single-round turns).
+    pub tool_rounds: usize,
+    /// Assistant text streamed between tool rounds — replayed into the next
+    /// round's request, hence model-visible: kept reconstructable for
+    /// cancelled/failed turns that leave no chat row. 16KB-capped by the
+    /// caller; None when there were no tool rounds.
+    pub intermediate_text: Option<&'a str>,
 }
 
 impl HistoryStore {
@@ -80,8 +89,9 @@ impl HistoryStore {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO chat_dispatch_log(request_id,outcome,model,base_url,dispatched_at,
-             system_version,memory_block,personal_digest,history_turns,memory_count,memory_chars,prompt)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+             system_version,memory_block,personal_digest,history_turns,memory_count,memory_chars,prompt,
+             tool_rounds,intermediate_text)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 entry.request_id,
                 entry.outcome.as_str(),
@@ -94,7 +104,9 @@ impl HistoryStore {
                 entry.history_turns as i64,
                 entry.memory_count as i64,
                 entry.memory_chars as i64,
-                entry.prompt
+                entry.prompt,
+                entry.tool_rounds as i64,
+                entry.intermediate_text
             ],
         )?;
         tx.execute(
@@ -111,7 +123,8 @@ impl HistoryStore {
     pub fn dispatch_log_recent(&self) -> Result<Vec<DispatchRow>, StorageError> {
         let mut query = self.0.prepare(
             "SELECT seq,request_id,outcome,model,base_url,dispatched_at,system_version,
-             memory_block,personal_digest,history_turns,memory_count,memory_chars,prompt
+             memory_block,personal_digest,history_turns,memory_count,memory_chars,prompt,
+             tool_rounds,intermediate_text
              FROM chat_dispatch_log ORDER BY seq",
         )?;
         let rows = query.query_map([], |r| {
@@ -129,6 +142,8 @@ impl HistoryStore {
                 r.get::<_, i64>(10)?,
                 r.get::<_, i64>(11)?,
                 r.get::<_, String>(12)?,
+                r.get::<_, i64>(13)?,
+                r.get::<_, Option<String>>(14)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -147,6 +162,8 @@ impl HistoryStore {
                 memory_count,
                 memory_chars,
                 prompt,
+                tool_rounds,
+                intermediate_text,
             ) = row?;
             let outcome = match outcome.as_str() {
                 "sent" => DispatchOutcome::Sent,
@@ -168,6 +185,8 @@ impl HistoryStore {
                 memory_count,
                 memory_chars,
                 prompt,
+                tool_rounds,
+                intermediate_text,
             });
         }
         Ok(out)
@@ -199,6 +218,8 @@ mod tests {
             memory_count: 2,
             memory_chars: 42,
             prompt: &prompt,
+            tool_rounds: 0,
+            intermediate_text: None,
         })
         .unwrap();
     }
@@ -240,6 +261,8 @@ mod tests {
                 memory_count: 0,
                 memory_chars: 0,
                 prompt: "p",
+                tool_rounds: 0,
+                intermediate_text: None,
             })
             .is_err());
     }

@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod dispatch_log;
 pub mod execution;
 pub mod history;
+pub mod local_search_store;
 pub mod memory;
 pub mod memory_sync_outbox;
 pub mod remote_jobs;
