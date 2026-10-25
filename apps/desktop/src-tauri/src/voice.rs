@@ -208,7 +208,11 @@ impl SpeechClient {
     ) -> Result<(Vec<u8>, f64), String> {
         let response = self
             .authorized("/audio/speech")
-            .json(&json!({"model":tts_model,"input":input,"voice":voice,"response_format":"wav","stream":false}))
+            // watermark_enabled:false asks the provider to skip the AI-audio
+            // watermark (the "beep" before/inside speech). Zhipu requires the
+            // account to have ALSO enabled the de-watermark switch in its
+            // console; the param is a no-op until then, so sending it is safe.
+            .json(&json!({"model":tts_model,"input":input,"voice":voice,"response_format":"wav","stream":false,"watermark_enabled":false}))
             .send()
             .await
             .map_err(|_| "语音合成连接失败")?;

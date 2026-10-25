@@ -257,15 +257,15 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
     // Burst pass (2026-10-24, second drift): the provider's tone now comes
     // as FOUR mid-energy segments whose CV can exceed the speech threshold
     // (measured 0.37 on segments one and four), so shape-based passes miss
-    // it. The stable discriminator is ENERGY: real speech bursts around
-    // mean 0.10 while every tone segment measured ~0.035. Find the first
-    // substantial burst; any energetic material before it reads as the
-    // leading tone, whatever its shape. Guards: no tone-like lead-in → keep
-    // (a normal clip that simply starts speaking is untouched); no burst →
-    // keep (an all-tone or all-quiet clip is never trimmed into); lead cap
-    // 2.2 s. An isolated quiet interjection before a pause ("嗯。（停）正文")
-    // would be trimmed with the tone — accepted: missing it is the safer
-    // error, and connected speech stays one run and becomes the burst.
+    // it. The stable discriminator is ENERGY: real speech bursts clearly
+    // above the tone band; every tone segment measured 0.033-0.038. Find
+    // the first substantial burst; tone-band material before it reads as
+    // the leading tone, whatever its shape. 2026-10-25: the burst bar
+    // dropped 0.06 -> 0.045 because a LONG clip's first speech run can
+    // start quietly (measured just under 0.06), which pushed the "first
+    // burst" deep past the lead cap — that clip's tone survived and was
+    // heard as a beep in the MIDDLE of a turn. The lead-band window
+    // (0.015..=0.042) keeps burst and tone bands disjoint.
     if trim_frame.is_none() {
         let burst = runs.iter().find(|run| {
             let length = run.1 - run.0;
@@ -274,14 +274,16 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
             }
             let values = &rms[run.0..run.1];
             let mean = values.iter().sum::<f64>() / length as f64;
-            mean >= 0.06
+            mean >= 0.045
         });
         if let Some(burst) = burst {
             let lead = runs.iter().take_while(|run| run.0 < burst.0).any(|run| {
                 let length = run.1 - run.0;
-                !run.2
-                    && length >= 2
-                    && rms[run.0..run.1].iter().sum::<f64>() / length as f64 >= 0.015
+                if run.2 || length < 2 {
+                    return false;
+                }
+                let mean = rms[run.0..run.1].iter().sum::<f64>() / length as f64;
+                (0.015..=0.042).contains(&mean)
             });
             if lead && burst.0 <= 110 {
                 trim_frame = Some(burst.0.saturating_sub(SPEECH_PAD_FRAMES).max(1));
@@ -1091,17 +1093,77 @@ mod tests {
             String::new()
         };
         let client = SpeechClient::new(voice.voice_base_url.clone(), key).unwrap();
+        // Multiple clips like a real turn: later sentences are their own
+        // synth requests — the mid-sentence beeps live there.
+        for text in ["我先说第一句。", "好的，明白。", "这是中间的一句。"] {
+            let (wav, _) = client
+                .synthesize(&voice.tts_model, &voice.voice, text)
+                .await
+                .unwrap();
+            let (trimmed, did) = trim_leading_tone(&wav);
+            eprintln!(
+                "[{text}] trim did={did}, {} -> {} bytes",
+                wav.len(),
+                trimmed.len()
+            );
+            std::fs::write("D:/Game/.cache/diag-tts-mid.wav", &wav).unwrap();
+            let format = wav_format(&wav).unwrap();
+            let frame_bytes = format.byte_rate * FRAME_MS / 1000;
+            let data = &wav[format.data_offset..format.data_offset + format.data_len];
+            let frames = (data.len() / frame_bytes).min(WINDOW_FRAMES);
+            let mut line = String::new();
+            for frame in 0..frames {
+                let chunk = &data[frame * frame_bytes..(frame + 1) * frame_bytes];
+                let (sum, count) = chunk.chunks_exact(2).fold((0.0f64, 0.0f64), |(s, n), p| {
+                    let sample = i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0;
+                    (s + sample * sample, n + 1.0)
+                });
+                let rms = (sum / count).sqrt();
+                let level = match rms {
+                    v if v < SILENCE_RMS => '-',
+                    v if v < 0.01 => '.',
+                    v if v < 0.06 => 'x',
+                    _ => 'X',
+                };
+                line.push(level);
+            }
+            eprintln!("  levels: {line}");
+        }
+        let long = "这是一段没有句号的长句子用来测试服务端会不会在音频中段插入提示音我们需要看得更远一些超过分析窗口之外的形态这样才知道中间的嘟嘟声到底来自哪里";
         let (wav, _) = client
-            .synthesize(&voice.tts_model, &voice.voice, "我先说第一句。这是第二句。")
+            .synthesize(&voice.tts_model, &voice.voice, long)
             .await
             .unwrap();
-        std::fs::write("D:/Game/.cache/diag-tts.wav", &wav).unwrap();
+        std::fs::write("D:/Game/.cache/diag-tts-long.wav", &wav).unwrap();
         let (trimmed, did) = trim_leading_tone(&wav);
         eprintln!(
-            "trim result: did={did}, {} -> {} bytes",
+            "[long {long:.12}…] trim did={did}, {} -> {} bytes",
             wav.len(),
             trimmed.len()
         );
+        // FULL-length level dump (not just the 2.6s window) so mid-clip
+        // insertions become visible.
+        let format = wav_format(&wav).unwrap();
+        let frame_bytes = format.byte_rate * FRAME_MS / 1000;
+        let data = &wav[format.data_offset..format.data_offset + format.data_len];
+        let total_frames = data.len() / frame_bytes;
+        let mut line = String::new();
+        for frame in 0..total_frames {
+            let chunk = &data[frame * frame_bytes..(frame + 1) * frame_bytes];
+            let (sum, count) = chunk.chunks_exact(2).fold((0.0f64, 0.0f64), |(s, n), p| {
+                let sample = i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0;
+                (s + sample * sample, n + 1.0)
+            });
+            let rms = (sum / count).sqrt();
+            let level = match rms {
+                v if v < SILENCE_RMS => '-',
+                v if v < 0.01 => '.',
+                v if v < 0.06 => 'x',
+                _ => 'X',
+            };
+            line.push(level);
+        }
+        eprintln!("  long levels ({total_frames} frames): {line}");
         // Per-frame RMS for the analysis window, quantized for readability.
         let format = wav_format(&wav).unwrap();
         let frame_bytes = format.byte_rate * FRAME_MS / 1000;
