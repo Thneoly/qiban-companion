@@ -104,17 +104,17 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await invoke(panel,'model_settings_save',{config:{baseUrl:chatBase,model:'native-chat',useApiKey:false,maxOutputTokens:1024}});
   await invoke(panel,'voice_settings_save',{config:{voiceBaseUrl:voiceBase,useVoiceKey:false,asrModel:'native-asr',ttsModel:'native-tts',voice:'native-voice'}});
   // Raw IPC claim: voice_speak returns tauri::ipc::Response, which the webview
-  // resolves as an ArrayBuffer, byte-exact through the first-clip passthrough.
+  // resolves as an ArrayBuffer, byte-exact through the tone-free passthrough.
   const probe=await pet.evaluate(async base=>{const native=window.__TAURI_INTERNALS__;const progress=[];
     const callback=native.transformCallback(raw=>{if(raw.message)progress.push(raw.message);});
-    try{const value=await native.invoke('voice_speak',{request:{requestId:'native-raw-probe',turnId:'native-raw-turn',expectedBaseUrl:base,seq:0,text:'直连探针句',first:true},onProgress:`__CHANNEL__:${callback}`});
+    try{const value=await native.invoke('voice_speak',{request:{requestId:'native-raw-probe',turnId:'native-raw-turn',expectedBaseUrl:base,seq:0,text:'直连探针句'},onProgress:`__CHANNEL__:${callback}`});
       const bytes=value instanceof ArrayBuffer?new Uint8Array(value):null;
       return {ok:true,rawType:value?.constructor?.name,byteLength:bytes?bytes.byteLength:Array.isArray(value)?value.length:null,head:bytes?[...bytes.slice(0,8)]:null,progress};}
     catch(error){return {ok:false,error:String(error)};}},voiceBase);
   assert(probe.ok,`raw probe failed: ${probe.error}`);
   assert(probe.rawType==='ArrayBuffer',`raw ipc type was ${probe.rawType}`);
   assert(probe.byteLength===fixtureWav.length&&JSON.stringify(probe.head)===JSON.stringify([...fixtureWav.slice(0,8)]),'raw wav bytes altered');
-  assert.deepStrictEqual(probe.progress,[{requestId:'native-raw-probe',trimmed:null}],'progress channel payload shape');
+  assert.deepStrictEqual(probe.progress,[{requestId:'native-raw-probe',trimmed:false,toneDetected:false}],'progress channel payload shape');
   await invoke(pet,'voice_turn_cancel',{turnId:'native-raw-turn'});
   // Turn A: record, auto-send, then interrupt while chat and tts are in flight.
   // A fresh profile may surface the first-use guide depending on when the pet
