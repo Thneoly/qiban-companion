@@ -1092,10 +1092,20 @@ mod tests {
         } else {
             String::new()
         };
-        let client = SpeechClient::new(voice.voice_base_url.clone(), key).unwrap();
+        let client = SpeechClient::new(voice.voice_base_url.clone(), key.clone()).unwrap();
         // Multiple clips like a real turn: later sentences are their own
-        // synth requests — the mid-sentence beeps live there.
-        for text in ["我先说第一句。", "好的，明白。", "这是中间的一句。"] {
+        // synth requests — the mid-sentence beeps live there. The sustained
+        // vowel openings (2026-10-30) probe the documented mis-trim risk:
+        // steady lead-ins that are CONTENT, not the provider tone.
+        let texts = [
+            "我先说第一句。",
+            "好的，明白。",
+            "这是中间的一句。",
+            "啊——今天的天气真好呀。",
+            "嗯——让我想一想该怎么回答你。",
+            "啊——嗯——哦——今天想听点什么呢？",
+        ];
+        for (index, text) in texts.iter().enumerate() {
             let (wav, _) = client
                 .synthesize(&voice.tts_model, &voice.voice, text)
                 .await
@@ -1106,7 +1116,7 @@ mod tests {
                 wav.len(),
                 trimmed.len()
             );
-            std::fs::write("D:/Game/.cache/diag-tts-mid.wav", &wav).unwrap();
+            std::fs::write(format!("D:/Game/.cache/diag-tts-{index}.wav"), &wav).unwrap();
             let format = wav_format(&wav).unwrap();
             let frame_bytes = format.byte_rate * FRAME_MS / 1000;
             let data = &wav[format.data_offset..format.data_offset + format.data_len];
@@ -1134,6 +1144,54 @@ mod tests {
             .synthesize(&voice.tts_model, &voice.voice, long)
             .await
             .unwrap();
+        // A/B against the 2026-10-07 baseline (no watermark_enabled field):
+        // if the tone returns here, its disappearance is driven by OUR request
+        // param + the console switch; if not, the provider changed globally.
+        {
+            let raw = reqwest::Client::new();
+            let mut request = raw
+                .post(format!("{}/audio/speech", voice.voice_base_url))
+                .json(&serde_json::json!({
+                    "model": voice.tts_model,
+                    "input": "我先说第一句。",
+                    "voice": voice.voice,
+                    "response_format": "wav",
+                    "stream": false,
+                }));
+            if !key.is_empty() {
+                request = request.bearer_auth(&key);
+            }
+            let bytes = request.send().await.unwrap().bytes().await.unwrap();
+            std::fs::write("D:/Game/.cache/diag-tts-baseline.wav", &bytes).unwrap();
+            let (trimmed, did) = trim_leading_tone(&bytes);
+            eprintln!(
+                "[baseline 无 watermark 字段] {}字节 trim did={did} -> {} 字节",
+                bytes.len(),
+                trimmed.len()
+            );
+            if let Ok(format) = wav_format(&bytes) {
+                let frame_bytes = format.byte_rate * FRAME_MS / 1000;
+                let data = &bytes[format.data_offset..format.data_offset + format.data_len];
+                let frames = (data.len() / frame_bytes).min(WINDOW_FRAMES);
+                let mut line = String::new();
+                for frame in 0..frames {
+                    let chunk = &data[frame * frame_bytes..(frame + 1) * frame_bytes];
+                    let (sum, count) = chunk.chunks_exact(2).fold((0.0f64, 0.0f64), |(s, n), p| {
+                        let sample = i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0;
+                        (s + sample * sample, n + 1.0)
+                    });
+                    let rms = (sum / count).sqrt();
+                    let level = match rms {
+                        v if v < SILENCE_RMS => '-',
+                        v if v < 0.01 => '.',
+                        v if v < 0.06 => 'x',
+                        _ => 'X',
+                    };
+                    line.push(level);
+                }
+                eprintln!("  baseline levels: {line}");
+            }
+        }
         std::fs::write("D:/Game/.cache/diag-tts-long.wav", &wav).unwrap();
         let (trimmed, did) = trim_leading_tone(&wav);
         eprintln!(
