@@ -74,3 +74,10 @@ pub fn create_task(
 pub fn cancel_task(id: String, store: State<'_, TaskStore>) -> Result<Task, CommandError> {
     store.cancel(&id).map_err(Into::into)
 }
+
+/// Removes the local list row only; task facts and chat history are separate
+/// stores and are never touched here.
+#[tauri::command]
+pub fn delete_task(id: String, store: State<'_, TaskStore>) -> Result<(), CommandError> {
+    store.delete(&id).map_err(Into::into)
+}

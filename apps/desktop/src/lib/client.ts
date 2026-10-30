@@ -8,6 +8,7 @@ function createNativeClient(): CompanionClient {
     listTasks: async () => decodeTasks(await invoke('list_tasks')),
     createTask: async title => decodeTask(await invoke('create_task', { title: validateTitle(title) })),
     cancelTask: async id => decodeTask(await invoke('cancel_task', { id })),
+    deleteTask: async id => { await invoke('delete_task', { id }); },
   };
 }
 export const client = isTauri() ? createNativeClient() : createPreviewClient();

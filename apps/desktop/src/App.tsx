@@ -85,6 +85,14 @@ export default function App() {
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
+  async function remove(id: string) {
+    setBusy(true); setError(null);
+    try {
+      await client.deleteTask(id);
+      setTasks(items => items.filter(task => task.id !== id));
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  }
 
   return <div className="app-shell workspace-shell">
     <aside className="sidebar">
@@ -102,7 +110,7 @@ export default function App() {
         {error && <div className="error-banner" role="alert"><span>{error}</span>{!ready && <button onClick={() => void load()}>重新连接</button>}</div>}
         <section hidden={section !== 'home'} aria-label="日常空间">
           <div className="daily-welcome"><Avatar/><div><span className="eyebrow">和栖栖在一起</span><h2>有话，慢慢说。</h2><p>打开宽敞的对话空间，读一段回复，也写下你的想法。</p><button className="workspace-primary" onClick={() => void petAction('open_chat').catch(e => setError(errorMessage(e)))}>打开文字对话 ↗</button><p className="workspace-hint">也可以轻点桌面角色，用语音聊聊。</p></div></div>
-          <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel}/>
+          <TaskPanel tasks={tasks} busy={busy} ready={ready} onCreate={create} onCancel={cancel} onDelete={remove}/>
           <RemindersPanel/>
           <p className="workspace-hint">{info?.persistence === 'sqlite' ? '待办保存在这台电脑，重开可恢复。' : '浏览器刷新后，待办会清空'}</p>
         </section>

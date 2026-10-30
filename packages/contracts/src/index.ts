@@ -29,6 +29,8 @@ export interface CompanionClient {
   listTasks(): Promise<Task[]>;
   createTask(title: string): Promise<Task>;
   cancelTask(id: string): Promise<Task>;
+  /** Local list row only; task facts and chat history are separate chains. */
+  deleteTask(id: string): Promise<void>;
 }
 
 function record(value: unknown): Record<string, unknown> {
