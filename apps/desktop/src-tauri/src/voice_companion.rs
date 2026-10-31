@@ -1261,7 +1261,7 @@ mod tests {
             std::fs::write("D:/Game/.cache/diag-tts-baseline.wav", &bytes).unwrap();
             let (trimmed, did) = trim_leading_tone(&bytes);
             eprintln!(
-                "[baseline 无 watermark 字段] {}字节 trim did={did} -> {} 字节",
+                "[baseline 无 watermark 字段] {}字节 trim did={did:?} -> {} 字节",
                 bytes.len(),
                 trimmed.len()
             );
