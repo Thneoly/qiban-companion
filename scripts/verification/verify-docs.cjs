@@ -27,7 +27,7 @@ for (const file of files) {
   }
 }
 for (const entry of fs.readdirSync(root,{withFileTypes:true})) {
-  if (entry.isFile() && (/\.(?:html|cjs)$/i.test(entry.name) || (/\.md$/i.test(entry.name) && !['README.md','AGENTS.md'].includes(entry.name)))) {
+  if (entry.isFile() && (/\.(?:html|cjs)$/i.test(entry.name) || (/\.md$/i.test(entry.name) && !['README.md','AGENTS.md','CHANGELOG.md'].includes(entry.name)))) {
     failures.push(`Root file should be categorized: ${entry.name}`);
   }
 }
