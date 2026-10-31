@@ -102,6 +102,18 @@ impl TaskStore {
         transaction.commit()?;
         Ok(task)
     }
+
+    /// Remove one list row. Deliberately local-only: task facts live in the
+    /// history database keyed by execution fingerprints and chat history is a
+    /// separate store, so this touches nothing but the tasks table (no schema
+    /// change; user_version stays 1).
+    pub fn delete(&self, id: &str) -> Result<(), StorageError> {
+        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        if connection.execute("DELETE FROM tasks WHERE id = ?1", [id])? == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +158,27 @@ mod tests {
         ));
         assert!(store.create(" ").is_err());
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_removes_only_the_named_row_and_survives_reopen() {
+        let path = std::env::temp_dir().join(format!("companion-test-{}.db", uuid::Uuid::new_v4()));
+        let gone;
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store.create("留下的任务").unwrap();
+            gone = store.create("要删的任务").unwrap().id;
+            store.cancel(&gone).unwrap();
+            store.delete(&gone).unwrap();
+            let titles: Vec<String> = store.list().unwrap().into_iter().map(|t| t.title).collect();
+            assert_eq!(titles, ["留下的任务"]);
+        }
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let titles: Vec<String> = store.list().unwrap().into_iter().map(|t| t.title).collect();
+            assert_eq!(titles, ["留下的任务"]);
+            assert!(matches!(store.delete(&gone), Err(StorageError::NotFound)));
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

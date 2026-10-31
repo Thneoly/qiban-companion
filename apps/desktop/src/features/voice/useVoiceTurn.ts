@@ -56,7 +56,7 @@ export function useVoiceTurn(options: {
   const cursor = useRef(0);
   const done = useRef(false);
   const fetches = useRef(new Map<number, Promise<Uint8Array<ArrayBuffer>>>());
-  const stats = useRef({ later: 0, untrimmed: 0 });
+  const stats = useRef({ later: 0, missed: 0 });
   const driving = useRef(false);
   const wake = useRef<(() => void) | null>(null);
   const stopPlayback = useRef<(() => void) | null>(null);
@@ -123,7 +123,10 @@ export function useVoiceTurn(options: {
       if (generation.current !== epoch) return;
       try {
         const flag = decodeVoiceSpeakProgress(value);
-        if (flag.requestId === requestId && flag.trimmed === false) stats.current.untrimmed++;
+        // Only a tone that was detected but not removed is a trim failure. A
+        // tone-free provider reports trimmed=false on every clip (nothing to
+        // trim) — that must never count against per-sentence synthesis.
+        if (flag.requestId === requestId && flag.trimmed === false && flag.toneDetected) stats.current.missed++;
       } catch { /* progress is advisory; the audio itself is authoritative */ }
     };
     stats.current.later++;
@@ -232,12 +235,14 @@ export function useVoiceTurn(options: {
     }
     if (generation.current !== epoch) { driving.current = false; return; }
     // Natural end of the turn: decide whether the next turn needs the
-    // single-shot fallback (trim missed on at least half of the later clips).
-    // Only evidence moves the flag — later===0 (one-sentence turns, trim never
-    // attempted) keeps the previous decision, and a clean later clip proves
-    // the provider layout is trimmable again.
-    if (stats.current.later >= 2 && stats.current.untrimmed * 2 >= stats.current.later) singleShot.current = true;
-    else if (stats.current.later >= 1 && stats.current.untrimmed === 0) singleShot.current = false;
+    // single-shot fallback (a detected tone survived on at least half of the
+    // later clips). Tone-free clips are clean evidence too — a provider that
+    // stopped prefixing the tone proves per-sentence synthesis is safe again,
+    // so a stale fallback from a tone era recovers on the first tone-free
+    // turn. Only evidence moves the flag — later===0 (one-sentence turns,
+    // trim never attempted) keeps the previous decision.
+    if (stats.current.later >= 2 && stats.current.missed * 2 >= stats.current.later) singleShot.current = true;
+    else if (stats.current.later >= 1 && stats.current.missed === 0) singleShot.current = false;
     driving.current = false;
     turnId.current = null;
     if (micRef.current === 'speaking') setMicState('idle');
@@ -284,7 +289,7 @@ export function useVoiceTurn(options: {
       const turn = crypto.randomUUID();
       turnId.current = turn;
       buffer.current = ''; fullText.current = ''; queue.current = []; cursor.current = 0; done.current = false;
-      fetches.current.clear(); stats.current = { later: 0, untrimmed: 0 };
+      fetches.current.clear(); stats.current = { later: 0, missed: 0 };
       const data = decodeVoiceTranscribe(await invoke('voice_transcribe', {
         request: { requestId: `${turn}-t0`, turnId: turn, expectedBaseUrl: baseUrl.current, wav: Array.from(wav) },
       }));

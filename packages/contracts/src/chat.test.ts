@@ -45,11 +45,14 @@ test('voice transcribe decode keeps bounded text and rejects empty or malformed 
     expect(()=>decodeVoiceTranscribe({requestId:'turn-1',transcript:'你好栖栖',recognitionMs:314,...patch})).toThrow();
 });
 
-test('voice speak progress decode takes a plain boolean trim flag',()=>{
-  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true}).trimmed).toBe(true);
-  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:false}).trimmed).toBe(false);
+test('voice speak progress decode takes the trim flag plus the tone-detected verdict',()=>{
+  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true,toneDetected:true}).trimmed).toBe(true);
+  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:false,toneDetected:true}).toneDetected).toBe(true);
+  expect(decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:false,toneDetected:false}).toneDetected).toBe(false);
   // The old null variant meant "first clip, tone kept on purpose" — that
-  // exemption is gone, so null must now be rejected.
-  for(const patch of [{trimmed:'yes'},{trimmed:undefined},{trimmed:null},{requestId:''}])
-    expect(()=>decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true,...patch})).toThrow();
+  // exemption is gone, so null must now be rejected. toneDetected is equally
+  // required: a tone-free provider reports trimmed=false on every clip, and
+  // without the distinction that reads as a trim failure (TUWE-6).
+  for(const patch of [{trimmed:'yes'},{trimmed:undefined},{trimmed:null},{toneDetected:undefined},{toneDetected:null},{toneDetected:'yes'},{requestId:''}])
+    expect(()=>decodeVoiceSpeakProgress({requestId:'turn-1',trimmed:true,toneDetected:true,...patch})).toThrow();
 });

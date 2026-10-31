@@ -23,5 +23,8 @@ export function createPreviewClient(): CompanionClient {
       tasks.set(id, cancelled);
       return { ...cancelled };
     },
+    async deleteTask(id) {
+      if (!tasks.delete(id)) throw new Error('未找到任务');
+    },
   };
 }

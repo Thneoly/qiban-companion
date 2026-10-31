@@ -30,6 +30,12 @@ const CONSTANT_CV: f64 = 0.15; // steady tone: frame-RMS variation below this
 const SPEECH_CV: f64 = 0.3; // natural speech varies more than this
 const SPEECH_PAD_FRAMES: usize = 3; // keep 60 ms before detected speech
 
+// Energy bands shared by the burst pass and the tone-present verdict: real
+// speech bursts clearly above BURST_RMS; the provider's tone (steady or
+// wobbling) lives inside TONE_BAND, disjoint from the burst band.
+const BURST_RMS: f64 = 0.045;
+const TONE_BAND: (f64, f64) = (0.015, 0.042);
+
 /// In-flight voice requests grouped by conversation turn. Unlike the lab's
 /// single-slot VoiceState, a turn may hold several TTS requests at once; the
 /// registry bounds total concurrency and cancels per turn.
@@ -84,13 +90,28 @@ impl VoiceTurnState {
     }
 }
 
+/// What the leading-tone analysis concluded about one clip. The distinction
+/// feeds the frontend's single-shot fallback (TUWE-6): a provider that no
+/// longer prefixes a tone returns `Absent` on every clip, which is NOT a
+/// trim failure — only `Missed` (tone-like material heard, no pass could
+/// safely remove it) may count against per-sentence synthesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToneVerdict {
+    /// Tone found and removed.
+    Trimmed,
+    /// Tone-like leading material detected but untrimmable.
+    Missed,
+    /// No leading tone detected — nothing to trim, not a failure.
+    Absent,
+}
+
 /// Trim the provider's leading tone on EVERY clip. The tone once doubled as
 /// an "about to speak" notification on the first clip, but trial feedback
 /// (twice) was that users hear it as noise — so the exemption is gone and
 /// only the must-find-speech guard remains: any doubt keeps the original
 /// bytes, we never trim into actual speech.
-fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
-    let keep = || (Cow::Borrowed(wav), false);
+fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, ToneVerdict) {
+    let keep = || (Cow::Borrowed(wav), ToneVerdict::Absent);
     let format = match wav_format(wav) {
         Ok(format) => format,
         Err(_) => return keep(),
@@ -274,7 +295,7 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
             }
             let values = &rms[run.0..run.1];
             let mean = values.iter().sum::<f64>() / length as f64;
-            mean >= 0.045
+            mean >= BURST_RMS
         });
         if let Some(burst) = burst {
             let lead = runs.iter().take_while(|run| run.0 < burst.0).any(|run| {
@@ -283,7 +304,7 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
                     return false;
                 }
                 let mean = rms[run.0..run.1].iter().sum::<f64>() / length as f64;
-                (0.015..=0.042).contains(&mean)
+                (TONE_BAND.0..=TONE_BAND.1).contains(&mean)
             });
             if lead && burst.0 <= 110 {
                 trim_frame = Some(burst.0.saturating_sub(SPEECH_PAD_FRAMES).max(1));
@@ -291,7 +312,36 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
         }
     }
     let Some(trim_frame) = trim_frame else {
-        return keep();
+        // Every pass refused to trim. Split "tone survived" from "no tone":
+        // the fallback verdict is only evidence against per-sentence
+        // synthesis when tone-like material is actually present. Two signals,
+        // complementary by construction — a constant-shape (kind 1) run early
+        // in the clip catches steady tones at any energy (the loud original
+        // signature is itself a "burst", so the band check cannot see it),
+        // while tone-band material before the first speech burst catches the
+        // wobbly mid-energy drift whose shape defeats the CV classes.
+        let run_mean = |run: (usize, usize, bool)| {
+            rms[run.0..run.1].iter().sum::<f64>() / (run.1 - run.0) as f64
+        };
+        let first_burst = runs
+            .iter()
+            .find(|run| !run.2 && run.1 - run.0 >= 4 && run_mean(**run) >= BURST_RMS);
+        let tone_band_lead = first_burst.is_some_and(|burst| {
+            runs.iter().take_while(|run| run.0 < burst.0).any(|run| {
+                !run.2
+                    && run.1 - run.0 >= 2
+                    && (TONE_BAND.0..=TONE_BAND.1).contains(&run_mean(*run))
+            })
+        });
+        let tone_present = tone_band_lead || runs.iter().take(30).any(|run| kind_of(*run) == 1);
+        return (
+            Cow::Borrowed(wav),
+            if tone_present {
+                ToneVerdict::Missed
+            } else {
+                ToneVerdict::Absent
+            },
+        );
     };
     let trim_offset = format.data_offset + trim_frame * frame_bytes;
     if trim_offset <= format.data_offset || trim_offset >= data_end {
@@ -308,7 +358,7 @@ fn trim_leading_tone(wav: &[u8]) -> (Cow<'_, [u8]>, bool) {
     if wav_seconds(&out, 60.0).is_err() {
         return keep();
     }
-    (Cow::Owned(out), true)
+    (Cow::Owned(out), ToneVerdict::Trimmed)
 }
 
 #[derive(Deserialize)]
@@ -335,14 +385,17 @@ pub struct SpeakRequest {
     seq: u32,
     text: String,
 }
-/// Reports whether the leading-tone trim matched for this clip. The old
+/// Reports the leading-tone verdict for this clip. The old
 /// `None` variant meant "first clip, tone kept on purpose" — that exemption
-/// was removed after trial feedback.
+/// was removed after trial feedback. `tone_detected` distinguishes a trim
+/// failure (tone present, `trimmed=false`) from a tone-free clip (nothing to
+/// trim), so the frontend fallback only engages on real misses (TUWE-6).
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeakProgress {
     request_id: String,
     trimmed: bool,
+    tone_detected: bool,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -422,7 +475,7 @@ async fn run_speak<P>(
     progress: P,
 ) -> Result<Vec<u8>, String>
 where
-    P: Fn(bool) -> Result<(), String>,
+    P: Fn(ToneVerdict) -> Result<(), String>,
 {
     if !valid_id(&request.request_id) || !valid_id(&request.turn_id) {
         return Err("语音请求标识无效".into());
@@ -471,11 +524,12 @@ pub async fn voice_speak(
     on_progress: Channel<SpeakProgress>,
 ) -> Result<Response, String> {
     let request_id = request.request_id.clone();
-    run_speak(state.inner(), settings.inner(), request, |trimmed| {
+    run_speak(state.inner(), settings.inner(), request, |verdict| {
         on_progress
             .send(SpeakProgress {
                 request_id: request_id.clone(),
-                trimmed,
+                trimmed: verdict == ToneVerdict::Trimmed,
+                tone_detected: verdict != ToneVerdict::Absent,
             })
             .map_err(|_| "语音窗口已断开".into())
     })
@@ -579,7 +633,7 @@ mod tests {
         // frame 74; speech starts at 77, so the trim keeps 60 ms of pad.
         let wav = build_wav(&layout(6, 19, 7, 3), false);
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(did);
+        assert_eq!(did, ToneVerdict::Trimmed);
         let trimmed = trimmed.into_owned();
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
         assert_eq!(trimmed.len(), wav.len() - 74 * 640);
@@ -587,7 +641,7 @@ mod tests {
         // the RIFF size field (bytes 4..8) legitimately changes.
         let marked = build_wav(&layout(6, 19, 7, 3), true);
         let (trimmed, did) = trim_leading_tone(&marked);
-        assert!(did);
+        assert_eq!(did, ToneVerdict::Trimmed);
         let trimmed = trimmed.into_owned();
         assert_eq!(&trimmed[..4], &marked[..4]);
         assert_eq!(&trimmed[8..40], &marked[8..40]);
@@ -617,7 +671,7 @@ mod tests {
             false,
         );
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(did, "the drifted shape must trim");
+        assert_eq!(did, ToneVerdict::Trimmed, "the drifted shape must trim");
         // Everything before the speech burst (~97 frames) is gone, landing a
         // 3-frame pad before it — never mid-speech.
         let removed = (wav.len() - trimmed.len()) / 640;
@@ -629,25 +683,29 @@ mod tests {
             false,
         );
         let (_, did) = trim_leading_tone(&wav);
-        assert!(did, "soft steady lead-in trims too");
+        assert_eq!(did, ToneVerdict::Trimmed, "soft steady lead-in trims too");
     }
 
     #[test]
     fn burst_pass_never_trims_into_speech_or_tone_only_clips() {
         // Speech from frame zero: the burst IS the first run — no lead-in,
-        // nothing to trim.
+        // nothing to trim, and no tone either: the verdict is Absent, the
+        // state a tone-free provider (glm-tts since 2026-10-30) returns for
+        // every clip. Absent must never read as a trim failure.
         let wav = build_wav(&[(Seg::Speech, 30)], false);
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(!did);
+        assert_eq!(did, ToneVerdict::Absent);
         assert_eq!(trimmed.into_owned(), wav);
         // Tone-only clip (all quiet-ish tone, no burst anywhere): the
-        // must-find-speech guard holds for the burst pass too.
+        // must-find-speech guard holds for the burst pass too — untrimmed,
+        // but the tone is unmistakably there, so the verdict is Missed.
+        // Long enough to clear the 30-frame analysis floor.
         let wav = build_wav(
-            &[(Seg::SoftTone, 10), (Seg::Silence, 6), (Seg::SoftTone, 10)],
+            &[(Seg::SoftTone, 20), (Seg::Silence, 6), (Seg::SoftTone, 20)],
             false,
         );
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(!did);
+        assert_eq!(did, ToneVerdict::Missed);
         assert_eq!(trimmed.into_owned(), wav);
     }
 
@@ -671,16 +729,21 @@ mod tests {
             (Seg::Silence, 3),
             (Seg::Speech, 30),
         ]);
-        for segments in [
-            vec![(Seg::Speech, 30)], // speech from the start
-            layout(6, 19, 7, 3).into_iter().take(5).collect::<Vec<_>>(), // tone, then the clip ends
-            vec![(Seg::Speech, 3)],  // shorter than any window
-            tone_without_speech,
-            tone_past_the_budget,
+        // Untrimmable clips split into tone-present (Missed — fallback
+        // evidence) and tone-free (Absent — no evidence at all).
+        for (segments, expected) in [
+            (vec![(Seg::Speech, 30)], ToneVerdict::Absent), // speech from the start
+            (
+                layout(6, 19, 7, 3).into_iter().take(5).collect::<Vec<_>>(),
+                ToneVerdict::Missed,
+            ), // tone, then the clip ends
+            (vec![(Seg::Speech, 3)], ToneVerdict::Absent),  // shorter than any window
+            (tone_without_speech, ToneVerdict::Missed),
+            (tone_past_the_budget, ToneVerdict::Missed),
         ] {
             let wav = build_wav(&segments, false);
             let (trimmed, did) = trim_leading_tone(&wav);
-            assert!(!did, "{segments:?}");
+            assert_eq!(did, expected, "{segments:?}");
             assert_eq!(trimmed.into_owned(), wav);
         }
     }
@@ -702,7 +765,7 @@ mod tests {
         ] {
             let wav = build_wav(&segments, false);
             let (trimmed, did) = trim_leading_tone(&wav);
-            assert!(did, "{segments:?}");
+            assert_eq!(did, ToneVerdict::Trimmed, "{segments:?}");
             assert!(trimmed.len() < wav.len(), "{segments:?}");
         }
     }
@@ -712,20 +775,20 @@ mod tests {
         // removed after trial feedback heard the tone as noise twice.
         let wav = build_wav(&layout(6, 19, 7, 3), false);
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(did);
+        assert_eq!(did, ToneVerdict::Trimmed);
         assert!(trimmed.len() < wav.len());
     }
     #[test]
     fn trims_at_tolerance_bounds() {
         let wav = build_wav(&layout(4, 15, 5, 3), false);
         let (trimmed, did) = trim_leading_tone(&wav);
-        assert!(did);
+        assert_eq!(did, ToneVerdict::Trimmed);
         assert!(wav_seconds(&trimmed, 60.0).is_ok());
         // Up to two leading silence frames are tolerated before segment one.
         let mut with_head = vec![(Seg::Silence, 2)];
         with_head.extend(layout(6, 19, 7, 3));
         let (_, did) = trim_leading_tone(&build_wav(&with_head, false));
-        assert!(did);
+        assert_eq!(did, ToneVerdict::Trimmed);
     }
 
     #[tokio::test]
@@ -884,16 +947,22 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let fixture = build_wav(&layout(6, 19, 7, 3), false);
+        let plain = build_wav(&[(Seg::Speech, 30)], false); // a tone-free clip
         let expected = fixture.clone();
+        let bare = plain.clone();
         let server = std::thread::spawn(move || {
-            for _ in 0..2 {
+            for step in 0..3 {
                 let (mut socket, _) = listener.accept().unwrap();
                 let raw = read_request(&mut socket);
                 assert!(raw.starts_with("POST /audio/speech "));
                 assert!(raw.contains("custom-tts"));
                 assert!(raw.contains("custom-voice"));
                 assert!(raw.contains("第一句话"));
-                let body = expected.clone();
+                let body = if step < 2 {
+                    expected.clone()
+                } else {
+                    bare.clone()
+                };
                 write!(
                     socket,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -916,8 +985,8 @@ mod tests {
                 seq: 0,
                 text: "第一句话".into(),
             },
-            |flag| {
-                seen.lock().unwrap().push(flag);
+            |verdict| {
+                seen.lock().unwrap().push(verdict);
                 Ok(())
             },
         )
@@ -930,12 +999,12 @@ mod tests {
             SpeakRequest {
                 request_id: "turn-1".into(),
                 turn_id: "turn".into(),
-                expected_base_url: base,
+                expected_base_url: base.clone(),
                 seq: 1,
                 text: "第一句话".into(),
             },
-            |flag| {
-                seen.lock().unwrap().push(flag);
+            |verdict| {
+                seen.lock().unwrap().push(verdict);
                 Ok(())
             },
         )
@@ -943,7 +1012,34 @@ mod tests {
         .unwrap();
         assert_eq!(later.len(), fixture.len() - 74 * 640);
         assert!(later.len() <= clip0.len());
-        assert_eq!(*seen.lock().unwrap(), vec![true, true]);
+        // A tone-free clip comes back untouched and reports Absent — the
+        // verdict that must never engage the frontend's single-shot fallback.
+        let bare_clip = run_speak(
+            &state,
+            &settings,
+            SpeakRequest {
+                request_id: "turn-2".into(),
+                turn_id: "turn".into(),
+                expected_base_url: base,
+                seq: 2,
+                text: "第一句话".into(),
+            },
+            |verdict| {
+                seen.lock().unwrap().push(verdict);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(bare_clip, plain);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ToneVerdict::Trimmed,
+                ToneVerdict::Trimmed,
+                ToneVerdict::Absent
+            ]
+        );
         server.join().unwrap();
         drop(settings); // close SQLite before the Windows file delete
         std::fs::remove_file(path).unwrap();
@@ -1092,21 +1188,31 @@ mod tests {
         } else {
             String::new()
         };
-        let client = SpeechClient::new(voice.voice_base_url.clone(), key).unwrap();
+        let client = SpeechClient::new(voice.voice_base_url.clone(), key.clone()).unwrap();
         // Multiple clips like a real turn: later sentences are their own
-        // synth requests — the mid-sentence beeps live there.
-        for text in ["我先说第一句。", "好的，明白。", "这是中间的一句。"] {
+        // synth requests — the mid-sentence beeps live there. The sustained
+        // vowel openings (2026-10-30) probe the documented mis-trim risk:
+        // steady lead-ins that are CONTENT, not the provider tone.
+        let texts = [
+            "我先说第一句。",
+            "好的，明白。",
+            "这是中间的一句。",
+            "啊——今天的天气真好呀。",
+            "嗯——让我想一想该怎么回答你。",
+            "啊——嗯——哦——今天想听点什么呢？",
+        ];
+        for (index, text) in texts.iter().enumerate() {
             let (wav, _) = client
                 .synthesize(&voice.tts_model, &voice.voice, text)
                 .await
                 .unwrap();
             let (trimmed, did) = trim_leading_tone(&wav);
             eprintln!(
-                "[{text}] trim did={did}, {} -> {} bytes",
+                "[{text}] trim did={did:?}, {} -> {} bytes",
                 wav.len(),
                 trimmed.len()
             );
-            std::fs::write("D:/Game/.cache/diag-tts-mid.wav", &wav).unwrap();
+            std::fs::write(format!("D:/Game/.cache/diag-tts-{index}.wav"), &wav).unwrap();
             let format = wav_format(&wav).unwrap();
             let frame_bytes = format.byte_rate * FRAME_MS / 1000;
             let data = &wav[format.data_offset..format.data_offset + format.data_len];
@@ -1134,10 +1240,58 @@ mod tests {
             .synthesize(&voice.tts_model, &voice.voice, long)
             .await
             .unwrap();
+        // A/B against the 2026-10-07 baseline (no watermark_enabled field):
+        // if the tone returns here, its disappearance is driven by OUR request
+        // param + the console switch; if not, the provider changed globally.
+        {
+            let raw = reqwest::Client::new();
+            let mut request = raw
+                .post(format!("{}/audio/speech", voice.voice_base_url))
+                .json(&serde_json::json!({
+                    "model": voice.tts_model,
+                    "input": "我先说第一句。",
+                    "voice": voice.voice,
+                    "response_format": "wav",
+                    "stream": false,
+                }));
+            if !key.is_empty() {
+                request = request.bearer_auth(&key);
+            }
+            let bytes = request.send().await.unwrap().bytes().await.unwrap();
+            std::fs::write("D:/Game/.cache/diag-tts-baseline.wav", &bytes).unwrap();
+            let (trimmed, did) = trim_leading_tone(&bytes);
+            eprintln!(
+                "[baseline 无 watermark 字段] {}字节 trim did={did:?} -> {} 字节",
+                bytes.len(),
+                trimmed.len()
+            );
+            if let Ok(format) = wav_format(&bytes) {
+                let frame_bytes = format.byte_rate * FRAME_MS / 1000;
+                let data = &bytes[format.data_offset..format.data_offset + format.data_len];
+                let frames = (data.len() / frame_bytes).min(WINDOW_FRAMES);
+                let mut line = String::new();
+                for frame in 0..frames {
+                    let chunk = &data[frame * frame_bytes..(frame + 1) * frame_bytes];
+                    let (sum, count) = chunk.chunks_exact(2).fold((0.0f64, 0.0f64), |(s, n), p| {
+                        let sample = i16::from_le_bytes([p[0], p[1]]) as f64 / 32768.0;
+                        (s + sample * sample, n + 1.0)
+                    });
+                    let rms = (sum / count).sqrt();
+                    let level = match rms {
+                        v if v < SILENCE_RMS => '-',
+                        v if v < 0.01 => '.',
+                        v if v < 0.06 => 'x',
+                        _ => 'X',
+                    };
+                    line.push(level);
+                }
+                eprintln!("  baseline levels: {line}");
+            }
+        }
         std::fs::write("D:/Game/.cache/diag-tts-long.wav", &wav).unwrap();
         let (trimmed, did) = trim_leading_tone(&wav);
         eprintln!(
-            "[long {long:.12}…] trim did={did}, {} -> {} bytes",
+            "[long {long:.12}…] trim did={did:?}, {} -> {} bytes",
             wav.len(),
             trimmed.len()
         );
