@@ -1,5 +1,13 @@
 // take-driver.mjs - master orchestrator for the one-long-take recording session.
 // Drives: ffmpeg(ddagrab) + OBS(audio) + pet-page CDP interactions + cursor glide + phone window.
+//
+// 2026-11-01 rework (TUWE-5 v2): wallpaper background + taskbar-free capture.
+// - ddagrab region 1920x1032 at (0,0): taskbar (48px, screen 1920x1080@100%) is never captured.
+// - shot 2 (drag) is now recorded INSIDE this take (old separate attachment had the article bg).
+//   Pet is dragged left for the on-film gesture, then petwin-move'd back home before shot 3.
+// - shot 7 closeup source = idle tail at the end of the take (crop happens in compose).
+// Prereqs before running: app started with --remote-debugging-port=9222, wallpaper bg window up
+//   (bgview.ps1 -Image wallpaper.png -Topmost), OBS running with obs-websocket.
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -60,9 +68,14 @@ async function main() {
   log('pet state:', st);
   if (!st.includes('"disabled":false')) throw new Error('pet not interactive — abort before recording');
 
+  // pet must sit ABOVE the wallpaper bg (bg is raised topmost first, then this);
+  // stray floaters (e.g. PixPin pins) get parked off-screen for the whole take
+  await ps('petwin.ps1', ['-Action', 'top', '-Which', 'pet']).then(s => log('pet top', s)).catch(e => log('pet top WARN', e.message));
+  await ps('stray-windows.ps1', ['-Action', 'hide']).then(s => log('strays', s)).catch(e => log('strays WARN', e.message));
+
   // ---- phase 1: recorders + marker ----
   await node([resolve(HERE, 'obs-ctl.mjs'), 'start']).then(s => log('OBS', s)).catch(e => { throw new Error('OBS start failed: ' + e.message); });
-  const ff = spawn('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'ddagrab=output_idx=0:framerate=30', '-t', '250',
+  const ff = spawn('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'ddagrab=output_idx=0:framerate=30:video_size=1920x1032:offset_x=0:offset_y=0', '-t', '300',
     '-vf', 'hwdownload,format=bgra', '-c:v', 'libx264', '-preset', 'medium', '-crf', '19', '-pix_fmt', 'yuv420p',
     resolve(HERE, 'out/take.mkv')], { stdio: ['pipe', 'ignore', 'pipe'] });
   ff.stderr.on('data', () => {});
@@ -78,6 +91,22 @@ async function main() {
   await glide(960, 540, 1900, 1062, 900);
   log('shot1 idle start');
   await sleep(8500);
+
+  // ---- shot 2: drag across screen (on-film), then move pet back home ----
+  log('shot2 drag');
+  const petInfo = await ps('petwin.ps1', ['-Action', 'rect']).catch(e => 'ERR ' + e.message);
+  log('pet rect:', petInfo);
+  const pm = /(\d+)x(\d+)@(-?\d+),(-?\d+)/.exec(String(petInfo));
+  if (!pm) throw new Error('pet window not found for drag');
+  const petL = +pm[3], petT = +pm[4], petW = +pm[1], petH = +pm[2];
+  const grabX = Math.min(petL + Math.round(petW * 0.55), 1900);
+  const grabY = Math.min(petT + Math.round(petH * 0.62), 1020);
+  await glide(1900, 1062, grabX, grabY, 1100);
+  await sleep(400);
+  await ps('input.ps1', ['-Action', 'drag', '-X', String(grabX), '-Y', String(grabY), '-X2', '460', '-Y2', '540', '-Ms', '2300']);
+  await sleep(4200); // pet idles at the new spot on film
+  await ps('petwin.ps1', ['-Action', 'move', '-Which', 'pet', '-X', String(petL), '-Y', String(petT)]).then(s => log('pet home', s));
+  await sleep(1500); // settle before the bubble opens
 
   // ---- shot 3: typing chat ----
   log('shot3 open bubble');
@@ -147,12 +176,18 @@ async function main() {
   log('phone after pair:', ptext.replace(/\n/g, '|').slice(0, 160));
   await sleep(7500);
 
+  // ---- shot 7 source: closeup idle tail (phone gone, pet motion arc) ----
+  await ctx.close().catch(() => {});
+  await glide(960, 900, 1900, 1062, 900);
+  log('shot7 idle tail start');
+  await sleep(11000);
+
   // ---- wrap ----
   ff.stdin.write('q');
   await new Promise(r => setTimeout(r, 2500));
   try { ff.kill(); } catch {}
   await node([resolve(HERE, 'obs-ctl.mjs'), 'stop']).then(s => log('OBS', s)).catch(e => log('OBS stop WARN', e.message));
-  await ctx.close().catch(() => {});
+  await ps('stray-windows.ps1', ['-Action', 'restore']).then(s => log('strays', s)).catch(e => log('strays restore WARN', e.message));
   log('TAKE_DONE');
 }
 

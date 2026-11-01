@@ -35,13 +35,18 @@ public class NoActivateForm : Form {
 "@ -ReferencedAssemblies System.Windows.Forms, System.Drawing
 
 $form = New-Object NoActivateForm
-$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-$form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+# enum assignments as strings: PS coerces reliably; type literals like
+# [System.Drawing.ImageLayout] fail to resolve in some sessions (enum lives in a
+# different assembly than its namespace suggests) - that killed the bg window silently
+# in the 2026-11-01 rework smoke and is the likely cause of the session-2 white-flash
+# marker never rendering.
+$form.FormBorderStyle = 'None'
+$form.StartPosition = 'Manual'
 $form.Bounds = New-Object System.Drawing.Rectangle($Left, $Top, $W, $H)
 $form.ShowInTaskbar = $false
 $form.TopMost = [bool]$Topmost
 $form.BackgroundImage = $src
-$form.BackgroundImageLayout = [System.Drawing.ImageLayout]::Stretch
+$form.BackgroundImageLayout = 'Stretch'
 
 if ($Seconds -gt 0) {
   $timer = New-Object System.Windows.Forms.Timer

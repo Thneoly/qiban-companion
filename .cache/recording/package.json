@@ -1,0 +1,9 @@
+{
+  "name": "recording-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0",
+    "playwright": "^1.49.0"
+  }
+}

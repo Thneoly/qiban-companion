@@ -1,0 +1,5 @@
+[0:v]format=rgba[base];
+[1:v]format=rgba,geq=r='98':g='134':b='172':a='88*exp(-((X-1150)*(X-1150)+(Y-430)*(Y-430))/352800)'[g1];
+[2:v]format=rgba,geq=r='72':g='122':b='134':a='48*exp(-((X-330)*(X-330)+(Y-720)*(Y-720))/156800)'[g2];
+[base][g1]overlay=0:0[b1];
+[b1][g2]overlay=0:0,format=yuv420p,vignette=angle=PI/18,noise=alls=2:allf=t+u[out]
