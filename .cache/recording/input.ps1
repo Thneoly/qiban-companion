@@ -114,6 +114,20 @@ switch ($Action) {
   'move' {
     [NativeInput]::MoveTo($X, $Y)
   }
+  'glide' {
+    # human-ish interpolated cursor travel without buttons (for on-camera motion)
+    $dur = if ($Ms -gt 0) { $Ms } else { 1200 }
+    $stepMs = [Math]::Max(1, [int]($dur / $Steps))
+    $rnd = New-Object System.Random
+    for ($i = 1; $i -le $Steps; $i++) {
+      $t = $i / $Steps
+      $e = if ($t -lt 0.5) { 2 * $t * $t } else { 1 - [Math]::Pow(-2 * $t + 2, 2) / 2 }
+      $jx = $rnd.Next(-1, 2); $jy = $rnd.Next(-1, 2)
+      [NativeInput]::MoveTo([int]($X + ($X2 - $X) * $e) + $jx, [int]($Y + ($Y2 - $Y) * $e) + $jy)
+      Start-Sleep -Milliseconds $stepMs
+    }
+    [NativeInput]::MoveTo($X2, $Y2)
+  }
   'click' {
     [NativeInput]::MoveTo($X, $Y)
     Start-Sleep -Milliseconds 120

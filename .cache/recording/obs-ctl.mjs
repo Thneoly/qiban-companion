@@ -2,6 +2,10 @@
 // Usage: node obs-ctl.mjs <status|start|stop|scene|pause>
 import WebSocket from 'ws';
 import crypto from 'node:crypto';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 const PASSWORD = 'rec-local-2026';
 const URL = 'ws://127.0.0.1:4455';
@@ -90,7 +94,9 @@ async function main() {
         baseWidth: 1920, baseHeight: 1080, outputWidth: 1920, outputHeight: 1080,
         fpsType: 'common', fpsCommon: '30'
       });
-      await request('SetProfileParameter', { parameterCategory: 'SimpleOutput', parameterName: 'FilePath', parameterValue: 'D:/multica-workspaces/tuweiwu-7ef8b5c1bd5b/tuwe-5-20fe214aeb0f/worktree/.cache/recording/obs-out' });
+      // derive from script location: worktree path changes between runs, never hardcode it
+      const outDir = resolve(here, 'obs-out').replace(/\\/g, '/');
+      await request('SetProfileParameter', { parameterCategory: 'SimpleOutput', parameterName: 'FilePath', parameterValue: outDir });
       await request('SetProfileParameter', { parameterCategory: 'SimpleOutput', parameterName: 'RecFormat2', parameterValue: 'mkv' });
       await request('SetProfileParameter', { parameterCategory: 'SimpleOutput', parameterName: 'VBitrate', parameterValue: '12000' });
       console.log(JSON.stringify({ scene: sceneName, scenes: names, addedScreen: added }));

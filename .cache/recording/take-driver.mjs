@@ -1,0 +1,171 @@
+// take-driver.mjs - master orchestrator for the one-long-take recording session.
+// Drives: ffmpeg(ddagrab) + OBS(audio) + pet-page CDP interactions + cursor glide + phone window.
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { chromium } from 'playwright';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const T0 = Date.now();
+const log = (...a) => console.log(`[${((Date.now() - T0) / 1000).toFixed(1)}]`, ...a);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function run(cmd, args, opts = {}) {
+  return new Promise((res, rej) => {
+    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+    let out = '', err = '';
+    p.stdout.on('data', d => out += d);
+    p.stderr.on('data', d => err += d);
+    p.on('close', code => code === 0 ? res(out.trim()) : rej(new Error(`${cmd} exit ${code}: ${err.trim().slice(0, 300)}`)));
+    p.on('error', rej);
+  });
+}
+const node = (args) => run('node', args);
+const cdp = (js) => node([resolve(HERE, 'cdp-eval.mjs'), '=http://tauri.localhost/', js]).then(s => s.replace(/^"|"$/g, '').replace(/\\"/g, '"'));
+const cdpPanel = (js) => node([resolve(HERE, 'cdp-eval.mjs'), 'view=panel', js]).then(s => s.replace(/^"|"$/g, '').replace(/\\"/g, '"'));
+const ps = (file, args) => run('powershell', ['-NoProfile', '-File', resolve(HERE, file), ...args]);
+const psCmd = (cmd) => run('powershell', ['-NoProfile', '-Command', cmd]);
+const glide = (x0, y0, x1, y1, ms = 1100) => ps('input.ps1', ['-Action', 'glide', '-X', String(x0), '-Y', String(y0), '-X2', String(x1), '-Y2', String(y1), '-Ms', String(ms)]);
+
+// page-side progressive typing (real per-char rendering, ASCII-safe transport via code points)
+const typeJs = (sel, text, kind) => {
+  const codes = [...text].map(c => c.codePointAt(0)).join(',');
+  const proto = kind === 'textarea' ? 'HTMLTextAreaElement' : 'HTMLInputElement';
+  return `(async()=>{var codes=[${codes}];var t=document.querySelector('${sel}');if(!t)return 'NOEL';var desc=Object.getOwnPropertyDescriptor(window.${proto}.prototype,'value').set;for(var i=1;i<=codes.length;i++){desc.call(t,String.fromCodePoint.apply(null,codes.slice(0,i)));t.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,95+Math.random()*80));}return 'typed';})()`;
+};
+const sendAndWaitJs = `(async()=>{var b=document.querySelector('form .pet-save');if(!b||b.disabled)return 'DISABLED';b.click();for(var i=0;i<45;i++){await new Promise(r=>setTimeout(r,700));var ph=document.querySelector('.chat-phase')?.textContent;if(ph==='已完成'||ph==='未完成')return 'phase='+ph+' status='+(document.querySelector('.chat-status')?.textContent||'').slice(0,60);}return 'TIMEOUT';})()`;
+const micStateJs = `(document.querySelector('.pet-voice')?.textContent)||'null'`;
+const micClickJs = `var m=document.querySelector('.pet-voice');if(m&&!m.disabled){m.click();'CLICKED'}else 'BAD_'+(m?m.textContent:'null')`;
+const micWaitDoneJs = `(async()=>{var l='';for(var i=0;i<75;i++){await new Promise(r=>setTimeout(r,800));l=(document.querySelector('.pet-voice')?.textContent)||'';if(l==='语音说话')return 'done heard='+(document.querySelector('.chat-subtitle')?.textContent||'')+' phase='+(document.querySelector('.chat-phase')?.textContent||'');}return 'TIMEOUT_'+l;})()`;
+
+const TEXT3 = '今晚想吃点清淡的，给个建议';
+const TODO5 = '周六下午提醒我去公园走走';
+const PHONE_NAME = '我的手机';
+
+async function main() {
+  // ---- phase 0: phone browser (hidden under topmost bg) ----
+  log('launching phone browser');
+  const ctx = await chromium.launchPersistentContext(resolve(HERE, 'phone-profile'), {
+    headless: false, viewport: { width: 400, height: 800 }, args: ['--window-position=560,120', '--window-size=416,880'],
+  });
+  const phone = ctx.pages()[0] ?? await ctx.newPage();
+  await phone.goto('http://127.0.0.1:4318/', { waitUntil: 'networkidle', timeout: 15000 });
+  await sleep(600);
+  const pairingShown = (await phone.evaluate(() => document.body.innerText)).includes('配对码');
+  log('phone pairing screen:', pairingShown);
+  await ps('phone-top.ps1', ['-Mode', 'pos']).catch(e => log('phone pos WARN', e.message));
+
+  // sanity: pet idle
+  const st = await cdp(`JSON.stringify({disabled:document.querySelector('button.pet-character')?.disabled, expanded:document.querySelector('button.pet-character')?.getAttribute('aria-expanded')})`);
+  log('pet state:', st);
+  if (!st.includes('"disabled":false')) throw new Error('pet not interactive — abort before recording');
+
+  // ---- phase 1: recorders + marker ----
+  await node([resolve(HERE, 'obs-ctl.mjs'), 'start']).then(s => log('OBS', s)).catch(e => { throw new Error('OBS start failed: ' + e.message); });
+  const ff = spawn('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'ddagrab=output_idx=0:framerate=30', '-t', '250',
+    '-vf', 'hwdownload,format=bgra', '-c:v', 'libx264', '-preset', 'medium', '-crf', '19', '-pix_fmt', 'yuv420p',
+    resolve(HERE, 'out/take.mkv')], { stdio: ['pipe', 'ignore', 'pipe'] });
+  ff.stderr.on('data', () => {});
+  ff.on('close', c => log('ffmpeg exited', c));
+  await sleep(1200);
+
+  // sync marker: white flash (video) + 880Hz tone (audio)
+  spawn('powershell', ['-NoProfile', '-File', resolve(HERE, 'bgview.ps1'), '-Image', resolve(HERE, 'white.png'), '-Topmost', '-Seconds', '1'], { stdio: 'ignore' });
+  await psCmd(`(New-Object Media.SoundPlayer '${resolve(HERE, 'tone.wav').replace(/\\/g, '/')}').PlaySync()`).catch(() => {});
+  log('marker fired');
+
+  // park cursor in corner, idle shot 1
+  await glide(960, 540, 1900, 1062, 900);
+  log('shot1 idle start');
+  await sleep(8500);
+
+  // ---- shot 3: typing chat ----
+  log('shot3 open bubble');
+  await glide(1900, 1062, 1608, 770, 1300);
+  await cdp(`document.querySelector('button.pet-character').click();'open'`);
+  await sleep(1300);
+  await cdp(`[...document.querySelectorAll('.pet-mode > button')][1].click();'chat'`);
+  await sleep(1100);
+  await cdp(`[...document.querySelectorAll('.chat-state-line button')].find(b=>b.textContent==='展开阅读')?.click()??'NOBTN';'reading'`);
+  await sleep(1900);
+  await glide(1610, 770, 1390, 800, 900);
+  log('shot3 typing');
+  await cdp(typeJs('#chat-draft', TEXT3, 'textarea'));
+  await sleep(700);
+  await glide(1390, 800, 1716, 871, 800);
+  const r3 = await cdp(sendAndWaitJs);
+  log('shot3 reply:', r3);
+  await sleep(3200);
+
+  // ---- shot 5: todo ----
+  log('shot5 todo');
+  await cdp(`[...document.querySelectorAll('.pet-mode > button')][0].click();'todo'`);
+  await sleep(1900);
+  await glide(1716, 871, 1580, 724, 900);
+  await cdp(typeJs('#pet-draft', TODO5, 'input'));
+  await sleep(500);
+  await glide(1580, 724, 1712, 724, 600);
+  const r5 = await cdp(`var b=document.querySelector('form .pet-save');if(b&&!b.disabled){b.click();'saved'}else 'DISABLED'`);
+  log('shot5 todo:', r5);
+  await sleep(2800);
+
+  // ---- shot 4: voice turn ----
+  log('shot4 voice');
+  const s4a = await cdp(`[...document.querySelectorAll('.pet-mode > button')][1].click();'chat'`);
+  await sleep(1000);
+  await cdp(`[...document.querySelectorAll('.chat-state-line button')].find(b=>b.textContent==='展开阅读')?.click();'reading'`);
+  await sleep(1900);
+  await glide(1712, 724, 1637, 871, 1000);
+  await sleep(400);
+  let r4 = await voiceTurn();
+  log('shot4 voice result:', r4);
+  if (!String(r4).includes('phase=已完成')) {
+    log('shot4 retry after settle');
+    await sleep(12000);
+    r4 = await voiceTurn();
+    log('shot4 voice retry:', r4);
+  }
+  await sleep(2500);
+
+  // ---- shot 6: phone continuation (B) ----
+  log('shot6 pairing code');
+  const code = await cdpPanel(`(async()=>{var b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='生成五分钟配对码');if(!b)return 'NOBTN';b.click();await new Promise(r=>setTimeout(r,2200));var m=document.body.innerText.match(/(\\d{6})\\s*\\n\\s*有效至/);return m?m[1]:'NOCODE:'+document.body.innerText.slice(700,900);})()`);
+  log('pairing code:', code);
+  await cdp(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='收起气泡')?.click();'closed'`);
+  await sleep(1200);
+  await glide(1637, 871, 960, 900, 900);
+  await ps('phone-top.ps1', ['-Mode', 'top']).then(s => log('phone', s)).catch(e => log('phone top WARN', e.message));
+  await sleep(1200);
+  // type name + code in the phone window
+  const inputs = phone.locator('input');
+  await inputs.nth(0).fill(PHONE_NAME);
+  await inputs.nth(1).fill(String(code));
+  await sleep(400);
+  await phone.getByRole('button', { name: /与电脑配对/ }).click();
+  await sleep(2500);
+  const ptext = await phone.evaluate(() => document.body.innerText.slice(0, 300));
+  log('phone after pair:', ptext.replace(/\n/g, '|').slice(0, 160));
+  await sleep(7500);
+
+  // ---- wrap ----
+  ff.stdin.write('q');
+  await new Promise(r => setTimeout(r, 2500));
+  try { ff.kill(); } catch {}
+  await node([resolve(HERE, 'obs-ctl.mjs'), 'stop']).then(s => log('OBS', s)).catch(e => log('OBS stop WARN', e.message));
+  await ctx.close().catch(() => {});
+  log('TAKE_DONE');
+}
+
+async function voiceTurn() {
+  const c1 = await cdp(micClickJs);
+  if (!c1.includes('CLICKED')) return 'mic-fail ' + c1;
+  await sleep(3000); // acquisition lead-in
+  await psCmd(`(New-Object Media.SoundPlayer '${resolve(HERE, 'q4_loud.wav').replace(/\\/g, '/')}').PlaySync()`).catch(() => {});
+  await sleep(1300);
+  const label = await cdp(micStateJs);
+  if (label === '结束录音') await cdp(micClickJs);
+  else log('mic label before stop:', label);
+  return await cdp(micWaitDoneJs);
+}
+
+main().catch(e => { console.error('DRIVER_ERROR', e.message); process.exit(1); });
