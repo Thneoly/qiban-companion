@@ -141,3 +141,51 @@ webkitRelativePath，importModel 校验通过——`avatar-smoke.mjs inject` 即
   后缀，差 48 倍且不报错；② 同一标签同时喂 sidechaincompress 侧链与 amix 会**静默**
   出错误混音（BGM 床 +6.5dB），必须 `asplit` 显式分叉；③ `aformat` 的 mono→stereo
   上混带 1/√2 增益，对齐成片音量时要算进去。
+
+## v3 返工会话（2026-11-01 下午，PM 15:09 四条构图验收意见；runbook v2.4）
+
+- **范围**：只重录镜 2B/3/4/6；镜 1/2/5/7 沿用已交付 draft-v2.mp4（issue 附件
+  `01a195a5-24a0-71ac-a4f0-f02cf8a4d23b`，`multica attachment download <id> -o .`，
+  已取回验证 58.70s/1080p30）。驱动 = `take3-driver.mjs`；合成模板 =
+  `compose-avfilter-v3.txt`（占位符 T2BA0..、B3A_*/B4A_*（模糊矩形）、A4A0..（OBS 时刻）、
+  D2B/D3/D6（段时长）、TOTAL/FTOUT/FADEBG）。两步出片：主命令出 ducked 版 +
+  `[amain]` 写 wav；无音乐版 = `-c:v copy` 换音轨（同 derive-bgm-versions.ps1 口径）。
+- **每镜必现元素与根因修正（全部当日真机探针核验）**：
+  - **2B 全身**：appearance panel 是 292 宽、max-height 224 的滚动区，预览 canvas
+    180×260 在面板内永远拍不全——v2「被遮挡」的根因。新三拍：面板+光标在导入入口 →
+    inject → **点「返回互动」+ 收起气泡 → 空窗口拍 Hiyori**（断言 renderer==='live2d'）；
+    合成 beat2 crop=800:450:1120:582 → 1080p。拍后重开面板移除模型、还原 svg。
+  - **3 输入框主体**：wide 窗 760×720@1010,312；**展开会 set_always_on_top(false)
+    （pet.rs chat_layout）——展开后必须重新 `petwin.ps1 -Action top`**；#chat-draft 在
+    窗内 (25,444) 710×90 实测可见；合成 crop=1280:720:640:312 → 1080p（1.5×）。
+  - **4 形象在屏**：**pet.css:138 `.pet-shell-wide>.pet-character{display:none}` ——
+    wide 模式角色必被隐藏，v2.2 在展开态录语音 =「只见声不见形」的根因**。整轮保持
+    compact 320×440@1450,592（不点展开阅读），断言 mic==='语音说话' 且
+    .pet-character display:block；合成 crop=896:504:1024:528（2.14×）。
+  - **6 手机窗形态**：`--app` 窗口（无地址栏，配对 URL 不入镜）+ **`--disable-gpu`：
+    该机双显卡下 Chromium GPU 呈现平面 gdigrab/ddagrab 都拍不到（实测未 cloak、置顶
+    正确仍不渲染；disable-gpu 后 gdigrab avgRGB≈229 / ddagrab≈215，两路都渲染）**。
+    v2.2「分层窗渲染问题」系误诊，实为 GPU 呈现路径。`phoneGate`（手机窗区域均亮>150）
+    在取码/配对动作前强制核验，不过即中止——不盲拍、不事后补拍。
+- **探针纪律（PM 新红线，已工程化进 take3-driver）**：每镜前 `healthGate`（壁纸色调 +
+  宠物窗内容，gdigrab 单帧、**只采主屏**：`-video_size 1920x1080 -offset_x 0 -offset_y 0`，
+  不带 video_size 会拿到 3840 宽虚拟屏拼接、crop x=0 落在左副屏）；每镜关键动作后存
+  证据帧 `out/take3-ev-*.png` 供交付自查回照。HEALTH_GATE 失败 = 采集层故障 →
+  EMERGENCY 收尾停拍。
+- **2026-11-01 15:21–15:27 采集层事故（最高优先新 gotcha）**：本会话窗口（壁纸/宠物/
+  手机/标记窗）约 6 分钟内不进任何采集帧（gdigrab 全虚拟屏 + dda output 0/1 双路验证），
+  期间 gdigrab 探针拍到的是用户真实桌面；15:37 起自愈（repro 三次后恢复）。当时环境：
+  下午起新增左副屏（DISPLAY2@-1920,0）+ 显示器重复枚举痕迹，未完全定因。对策 = 门禁 +
+  停拍规则；若复发：等 10 分钟重试 → 请 Thne 重插/禁用副屏 → 重启系统，逐级试。
+- **探针帧纪律（新红线）**：探针/证据帧只做本地核验（System.Drawing 区域统计 /
+  ffmpeg SSIM/PSNR，参考 `verify-probes.ps1`）；**含用户真实桌面的帧立即删除、绝不上传**
+  （2026-11-01 本轮曾误传视觉分析服务，issue 回帖已如实说明）。视觉分析只允许接收
+  「已验证只含壁纸+应用窗」的裁剪。
+- **PS 5.1 UTF-8 坑再现**：用 PS 字符串替换改含非 ASCII 的脚本会毁文件（本轮
+  phone-render.mjs 中招，箭头变乱码炸解析）——改脚本一律用编辑工具，不落 PS 管道。
+- **会话步骤（v3）**：npm ci（根 + .cache/recording）→ 构建 v0.3.0 → 起 app（CDP
+  9222，宠物窗确认 320×440@1450,592）→ 起壁纸 bgview topmost → petwin top →
+  OBS 起并 `node obs-ctl.mjs setup && status` → 回帖确认无新评论 → `node take3-driver.mjs`
+  （预计 3–4 分钟）→ 探针/证据帧逐镜核验 → 抽帧红线自查 → 填 compose-avfilter-v3
+  占位符 → 出 ducked + nomusic 两版 → 回帖交验收。收尾同 v2（OBS 音轨用完即删、
+  全部窗口退出、strays 还原）。
