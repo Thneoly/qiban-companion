@@ -65,6 +65,7 @@ fn main() {
         "cancel_task",
         "pet_action",
         "set_pet_regions",
+        "live2d_pick_folder",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to build desktop application manifest");

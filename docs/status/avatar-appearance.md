@@ -20,6 +20,8 @@
 
 只复制实际引用的模型资源；忽略目录中的脚本，去除动作音频引用。渲染器覆盖资源解析，所有资源只能取自导入生成的 Blob URL。CSP 的 connect-src 增加 blob，script-src 仍仅 self 和 wasm-unsafe-eval。导入内容不上传、不改变模型供应商配置、不接触凭据。
 
+（2026-11-01，TUWE-14 / 首位用户反馈 A4）桌面端导入入口改为 Tauri 原生通道：点击「导入模型文件夹」由 Rust 侧 IFileOpenDialog 选夹（复用 local_search 的 `choose_folder`，标题「选择 Live2D 模型文件夹」），在 Rust 侧递归读取文件（跳过符号链接与 reparse point，镜像 256 文件 / 80 MB 上限与相对路径校验），以 `ipc::Response` 原始字节返回（`[4 字节 manifest 长度][manifest JSON][文件字节]`，TS 侧 `decodePickedFolder` 解码，与 voice_speak 同一原始 IPC 机制）。WebView 内不再渲染任何 `input[type=file]`，WebView2 的「上传到此站点？」确认气泡从结构上不再可能，「只复制到本机，不上传」的承诺由此真实成立。浏览器预览保留原 webkitdirectory 输入供 Playwright 用例驱动。文件级安全策略（引用表重建、PNG 头校验等）仍全部单点在 TS `importModel`；A6（picker 提交失效/楔死，复现结论见 TUWE-15，尚未出）不影响本通道——它完全不经过 WebView 文件输入链路。
+
 ## 构建和发行边界
 
 开发/构建前自动准备固定哈希的四份渲染运行库及许可声明；清单为[live2d-runtime-manifest](../../apps/desktop/scripts/live2d-runtime-manifest.json)。安装模式关闭 public 任意复制，仅按白名单输出运行库及声明，产物检查重新核验哈希；**不打包 Hiyori 或用户模型**。已有资源可离线使用，干净构建首次准备需要网络。
@@ -38,5 +40,7 @@
 - 最终 `npm run verify:docs`、`npm run verify:prototype` 通过；内部 Windows x64 NSIS 构建及 9 个安装素材白名单检查通过。最后补充尺寸保护后复跑实际 Live2D 三项通过；删除测试改为等待事务完成后的移除按钮消失，再重开验证，避免把保存中禁用误认为已完成删除。
 - 安装包 `target/release/bundle/nsis/栖伴_0.1.0_x64-setup.exe`，SHA256 `cc4d8129290e66d6852cfa175e9daf2d6542a18a4fc94aae9b6e3e4a2f48c87b`；可执行程序 SHA256 `6fbaee30ab8d67bdf611626ce9b4d53290e95893c174c168a698c3585b561785`。本轮没有重跑安装/卸载生命周期或外部 CI，不沿用旧安装包哈希。
 - 本机演示通过相同导入入口载入已准备的 Hiyori，展示轻量舞台；随后关闭调试连接并重开日常程序。只改变外观，不变更模型供应商、密钥、聊天或记忆。
+
+- （2026-11-01，TUWE-14）`npm run check`（98 项单测，含解码器与导入边界新用例）、`npm run test:browser`（66 过 / 1 显式跳过）、`cargo fmt`、`cargo clippy -D warnings`、`cargo test --workspace --locked` 通过。真机（验收标识符 `dev.qiban.companion.acceptance` + WebView2 CDP 直测）：角色与场景面板 DOM 中 `input[type=file]` 为 0；点击导入出现原生 `#32770` 对话框「选择 Live2D 模型文件夹」；取消路径全链路（对话框关闭 → busy 解除 → 无报错）；对话框可连续重复触发。残余：Win11 对话框的确认键无法用 UIA/键盘自动化驱动（footer 为 DirectUI 宿主，不暴露 Invoke），“原生选夹确认 → 入库”这一跳未在桌面端实测，由 Rust 单测（字节级清单回放）、TS 单测（payload 解码）与浏览器用例（同一 `importModel`→IndexedDB 链路）覆盖，待人工点选一次收口。另修 `model-settings.spec.ts` 预存时序缺陷（mock 缺 `local_roots_get` 导致第二个 note 与断言赛跑；基线 65dc5a2 复现，与本次改动无关）。
 
 仍需：多种作者模型/新 Core 格式兼容、长时内存/GPU 基线、多屏混合缩放、用户资产与 SDK 发行许可。真正 3D/VRM、摄像头追踪、声音和口型尚未实现。（注 2026-10-18：声音与口型已由 T11/T12 交付，见[语音轮次](voice-chat-turn.md)、[语音口型](voice-mouth.md)；3D/VRM 与摄像头追踪仍未实现。）

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { importModel, type Appearance, type AvatarRecord } from './avatarStorage';
+import { invoke } from '@tauri-apps/api/core';
+import { nativeDesktop } from '../../lib/surface';
+import { decodePickedFolder, importModel, type Appearance, type AvatarRecord, type ImportedFile } from './avatarStorage';
 export function AppearancePanel({ record, save, close }: { record: AvatarRecord; save: (record: AvatarRecord) => Promise<void>; close: () => void }) {
   const [opacity, setOpacity] = useState(record.appearance.opacity);
   useEffect(() => setOpacity(record.appearance.opacity), [record.appearance.opacity]);
@@ -9,20 +11,36 @@ export function AppearancePanel({ record, save, close }: { record: AvatarRecord;
     setBusy(true); setError('');
     try { await save({ ...record, appearance }); } catch { setError('设置未保存，请检查本机存储后重试。'); } finally { setBusy(false); }
   };
+  const adopt = async (selected: ImportedFile[]) => {
+    const model = await importModel(selected);
+    await save({ ...record, model, appearance: { ...record.appearance, renderer: 'live2d' } });
+  };
+  // Native desktop: Rust opens the folder picker and reads the files, so no
+  // web file input exists and WebView2's upload confirmation cannot appear
+  // (A4) — including when the webview file channel is wedged (A6).
+  const pickNative = async () => {
+    setBusy(true); setError('');
+    try {
+      const picked = decodePickedFolder(await invoke('live2d_pick_folder'));
+      if (picked.cancelled) return;
+      await adopt(picked.files);
+    } catch (e) { setError(e instanceof Error ? e.message : '导入失败'); } finally { setBusy(false); }
+  };
   return <div className="appearance-panel">
     <div className="appearance-title"><strong>角色与场景</strong><button onClick={close}>返回互动</button></div>
     <fieldset disabled={busy}><legend>陪伴形象</legend>
       <button aria-pressed={record.appearance.renderer === 'svg'} onClick={() => void change({ ...record.appearance, renderer: 'svg' })}>栖栖</button>
       <button disabled={!record.model} aria-pressed={record.appearance.renderer === 'live2d'} onClick={() => void change({ ...record.appearance, renderer: 'live2d' })}>2D 数字人</button>
       <p>{record.model ? `本机模型：${record.model.name}` : '导入自己的 Live2D 模型后即可切换。'}</p>
-      <label className="model-import">{busy ? '正在保存…' : '导入模型文件夹'}<input aria-label="导入模型文件夹" type="file" multiple
+      {nativeDesktop ? <button onClick={() => void pickNative()} disabled={busy}>{busy ? '正在保存…' : '导入模型文件夹'}</button>
+      : <label className="model-import">{busy ? '正在保存…' : '导入模型文件夹'}<input aria-label="导入模型文件夹" type="file" multiple
         {...{ webkitdirectory: '' }} onChange={async e => {
-          const files = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = '';
+          const files = [...(e.currentTarget.files ?? [])].map(file => ({ path: file.webkitRelativePath || file.name, blob: file })); e.currentTarget.value = '';
           if (!files.length) return;
           setBusy(true); setError('');
-          try { const model = await importModel(files); await save({ ...record, model, appearance: { ...record.appearance, renderer: 'live2d' } }); }
+          try { await adopt(files); }
           catch (e) { setError(e instanceof Error ? e.message : '导入失败'); } finally { setBusy(false); }
-        }}/></label>
+        }}/></label>}
       {record.model && <button onClick={async () => {
         setBusy(true); setError('');
         try { await save({ appearance: { ...record.appearance, renderer: 'svg' } }); } catch { setError('移除失败，请重试。'); } finally { setBusy(false); }

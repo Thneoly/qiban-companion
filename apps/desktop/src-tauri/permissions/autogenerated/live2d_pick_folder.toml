@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-live2d-pick-folder"
+description = "Enables the live2d_pick_folder command without any pre-configured scope."
+commands.allow = ["live2d_pick_folder"]
+
+[[permission]]
+identifier = "deny-live2d-pick-folder"
+description = "Denies the live2d_pick_folder command without any pre-configured scope."
+commands.deny = ["live2d_pick_folder"]
