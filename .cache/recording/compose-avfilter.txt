@@ -1,5 +1,9 @@
 [0:v]trim=start=2.0:end=5.5,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='你的桌面上，可以住一只 AI 伙伴':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=16:x=(w-text_w)/2:y=985[s1v];
 [0:v]trim=start=S2A:end=S2B,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='Live2D 角色，常驻桌面，拖到哪儿都行':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=16:x=(w-text_w)/2:y=985[s2v];
+[0:v]trim=start=S2BA:end=S2BB,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p[s2ba];
+[0:v]trim=start=S2BC:end=S2BD,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p[s2bb];
+[0:v]trim=start=S2BE:end=S2BF,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='还能换成你自己的 Live2D 模型':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=16:x=(w-text_w)/2:y=985[s2bc];
+[s2ba][s2bb][s2bc]concat=n=3:v=1:a=0[s2bv];
 [0:v]trim=start=S3A:end=S3B,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p,split=2[s3a][s3b];
 [s3a]crop=740:209:1018:368,boxblur=luma_radius=14:luma_power=2[s3b1];
 [s3b][s3b1]overlay=1018:368,split=2[s3c][s3d];
@@ -20,14 +24,15 @@
 [0:v]trim=start=S7A:end=S7B,setpts=PTS-STARTPTS,fps=30,settb=AVTB,crop=1920:1032:0:0,crop=300:272:1470:760,split=2[s7bg0][s7fg];
 [s7bg0]scale=1920:1080,boxblur=luma_radius=20:luma_power=2[s7bg];
 [s7fg]scale=-2:1080,setsar=1[s7s];
-[s7bg][s7s]overlay=(W-w)/2:0,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='个人业余项目的试用版，正在找 1–2 位不写代码的朋友真实试用一次。':fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=790,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='有自己的 Windows 电脑、约半小时；需要自备大模型 Key（几块钱以内）。':fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=860,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='想试的私信我':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=930[s7v];
-[s1v][s2v][s3v][s5v][s4av][s4bv][s6v][s7v]concat=n=8:v=1:a=0,fade=t=in:st=0:d=0.4,fade=t=out:st=TOTAL-0.4:d=0.4[vout];
+[s7bg][s7s]overlay=(W-w)/2:0,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='个人业余项目的试用版，正在找 1–2 位不写代码的朋友真实试用一次。':fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=790,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='有自己的 Windows 电脑、约半小时；需要自备大模型 Key（几块钱以内）。':fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=860,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='想试的私信我':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-text_w)/2:y=930,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='This content uses sample data owned and copyrighted by Live2D Inc.':fontsize=22:fontcolor=white@0.85:box=1:boxcolor=black@0.35:boxborderw=8:x=(w-text_w)/2:y=1010[s7v];
+[s1v][s2v][s2bv][s3v][s5v][s4av][s4bv][s6v][s7v]concat=n=9:v=1:a=0,fade=t=in:st=0:d=0.4,fade=t=out:st=TOTAL-0.4:d=0.4[vout];
 anullsrc=r=48000:cl=stereo,atrim=0:3.5,asetpts=PTS-STARTPTS[a1];
 anullsrc=r=48000:cl=stereo,atrim=0:4.0,asetpts=PTS-STARTPTS[a2];
+anullsrc=r=48000:cl=stereo,atrim=0:6.0,asetpts=PTS-STARTPTS[a2b];
 anullsrc=r=48000:cl=stereo,atrim=0:13.0,asetpts=PTS-STARTPTS[a3];
 anullsrc=r=48000:cl=stereo,atrim=0:5.8,asetpts=PTS-STARTPTS[a5];
 [1:a]atrim=start=A4A:end=A4B,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a4a];
 [1:a]atrim=start=A4C:end=A4D,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a4b];
 anullsrc=r=48000:cl=stereo,atrim=0:8.5,asetpts=PTS-STARTPTS[a6];
 anullsrc=r=48000:cl=stereo,atrim=0:8.0,asetpts=PTS-STARTPTS[a7];
-[a1][a2][a3][a5][a4a][a4b][a6][a7]concat=n=8:v=0:a=1,afade=t=out:st=TOTAL-0.8:d=0.8[aout]
+[a1][a2][a2b][a3][a5][a4a][a4b][a6][a7]concat=n=9:v=0:a=1,afade=t=out:st=TOTAL-0.8:d=0.8[aout]

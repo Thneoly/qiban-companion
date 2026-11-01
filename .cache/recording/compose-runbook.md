@@ -32,16 +32,54 @@
    bgview 枚举赋值必须走字符串（'Stretch'）——类型字面量解析会静默炸掉背景窗，
    这就是 v1 草片「部分镜头背景窗没盖住任务栏」与白屏闪帧丢失的最可能根因。
 5. `node take-driver.mjs`（内部顺序：隐藏杂散浮窗 → OBS start → ddagrab 区域采集 →
-   白闪+音调同步标记 → 镜1 待机 → 镜2 拖拽（拖完 petwin 挪回原位）→ 镜3 打字 →
-   镜5 待办 → 镜4 语音（含 12s settle 重试）→ 镜6 配对（B 视口）→ 镜7 特写素材尾 →
-   停止 → 还原杂散浮窗）。产物 `out/take.mkv`（约 4-5 分钟）+ `obs-out/`。
+   白闪+音调同步标记 → 镜1 待机 → 镜2 拖拽（拖完 petwin 挪回原位）→ **镜2B 形象切换
+   （2026-11-01 增派，详见下节）** → 镜3 打字 → 镜5 待办 → 镜4 语音（含 12s settle
+   重试）→ 镜6 配对（B 视口）→ 镜7 特写素材尾 → 停止 → 还原杂散浮窗）。
+   产物 `out/take.mkv`（约 5 分钟）+ `obs-out/`。
 6. 从 take 的白闪/音调时刻对齐 OBS 音轨偏移（旧法：问题音与 TTS 结束双重对齐，
    v1 常数是 +4.93s，v2 重测）。抽帧核对：无任务栏、无桌面、无浮窗、宠物/气泡落点。
-7. 把实际时间戳填进 compose-avfilter.txt 的 S2A..S7B / A4A..A4D / TOTAL 占位符，
-   然后：
+7. 把实际时间戳填进 compose-avfilter.txt 的 S2A..S7B / **S2BA..S2BF（镜2B 三拍）** /
+   A4A..A4D / TOTAL 占位符，然后：
    `ffmpeg -y -i out/take.mkv -i <obs-mkv> -filter_complex_script compose-avfilter.txt -map [vout] -map [aout] -c:v libx264 -crf 19 -pix_fmt yuv420p -c:a aac draft-v2.mp4`
 8. 逐帧红线自查（key/设置页/接口地址/真实数据/内部工具/任务栏），OBS 原始音轨
    （含环境人声）用完即删。回帖交验收。
+
+## 镜 2B 形象切换（2026-11-01 全链路真机冒烟通过）
+
+PM 12:04 增派：展示「换成你自己的 Live2D 模型」，插镜 2 与镜 3 之间，全片超时先裁这镜
+和镜 5。口径红线：字幕只说「换成你自己的 Live2D 模型」，不出现「多形象/形象库」暗示。
+
+**素材许可（已核对，出镜放行的依据）**：本机 Hiyori 来自 CubismWebSamples 固定提交
+（`licenses/samples-LICENSE.md` 随素材落地），属 Live2D Free Material License + 逐模型
+Sample Terms。Thne 为个人（General User），公开视频（含商用）在许可内；**硬性义务是标注
+版权声明**——短版 "This content uses sample data owned and copyrighted by Live2D Inc."
+已加进 compose-avfilter.txt 的镜 7 片尾卡（y=1010 小字），群发文案尾注同款由 PM/Thne 侧
+跟进。禁止项均不触碰（不改设计、不再分发模型文件、不用素材附带音声）。
+
+**实拍流程（take-driver 已内置，全部真机验证过）**：气泡 → 更多 → 角色与场景（CDP）→
+真实点击「导入模型文件夹」（label 中心 = 宠物窗原点 + (152,211)，运行时重测）→ 原生
+文件夹选择器弹出（标题「选择要上传的文件夹」，约 960×540@(960,456)）→ **立即
+`dialog-probe.ps1 -Topmost` 置顶**（实测 topmost 壁纸会整个盖住选择器，不置顶镜头里
+点击落空）→ input.ps1 text `D:\Live2D\Hiyori` + Enter×2（type-ahead 导航，实测可用）→
+选择器关闭后 webview 内弹出**权限气泡「上传到此站点？」**（Chromium 权限 UI，非 Win32
+窗体，dialog-probe 看不到；停靠宠物窗左上，「上传」按钮 ≈ 窗原点 + (212,101)）→ 点击
+「上传」→ 正在保存 → Hiyori 上屏待机（canvas 180×260，比栖栖小；两帧差分确认在动）。
+拍完镜头内 CDP 清场：移除本机模型 → 返回互动 → 收起气泡，镜 3 原流程不受影响。
+
+**成片剪辑（compose-avfilter.txt 已加段）**：三拍硬切——面板打开 ~1.2s（S2BA/B）、
+点击+选择器+路径 ~2.4s（S2BC/D）、Hiyori 待机 + 字幕 ~2.4s（S2BE/F）；权限气泡与
+等待期剪掉（真实发生、只做剪辑省略，不冒充）。a2b 静音轨 6.0s，concat n=9。
+
+**兜底（不必用则不用）**：若会话中键盘导航失灵——Esc 取消选择器后走 Playwright 注入：
+`chromium.connectOverCDP('http://127.0.0.1:9222')` → pet 页
+`locator('input[aria-label="导入模型文件夹"]').setInputFiles('D:/Live2D/Hiyori')`
+（webkitdirectory 输入**必须传目录路径**，传文件列表会报错；目录注入保留
+webkitRelativePath，importModel 校验通过——`avatar-smoke.mjs inject` 即此路径，已验证）。
+镜头口径退为「点击导入 → 切换瞬间」，如实。
+
+**冒烟时序参考（2026-11-01 实测）**：点击→选择器弹出 ~2s；text 18 字符 ~2s；Enter 后
+导航 ~2s；权限气泡在选择器关闭后 ~1.5s 内出现；点「上传」→ 2D 数字人 选中 ~2-4s
+（18 文件 4.7MB 入 IndexedDB）。窗口几何：宠物窗 320×440@1450,592（home）。
 
 ## 踩坑补记（2026-11-01 冒烟实测）
 

@@ -108,6 +108,50 @@ async function main() {
   await ps('petwin.ps1', ['-Action', 'move', '-Which', 'pet', '-X', String(petL), '-Y', String(petT)]).then(s => log('pet home', s));
   await sleep(1500); // settle before the bubble opens
 
+  // ---- shot 2B: avatar switch - import own Live2D model (2026-11-01 smoke-verified flow) ----
+  // real UX: click label -> native folder picker (raised TOPMOST above wallpaper) -> type path
+  // -> Enter x2 -> in-page permission bubble「上传到此站点？」-> click 上传 -> Hiyori renders.
+  log('shot2B avatar switch');
+  await cdp(`document.querySelector('button.pet-character').click();'open'`);
+  await sleep(1100);
+  await cdp(`(function(){var d=document.querySelector('details.pet-more');if(d&&!d.open){d.querySelector('summary').click()}return 'more'})()`);
+  await sleep(600);
+  const rPanel = await cdp(`(function(){var b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='角色与场景');if(!b)return 'NOBTN';if(b.disabled)return 'DISABLED';b.click();return 'clicked'})()`);
+  log('shot2B panel:', rPanel);
+  if (rPanel !== 'clicked') throw new Error('appearance panel failed: ' + rPanel);
+  await sleep(1600); // panel readable on film
+  const petInfo2 = await ps('petwin.ps1', ['-Action', 'rect']).catch(() => 'ERR');
+  const pm2 = /(\d+)x(\d+)@(-?\d+),(-?\d+)/.exec(String(petInfo2));
+  if (!pm2) throw new Error('pet window not found for 2B');
+  const winL = +pm2[3], winT = +pm2[4];
+  const lab = JSON.parse(await cdp(`(function(){var l=document.querySelector('label.model-import');if(!l)return JSON.stringify({x:-1,y:-1});var b=l.getBoundingClientRect();return JSON.stringify({x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)})})()`));
+  if (lab.x < 0) throw new Error('import label not found');
+  const labX = winL + lab.x, labY = winT + lab.y;
+  await glide(460, 540, labX, labY, 900);
+  await ps('input.ps1', ['-Action', 'click', '-X', String(labX), '-Y', String(labY)]);
+  await sleep(2200); // native folder picker opens
+  await ps('dialog-probe.ps1', ['-Topmost']).then(s => log('picker raised:', s)).catch(e => log('picker probe WARN', e.message));
+  await sleep(900); // picker visible beat on film
+  await ps('input.ps1', ['-Action', 'text', '-Text', 'D:\\Live2D\\Hiyori']);
+  await ps('input.ps1', ['-Action', 'key', '-Key', 'enter']);
+  await sleep(2000);
+  await ps('input.ps1', ['-Action', 'key', '-Key', 'enter']); // 选择文件夹
+  await sleep(1500); // picker closes; permission bubble docks top-left of the pet window
+  const upX = winL + 212, upY = winT + 101; // 上传 button offset, measured 2026-11-01
+  await glide(labX, labY, upX, upY, 700);
+  await ps('input.ps1', ['-Action', 'click', '-X', String(upX), '-Y', String(upY)]);
+  let r2b = 'pending';
+  for (let i = 0; i < 14; i++) {
+    await sleep(1000);
+    r2b = await cdp(`(document.querySelector('.appearance-panel button[aria-pressed=true]')?.textContent)||'none'`);
+    if (String(r2b).includes('2D 数字人')) break;
+  }
+  log('shot2B renderer after import:', r2b);
+  await sleep(3000); // Hiyori idles on film
+  // off-film cleanup: remove imported model, back to interaction, close bubble (shot3 expects it closed)
+  await cdp(`(async function(){var b=[...document.querySelectorAll('.appearance-panel button')].find(x=>x.textContent.trim()==='移除本机模型');if(b){b.click();await new Promise(r=>setTimeout(r,1500))}var back=[...document.querySelectorAll('.appearance-panel button')].find(x=>x.textContent.trim()==='返回互动');if(back)back.click();await new Promise(r=>setTimeout(r,700));var x=[...document.querySelectorAll('button')].find(e=>e.getAttribute('aria-label')==='收起气泡');if(x)x.click();return 'cleaned'})()`);
+  await sleep(1200);
+
   // ---- shot 3: typing chat ----
   log('shot3 open bubble');
   await glide(1900, 1062, 1608, 770, 1300);
