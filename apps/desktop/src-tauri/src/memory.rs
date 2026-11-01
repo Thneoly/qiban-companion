@@ -119,6 +119,17 @@ pub struct MemoryChanged {
     /// decoding as local changes.
     #[serde(default)]
     pub remote: bool,
+    /// False when the change is purely additive (a settled task fact, a
+    /// remote create): every premise of an in-flight reply still holds, so
+    /// the UI refreshes its preview without stopping the turn or resetting
+    /// the session (TUWE-19). Pruning changes and user-initiated mutations
+    /// stay interrupting. `default_true` keeps payloads from an older
+    /// backend decoding as interrupting.
+    #[serde(default = "default_true")]
+    pub interrupts: bool,
+}
+fn default_true() -> bool {
+    true
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +255,7 @@ impl ChatState {
             context_epoch,
             chat_cleared,
             remote: false,
+            interrupts: true,
         });
         Ok(MemoryReceipt {
             context_epoch,

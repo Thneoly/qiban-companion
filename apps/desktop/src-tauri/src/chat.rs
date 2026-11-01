@@ -28,6 +28,12 @@ pub(crate) struct ChatInner {
     pub(crate) active: Option<(String, watch::Sender<bool>)>,
     pub(crate) conversation: Conversation,
     pub(crate) store: Option<HistoryStore>,
+    /// How many times in-flight completions were invalidated (TUWE-19). This
+    /// — not the store's context epoch — is what `ensure_current` compares:
+    /// the epoch also moves for purely additive changes (a settled task
+    /// fact, a remote create) that leave every premise of a running reply
+    /// intact, and those must not kill it.
+    pub(crate) invalidations: u64,
     /// Kept so tool executions can write their audit row from a blocking
     /// thread on a PRIVATE connection — a cancel between execution and the
     /// next round must never leave an unaudited file read behind.
@@ -40,12 +46,14 @@ impl ChatState {
             active: None,
             conversation: Conversation::default(),
             store: HistoryStore::open(path).ok(),
+            invalidations: 0,
             db_path: path.to_path_buf(),
         }))
     }
 }
 impl ChatInner {
     pub(crate) fn invalidate_memory(&mut self, history_changed: bool) {
+        self.invalidations = self.invalidations.wrapping_add(1);
         if let Some((_, signal)) = self.active.take() {
             let _ = signal.send(true);
         }
@@ -69,16 +77,10 @@ impl ChatInner {
             }
         }
     }
-    fn ensure_current(&self, id: &str, epoch: i64, version: u64) -> Result<(), String> {
+    fn ensure_current(&self, id: &str, invalidations: u64, version: u64) -> Result<(), String> {
         if self.active.as_ref().is_none_or(|(active, _)| active != id)
             || self.conversation.version() != version
-            || self
-                .store
-                .as_ref()
-                .ok_or("本机存储不可用")?
-                .context_epoch()
-                .map_err(|_| "本机存储不可用")?
-                != epoch
+            || self.invalidations != invalidations
         {
             return Err("记忆或会话已变化，旧回复已作废，请重新发送".into());
         }
@@ -165,6 +167,7 @@ pub fn chat_clear(app: AppHandle, state: State<'_, ChatState>) -> Result<(), Str
                 context_epoch: epoch,
                 chat_cleared: true,
                 remote: false,
+                interrupts: true,
             },
         );
     }
@@ -311,7 +314,7 @@ pub async fn chat_generate(
     let selected = config.model.clone();
     let endpoint = config.endpoint();
     let (signal, mut cancelled) = watch::channel(false);
-    let (history, version, preview, personal_policy) = {
+    let (history, version, invalidations, preview, personal_policy) = {
         let current = settings.lock().map_err(|_| "模型设置不可用")?;
         if current.config.base_url != config.base_url || current.config.model != config.model {
             return Err("模型设置已改变，请重新打开对话".into());
@@ -329,6 +332,7 @@ pub async fn chat_generate(
         (
             active.conversation.history(),
             active.conversation.version(),
+            active.invalidations,
             preview,
             personal_policy,
         )
@@ -389,7 +393,6 @@ pub async fn chat_generate(
     };
     let mut usage_receipt = preview.usage();
     usage_receipt.personal = personal_receipt;
-    let epoch = preview.context_epoch;
     // Send-audit composition, captured BEFORE the request leaves and sourced
     // from the SAME builders the request uses (reference_block here is the
     // very function stream_context assembles the memory segment with). The
@@ -469,7 +472,7 @@ pub async fn chat_generate(
         &personal_items,
         &request.prompt,
         &request.request_id,
-        epoch,
+        invalidations,
         version,
         &tool_stats,
         &usage_receipt,
@@ -504,7 +507,7 @@ pub async fn chat_generate(
             };
             audit(companion_storage::dispatch_log::DispatchOutcome::Sent);
             let mut inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-            inner.ensure_current(&request.request_id, epoch, version)?;
+            inner.ensure_current(&request.request_id, invalidations, version)?;
             // The receipt says what was sent to the provider; the ledger below
             // records what entered local history, written in the same
             // transaction as the turn (failed/cancelled turns leave no rows).
@@ -823,13 +826,13 @@ fn merge_usage(acc: Option<Value>, add: Option<Value>) -> Option<Value> {
 fn emit_tool_status(
     state: &ChatState,
     request_id: &str,
-    epoch: i64,
+    invalidations: u64,
     version: u64,
     on_delta: &mut impl FnMut(ChatDelta) -> Result<(), String>,
     status: String,
 ) -> Result<(), String> {
     let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-    inner.ensure_current(request_id, epoch, version)?;
+    inner.ensure_current(request_id, invalidations, version)?;
     on_delta(ChatDelta {
         request_id: request_id.to_string(),
         text: String::new(),
@@ -854,7 +857,7 @@ async fn run_tool_turn(
     personal: &[PersonalMemoryRecord],
     prompt: &str,
     request_id: &str,
-    epoch: i64,
+    invalidations: u64,
     version: u64,
     tool_stats: &std::sync::Arc<std::sync::Mutex<(usize, String)>>,
     usage_receipt: &MemoryUsage,
@@ -866,11 +869,13 @@ async fn run_tool_turn(
     let mut usage_sum: Option<Value> = None;
     let mut rounds_done = 0usize;
     loop {
-        // F2: a cancelled or epoch-bumped turn must not even START the
-        // next round's request — check before reading roots.
+        // F2: a cancelled or invalidated turn must not even START the
+        // next round's request — check before reading roots. Additive
+        // memory changes (TUWE-19) do NOT invalidate: they only move the
+        // store epoch, which no longer participates in this guard.
         {
             let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-            inner.ensure_current(request_id, epoch, version)?;
+            inner.ensure_current(request_id, invalidations, version)?;
         }
         // Roots are re-read every round: consent is standing but live —
         // a directory removed mid-flight becomes unreadable immediately.
@@ -905,7 +910,7 @@ async fn run_tool_turn(
             &tools,
             |event| {
                 let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                inner.ensure_current(request_id, epoch, version)?;
+                inner.ensure_current(request_id, invalidations, version)?;
                 on_delta(ChatDelta {
                     request_id: request_id.to_string(),
                     text: match &event {
@@ -953,7 +958,7 @@ async fn run_tool_turn(
                 }
                 {
                     let inner = state.0.lock().map_err(|_| "对话状态不可用")?;
-                    inner.ensure_current(request_id, epoch, version)?;
+                    inner.ensure_current(request_id, invalidations, version)?;
                 }
                 let mut executed = 0usize;
                 for call in calls {
@@ -965,7 +970,7 @@ async fn run_tool_turn(
                     emit_tool_status(
                         state,
                         request_id,
-                        epoch,
+                        invalidations,
                         version,
                         &mut on_delta,
                         format!("正在检索：{}", call.name),
@@ -1405,6 +1410,7 @@ mod tests {
         let version = inner.conversation.version();
         let (tx, _) = watch::channel(false);
         inner.active = Some(("finished-network".into(), tx));
+        let invalidations = inner.invalidations;
         // The reply has been assembled; deletion wins the coordination lock before completion persistence.
         let completed = ChatTurn {
             user: "question".into(),
@@ -1418,7 +1424,7 @@ mod tests {
             .unwrap();
         inner.invalidate_memory(true);
         assert!(inner
-            .ensure_current("finished-network", 1, version)
+            .ensure_current("finished-network", invalidations, version)
             .is_err());
         assert!(!inner.complete("https://q6.invalid", "fixture", version, completed, &[]));
         assert!(inner
@@ -1611,6 +1617,71 @@ mod tests {
         assert_eq!(empty.len(), 1);
     }
     #[test]
+    fn additive_memory_moves_do_not_invalidate_inflight_completions() {
+        // TUWE-19: the context epoch also moves for purely additive changes
+        // (a settled task fact, a remote create). Those writes land without
+        // invalidate_memory — exactly what the sync tick and the settlement
+        // loop now do — and must leave a running reply current and able to
+        // persist. Only invalidate_memory itself bumps the guard.
+        let path = std::env::temp_dir().join(format!("chat-additive-{}.db", uuid::Uuid::new_v4()));
+        let state = ChatState::open(&path);
+        let mut inner = state.0.lock().unwrap();
+        inner.select("https://a", "m").unwrap();
+        let (signal, _) = watch::channel(false);
+        inner.active = Some(("slow-reply".into(), signal));
+        let version = inner.conversation.version();
+        let invalidations = inner.invalidations;
+        let before = inner.store.as_ref().unwrap().context_epoch().unwrap();
+        {
+            let store = inner.store.as_mut().unwrap();
+            store
+                .task_fact_deposit("fp-1", "任务甲：已完成", None)
+                .unwrap();
+            let epoch = store.context_epoch().unwrap();
+            store
+                .memory_create(
+                    &companion_core::memory::MemoryDraft {
+                        kind: companion_core::memory::MemoryKind::Preference,
+                        body: "远端新增的偏好".into(),
+                        event_date: None,
+                    },
+                    epoch,
+                )
+                .unwrap();
+        }
+        assert!(
+            inner.store.as_ref().unwrap().context_epoch().unwrap() > before,
+            "additive writes moved the epoch"
+        );
+        assert!(inner
+            .ensure_current("slow-reply", invalidations, version)
+            .is_ok());
+        assert!(inner.complete(
+            "https://a",
+            "m",
+            version,
+            ChatTurn {
+                user: "慢问题".into(),
+                assistant: "慢回答".into(),
+            },
+            &[]
+        ));
+        // The interrupting half of the contract: whatever its history flag,
+        // invalidate_memory (model switch, user mutation, pruning apply)
+        // still kills the in-flight turn.
+        let (signal, _) = watch::channel(false);
+        inner.active = Some(("next-reply".into(), signal));
+        let invalidations = inner.invalidations;
+        inner.invalidate_memory(false);
+        assert!(inner
+            .ensure_current("next-reply", invalidations, version)
+            .is_err());
+        drop(inner);
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn context_invalidation_rejects_old_deltas_and_old_guard_cannot_clear_new_request() {
         let path = std::env::temp_dir().join(format!("chat-epoch-{}.db", uuid::Uuid::new_v4()));
         let state = ChatState::open(&path);
@@ -1621,10 +1692,13 @@ mod tests {
             let (signal, _) = watch::channel(false);
             inner.active = Some(("old".into(), signal));
             let version = inner.conversation.version();
-            assert!(inner.ensure_current("old", 0, version).is_ok());
+            let invalidations = inner.invalidations;
+            assert!(inner.ensure_current("old", invalidations, version).is_ok());
             inner.store.as_mut().unwrap().clear().unwrap();
             inner.invalidate_memory(true);
-            assert!(inner.ensure_current("old", 0, version).is_err());
+            assert!(inner
+                .ensure_current("old", invalidations, version)
+                .is_err());
             let (signal, _) = watch::channel(false);
             inner.active = Some(("new".into(), signal));
         }
@@ -2160,11 +2234,10 @@ mod tests {
         // dev machine runs one; the loopback fixture must stay direct.
         std::env::set_var("NO_PROXY", "*");
         state.0.lock().unwrap().active = Some((request_id.to_string(), watch::channel(false).0));
-        let (epoch, version, usage_receipt) = {
+        let (invalidations, version, usage_receipt) = {
             let inner = state.0.lock().unwrap();
-            let store = inner.store.as_ref().unwrap();
             (
-                store.context_epoch().unwrap(),
+                inner.invalidations,
                 inner.conversation.version(),
                 ContextPreview::read(
                     &inner,
@@ -2190,7 +2263,7 @@ mod tests {
             &[],
             "找一下我的项目",
             request_id,
-            epoch,
+            invalidations,
             version,
             &tool_stats,
             &usage_receipt,
@@ -2427,5 +2500,137 @@ mod tests {
             requests[0].get("tools").is_none(),
             "no tools key without roots"
         );
+    }
+
+    /// TUWE-19 scenario, slow half: a reply whose stream pauses between
+    /// deltas — the wire shape of any generation that crosses one or more
+    /// 5s sync ticks. While the stream is held open, a task fact settles
+    /// into the same store (deposit + epoch bump, no invalidate_memory) and
+    /// only then does the fixture release the finish. The turn must absorb
+    /// the additive change and complete.
+    #[tokio::test]
+    async fn slow_stream_survives_additive_settlement_between_deltas() {
+        std::env::set_var("NO_PROXY", "*");
+        let state = std::sync::Arc::new(ChatState::open(
+            &std::env::temp_dir().join(format!("qiban-slow-{}.db", uuid::Uuid::new_v4())),
+        ));
+        let state_for_thread = state.clone();
+        let first = "data: {\"choices\":[{\"delta\":{\"content\":\"前半\"}}]}\n\n";
+        let rest = "data: {\"choices\":[{\"delta\":{\"content\":\"后半\"}}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+                    data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n\
+                    data: [DONE]\n\n";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let first_owned = first.to_string();
+        let rest_owned = rest.to_string();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut buffer).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..n]);
+                if let Some(end) = request.windows(4).position(|p| p == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let size = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + size {
+                        break;
+                    }
+                }
+            }
+            socket
+                .write_all("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".as_bytes())
+                .unwrap();
+            socket.write_all(first_owned.as_bytes()).unwrap();
+            // Hold the finish open — from the turn's point of view this gap
+            // spans the sync tick where the settlement lands.
+            hold.recv().unwrap();
+            socket.write_all(rest_owned.as_bytes()).unwrap();
+        });
+        let (settled_tx, settled_rx) = std::sync::mpsc::channel::<()>();
+        let settled = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let settled_flag = settled.clone();
+        std::thread::spawn(move || {
+            settled_rx.recv().unwrap();
+            // The settlement loop's additive write, issued mid-stream from a
+            // second thread (the delta callback holds the state lock, so the
+            // deposit waits for it exactly like a tick would).
+            let mut inner = state_for_thread.0.lock().unwrap();
+            let deposited = inner
+                .store
+                .as_mut()
+                .unwrap()
+                .task_fact_deposit("fp-slow", "慢任务：已完成", None)
+                .is_ok();
+            *settled_flag.lock().unwrap() = deposited;
+            release.send(()).unwrap();
+        });
+        state.0.lock().unwrap().active =
+            Some(("slow-1".to_string(), watch::channel(false).0));
+        let (invalidations, version, usage_receipt) = {
+            let inner = state.0.lock().unwrap();
+            (
+                inner.invalidations,
+                inner.conversation.version(),
+                ContextPreview::read(
+                    &inner,
+                    MemoryScope {
+                        base_url: "https://fixture.test".into(),
+                        model: "fixture".into(),
+                    },
+                )
+                .unwrap()
+                .usage(),
+            )
+        };
+        let tool_stats = std::sync::Arc::new(std::sync::Mutex::new((0usize, String::new())));
+        let mut fired = false;
+        let (usage, reply) = run_tool_turn(
+            &state,
+            &endpoint,
+            "",
+            "fixture",
+            (1024, crate::model_settings::ModelProtocol::OpenAi),
+            &[],
+            &[],
+            &[],
+            "慢慢说",
+            "slow-1",
+            invalidations,
+            version,
+            &tool_stats,
+            &usage_receipt,
+            |delta| {
+                if !fired && !delta.text.is_empty() {
+                    fired = true;
+                    let _ = settled_tx.send(());
+                }
+                Ok(())
+            },
+        )
+        .await
+        .expect("slow turn completes across the settlement");
+        assert_eq!(reply, "前半后半");
+        // The single round's usage cannot be summed from an empty
+        // accumulator (merge_usage's honest-unknown semantics) — the turn
+        // completing IS the assertion here.
+        assert!(usage.is_none());
+        assert!(*settled.lock().unwrap(), "settlement deposited mid-stream");
     }
 }

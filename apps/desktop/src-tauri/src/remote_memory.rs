@@ -12,8 +12,11 @@
 //! same time, so no ordering cycle exists.
 //!
 //! Local application reuses the domain semantics wholesale: applying a remote
-//! delete or wording change clears the chats that quoted the old content and
-//! invalidates in-flight completions exactly like a local edit would.
+//! delete or wording change clears the chats that quoted the old content.
+//! In-flight completions are only invalidated by PRUNING applies — a purely
+//! additive change (task-fact settle, remote create, a wording change no chat
+//! quoted) leaves every premise of a running reply intact, so the turn keeps
+//! streaming and the next request picks the new epoch up (TUWE-19).
 use crate::account::AccountState;
 use crate::chat::ChatState;
 use companion_storage::memory_sync_outbox::{OutboxEntry, OutboxOp, RemoteApplyReport};
@@ -95,8 +98,10 @@ fn settle_task_facts(app: &AppHandle) {
         if deposited {
             let state = app.state::<crate::execution::ExecutionState>();
             let _ = state.store.fact_settled(&task_id);
-            // The deposit bumped the epoch: emit like a local mutation so
-            // panels refresh and in-flight completions die.
+            // The deposit bumped the epoch: emit so panels refresh, but the
+            // change is purely additive (task facts never prune chats), so
+            // the UI must NOT stop an in-flight reply or reset the session —
+            // the next request simply admits against the fresh epoch.
             notify_changed(app);
         }
     }
@@ -121,6 +126,7 @@ fn notify_changed(app: &AppHandle) {
             context_epoch,
             chat_cleared: false,
             remote: false,
+            interrupts: false,
         },
     );
 }
@@ -187,10 +193,16 @@ fn apply(
             )
             .ok()?
     };
-    // Same invalidation contract as a local edit: remote changes cancel the
-    // active stream, and a pruned history reloads its surviving prefix so a
-    // restart cannot resurrect it (ghost split).
-    inner.invalidate_memory(report.cleared_turns > 0);
+    // Only a PRUNING apply invalidates in-flight completions: the reload
+    // keeps the surviving prefix so a restart cannot resurrect pruned turns
+    // (ghost split), and staying inside this lock means no completion can
+    // slip between the prune and the version bump (DEL12). An idle pull
+    // (cursor-only, nothing changed) and purely additive applies (remote
+    // create, wording no chat quoted) leave a running reply alone — the
+    // sync tick must not cancel it every 5s (TUWE-19).
+    if report.cleared_turns > 0 {
+        inner.invalidate_memory(true);
+    }
     Some(report)
 }
 
@@ -317,6 +329,9 @@ fn notify(app: &AppHandle, report: &RemoteApplyReport) {
             context_epoch,
             chat_cleared: report.cleared_turns > 0,
             remote: true,
+            // Only a pruning remote apply interrupts the session; additive
+            // ones (creates, unquoted wording) refresh quietly.
+            interrupts: report.cleared_turns > 0,
         },
     );
 }
