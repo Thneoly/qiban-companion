@@ -1,0 +1,1 @@
+[0:v]crop=1920:1032:0:0,scale=1920:1080,setsar=1,format=yuv420p,drawtext=fontfile='C\:/Windows/Fonts/msyh.ttc':text='你的桌面上，可以住一只 AI 伙伴':fontsize=44:fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=16:x=(w-text_w)/2:y=985[out]
