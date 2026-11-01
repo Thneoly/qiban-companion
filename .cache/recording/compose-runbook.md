@@ -123,3 +123,21 @@ webkitRelativePath，importModel 校验通过——`avatar-smoke.mjs inject` 即
   间隔 ≥12s 重试。中文 drawtext 走 -filter_complex_script 文件（本文件目录即 UTF-8 无 BOM）。
 - PixPin 贴图等浮窗由 stray-windows.ps1 自动收放；它只动「真的渲染进 DDA 的窗口」
   （DWM cloaked 的 UWP 幽灵窗不动——v1 版脚本曾误挪设置窗，已修复并实测还原精确）。
+
+## v2.3 BGM 增量（2026-11-01 下午，接 PM 12:50 配乐派单：零版权 + 镜 4 闪避 + 两版交付）
+
+- **背景**：v2.2 会话 13:46 交付 draft-v2.mp4（恒定音量配乐、**无闪避**）后中断，take
+  与中间产物随 worktree 清理丢失（平台收尾清理故障第 6 次）。补救路线 = BGM 生成链全
+  确定性（纯正弦 aevalsrc），从成片反推：`make-bgm.ps1` 重建 BGM → `align-bgm.mjs`
+  互相关对齐（实测滞后 239 样本 ≈4.98ms；成片实际音量 = 上混后 0.168，即上会话把滤镜
+  里的 0.16 手调过）→ 从成片音频逐样本减出人声轨（静音段残差 -77dB RMS，采样级干净）。
+- **两版输出**（`derive-bgm-versions.ps1` 一键复现；视频流与 draft-v2 逐位相同，音频多
+  一代 128k AAC、人声段电平实测与原版一致）：
+  - `draft-v2-nomusic.mp4`：无音乐版，除镜 4 人声外为数字静音；
+  - `draft-v2-bgm-ducked.mp4`：配乐版，sidechaincompress 人声侧链闪避——对话段 BGM
+    压低 16.6dB（人声 -20dB 时配乐 -46dB，低 26dB），非对话段电平与已交付版一致
+    （-29.3 vs -29.7dB，听感不变）；句间停顿 800ms 内自然回升，属闪避正常行为。
+- **坑三条（当日实测）**：① `adelay=239` 的单位是毫秒不是样本——样本要写 `239S`
+  后缀，差 48 倍且不报错；② 同一标签同时喂 sidechaincompress 侧链与 amix 会**静默**
+  出错误混音（BGM 床 +6.5dB），必须 `asplit` 显式分叉；③ `aformat` 的 mono→stereo
+  上混带 1/√2 增益，对齐成片音量时要算进去。
