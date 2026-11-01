@@ -62,7 +62,7 @@ async function mockVoiceChat(page: Page) {
         if (cmd === 'voice_speak') {
           const request = { requestId: args.request.requestId, turnId: args.request.turnId, expectedBaseUrl: args.request.expectedBaseUrl, seq: args.request.seq, text: args.request.text };
           w.speakCalls.push(request);
-          args.onProgress?.onmessage({ requestId: request.requestId, trimmed: w.trimFlag ?? true });
+          args.onProgress?.onmessage({ requestId: request.requestId, trimmed: w.trimFlag ?? true, toneDetected: w.toneFlag ?? true });
           if ((w.speakFailSeqs ?? []).includes(request.seq)) return Promise.reject('fixture synthesis failed');
           if (w.speakDelays?.[request.seq] === 'hang') return new Promise(resolve => { (w.hangSpeakResolvers ??= []).push(resolve); });
           // The wav's first data byte (index 44) carries the seq so tests can
@@ -382,6 +382,7 @@ test('every clip reports trimming and the untrimmed fallback engages', async ({ 
     const w = window as any;
     w.replyDeltas = ['第一句。第二句。第三句。'];
     w.trimFlag = false;
+    w.toneFlag = true; // a real tone is there, the trim just cannot remove it
   });
   await openChat(page);
   await mic(page).click();
@@ -390,8 +391,10 @@ test('every clip reports trimming and the untrimmed fallback engages', async ({ 
   await expect(mic(page)).toHaveText('语音说话');
   const turn1 = await page.evaluate(() => (window as any).speakCalls.map((c: any) => ({ seq: c.seq })));
   expect(turn1).toEqual([{ seq: 0 }, { seq: 1 }, { seq: 2 }]);
-  // Every clip (including seq 0) came back untrimmed → the next turn speaks whole text once.
-  await page.evaluate(() => { (window as any).replyDeltas = ['这一整段回复没有任何句号却要一次说完']; });
+  // Every clip (including seq 0) came back tone-detected-but-untrimmed → the
+  // next turn speaks whole text once. A terminator-bearing reply makes the
+  // fallback observable: split mode would issue three calls, not one.
+  await page.evaluate(() => { (window as any).replyDeltas = ['这一整段。在回退轮。一次说完。']; });
   await mic(page).click();
   await expect(mic(page)).toHaveText('结束录音');
   await mic(page).click();
@@ -399,7 +402,80 @@ test('every clip reports trimming and the untrimmed fallback engages', async ({ 
   const calls = await page.evaluate(() => (window as any).speakCalls);
   expect(calls.length).toBe(4);
   expect(calls[3].seq).toBe(0);
-  expect(calls[3].text).toBe('这一整段回复没有任何句号却要一次说完');
+  expect(calls[3].text).toBe('这一整段。在回退轮。一次说完。');
+});
+
+test('tone-free clips never engage the single-shot fallback', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // The no-tone provider shape (glm-tts since 2026-10-30): every clip comes
+  // back trimmed=false because there is nothing to trim — D-1 made that read
+  // as a trim failure, so from the second turn on the reply was synthesized
+  // whole instead of sentence by sentence.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。', '第二句。'];
+    w.trimFlag = false;
+    w.toneFlag = false;
+  });
+  await openChat(page);
+  for (const round of [1, 2]) {
+    const before = await page.evaluate(() => (window as any).speakCalls.length);
+    await mic(page).click();
+    await expect(mic(page)).toHaveText('结束录音');
+    await mic(page).click();
+    await expect(mic(page)).toHaveText('语音说话');
+    const calls = await page.evaluate((from: number) => (window as any).speakCalls.slice(from).map((c: any) => ({ seq: c.seq, text: c.text })), before);
+    expect(calls, `round ${round}`).toEqual([
+      { seq: 0, text: '第一句。' },
+      { seq: 1, text: '第二句。' },
+    ]);
+  }
+});
+
+test('a tone-free turn recovers sentence streaming after the fallback engaged', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Tone era with a drifted tone: every clip misses → the fallback engages.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。第二句。第三句。'];
+    w.trimFlag = false;
+    w.toneFlag = true;
+  });
+  await openChat(page);
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('语音说话');
+  // The provider drops the tone from here on. This turn still speaks whole
+  // text once (the fallback was already set), but its tone-free clip is
+  // clean evidence, so the fallback must lift for the NEXT turn.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['回退期的第一句。回退期的第二句。'];
+    w.toneFlag = false;
+  });
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('语音说话');
+  const fallback = await page.evaluate(() => (window as any).speakCalls.slice(3).map((c: any) => ({ seq: c.seq, text: c.text })));
+  expect(fallback).toEqual([{ seq: 0, text: '回退期的第一句。回退期的第二句。' }]);
+  // Recovered: the reply is split into sentences and spoken in order again.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['恢复的第一句。', '恢复的第二句。'];
+  });
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('语音说话');
+  const recovered = await page.evaluate(() => (window as any).speakCalls.slice(4).map((c: any) => ({ seq: c.seq, text: c.text })));
+  expect(recovered).toEqual([
+    { seq: 0, text: '恢复的第一句。' },
+    { seq: 1, text: '恢复的第二句。' },
+  ]);
 });
 
 test('a failed clip is skipped and never poisons the next turn', async ({ page }) => {

@@ -13,3 +13,13 @@ it('preview is explicitly nonpersistent, never executes tasks and cancels idempo
   expect((await client.cancelTask(task.id)).revision).toBe(1);
   expect(await createPreviewClient().listTasks()).toEqual([]);
 });
+
+it('deletes exactly the named local row and refuses missing ids', async () => {
+  const client = createPreviewClient();
+  const gone = await client.createTask('取消后删除');
+  const keep = await client.createTask('留下的');
+  await client.cancelTask(gone.id);
+  await client.deleteTask(gone.id);
+  expect((await client.listTasks()).map(task => task.id)).toEqual([keep.id]);
+  await expect(client.deleteTask(gone.id)).rejects.toThrow('未找到任务');
+});

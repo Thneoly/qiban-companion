@@ -39,6 +39,6 @@
 npm run tauri --workspace @companion/desktop -- build --no-bundle --config src-tauri/tauri.acceptance.conf.json
 ```
 
-该构建的资料进入`dev.qiban.companion.acceptance`，不能当生产版本分发。复测使用独立测试Windows账号或明确空的实验资料目录，不删除或覆盖生产数据。实验模型用无Key本地服务，避免触及按地址保存的真实凭据。记录首次→设置（含测试连接）→发送→手机接续→退出→重开→清空→再重开的结果。
+该构建的资料进入`dev.qiban.companion.acceptance`，不能当生产版本分发。验收配置带 `plugins.updater` 节且端点为不可达的 `https://127.0.0.1:1/latest.json`：updater 插件在 `lib.rs` 无条件注册，嵌入配置缺该节会启动即 panic（2026-10-31 实测）；启动 4 秒后的自动更新检查对不可达端点按设计静默失败，验收构建保持零外联。复测使用独立测试Windows账号或明确空的实验资料目录，不删除或覆盖生产数据。实验模型用无Key本地服务，避免触及按地址保存的真实凭据。记录首次→设置（含测试连接）→发送→手机接续→退出→重开→清空→再重开的结果。
 
 复核结束运行`npm run build:desktop`恢复默认生产标识。测试图像、进程信息和本机辅助文件只放忽略的`.cache`；不要将测试资料、密钥或可执行文件提交到Git。

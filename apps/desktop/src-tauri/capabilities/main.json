@@ -31,6 +31,7 @@
     "allow-list-tasks",
     "allow-create-task",
     "allow-cancel-task",
+    "allow-delete-task",
     "allow-pet-action",
     "core:event:allow-listen",
     "core:event:allow-unlisten",

@@ -63,6 +63,7 @@ fn main() {
         "list_tasks",
         "create_task",
         "cancel_task",
+        "delete_task",
         "pet_action",
         "set_pet_regions",
     ]);

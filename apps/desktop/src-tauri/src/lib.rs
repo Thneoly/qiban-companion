@@ -259,6 +259,7 @@ pub fn run() {
             commands::list_tasks,
             commands::create_task,
             commands::cancel_task,
+            commands::delete_task,
             pet::pet_action,
             pet::set_pet_regions,
         ])
