@@ -92,6 +92,28 @@ webkitRelativePath，importModel 校验通过——`avatar-smoke.mjs inject` 即
 - 冒烟顺序纪律：起 bg 后必须确认 bgview 进程活着、再开始采集——bgview 炸掉时
   采集拍到的是用户真实桌面（2026-11-01 首次冒烟即如此，帧文件本地即删、未外发）。
 
+## v2.2 执行补记（2026-11-01 下午返工会话，take B + 镜 6 补拍 + BGM）
+
+- **成片**：`compose-avfilter-v2.txt`（2B 两拍：面板+光标 → Hiyori+字幕；S6 取自补拍件
+  `[2:v]`；BGM `amix ... normalize=0`——默认 normalize 会把人声压半；全 concat 段补
+  `setsar=1`，gdigrab 件 SAR=675:1088 不齐会炸 concat）。BGM 用 `make-bgm.ps1` 合成。
+- **原生文件夹选择器路线当日失效**：对话框「上传」点掉后 input.files 仍为 0、权限气泡
+  不再出现；且任何 picker 交互会楔死该 WebView2 实例后续的 CDP `setFileInputFiles`
+  （重启 app 才恢复）。会话内绝不碰原生 picker，导入一律 `inject-2b.mjs`（CDP 目录注入，
+  镜头口径「点击导入 → 切换瞬间」），take-driver 已按此改。
+- **镜 6 配对码**：panel 页停在「日常」时按钮在隐藏 DOM 里被盲点、码不显示——必须先点
+  `a.nav-link`「设备」再取码（take-driver 已加导航 + 重试 + 失败抛错）。
+- **ddagrab 会话级楔死**：一场连录结束后短间隔再起 ddagrab 会停在首帧前（不建输出文件）。
+  补拍小段改 gdigrab 连录（普通窗口 OK；宠物分层窗不渲染，宠物缺席段构图书面规避）。
+  起录后先验证输出文件在增长再放行动作（`phone-shot6.mjs` 的 p6-* 文件信号即为此设计）。
+- **OBS 启动**：`Start-Process` 必须带 `-WorkingDirectory`（bin\64bit），否则报
+  `Failed to find locale/en-US.ini`；崩溃残留会弹「检测到崩溃」对话框，UIA 点
+  「以正常模式运行」（安全模式禁用 websocket）。
+- **playwright 钉 1.64.1**：`^1.49` 漂到要 chromium-1248（未装，手机浏览器起不来）；
+  1.64 + `executablePath` 指向已装的 chromium-1243 解决（connectOverCDP 本就不需要本地浏览器）。
+- **PS 5.1 读写 UTF-8 滤镜文件会毁中文**（本次重蹈：Get-Content/Set-Content 往返后
+  drawtext 全部乱码）——含中文的脚本/滤镜文件只许用 Write/Edit 工具改。
+
 ## 红线与既有结论（不变）
 
 - key/设置页/接口地址不入境；「发往模型服务」边界行与旧对话区模糊遮挡；

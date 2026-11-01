@@ -55,6 +55,8 @@ async function main() {
   log('launching phone browser');
   const ctx = await chromium.launchPersistentContext(resolve(HERE, 'phone-profile'), {
     headless: false, viewport: { width: 400, height: 800 }, args: ['--window-position=560,120', '--window-size=416,880'],
+    // pw 1.64 wants chromium-1248 (not downloaded); reuse an installed binary for this non-CDP launch
+    executablePath: process.env.LOCALAPPDATA + '\\ms-playwright\\chromium-1243\\chrome-win64\\chrome.exe',
   });
   const phone = ctx.pages()[0] ?? await ctx.newPage();
   await phone.goto('http://127.0.0.1:4318/', { waitUntil: 'networkidle', timeout: 15000 });
@@ -108,9 +110,11 @@ async function main() {
   await ps('petwin.ps1', ['-Action', 'move', '-Which', 'pet', '-X', String(petL), '-Y', String(petT)]).then(s => log('pet home', s));
   await sleep(1500); // settle before the bubble opens
 
-  // ---- shot 2B: avatar switch - import own Live2D model (2026-11-01 smoke-verified flow) ----
-  // real UX: click label -> native folder picker (raised TOPMOST above wallpaper) -> type path
-  // -> Enter x2 -> in-page permission bubble「上传到此站点？」-> click 上传 -> Hiyori renders.
+  // ---- shot 2B: avatar switch - import own Live2D model (2026-11-01 v2: CDP injection) ----
+  // Native picker stopped delivering files today (dialog 上传 closes it but input.files stays 0,
+  // no permission bubble, and any picker interaction wedges later CDP setFileInputFiles on this
+  // WebView2 instance). Runbook-sanctioned fallback: CDP directory injection. On film the beat is
+  // panel + cursor at the import entry -> Hiyori appears (真实导入，剪辑省略选择器过程).
   log('shot2B avatar switch');
   await cdp(`document.querySelector('button.pet-character').click();'open'`);
   await sleep(1100);
@@ -127,26 +131,10 @@ async function main() {
   const lab = JSON.parse(await cdp(`(function(){var l=document.querySelector('label.model-import');if(!l)return JSON.stringify({x:-1,y:-1});var b=l.getBoundingClientRect();return JSON.stringify({x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)})})()`));
   if (lab.x < 0) throw new Error('import label not found');
   const labX = winL + lab.x, labY = winT + lab.y;
-  await glide(460, 540, labX, labY, 900);
-  await ps('input.ps1', ['-Action', 'click', '-X', String(labX), '-Y', String(labY)]);
-  await sleep(2200); // native folder picker opens
-  await ps('dialog-probe.ps1', ['-Topmost']).then(s => log('picker raised:', s)).catch(e => log('picker probe WARN', e.message));
-  await sleep(900); // picker visible beat on film
-  await ps('input.ps1', ['-Action', 'text', '-Text', 'D:\\Live2D\\Hiyori']);
-  await ps('input.ps1', ['-Action', 'key', '-Key', 'enter']);
-  await sleep(2000);
-  await ps('input.ps1', ['-Action', 'key', '-Key', 'enter']); // 选择文件夹
-  await sleep(1500); // picker closes; permission bubble docks top-left of the pet window
-  const upX = winL + 212, upY = winT + 101; // 上传 button offset, measured 2026-11-01
-  await glide(labX, labY, upX, upY, 700);
-  await ps('input.ps1', ['-Action', 'click', '-X', String(upX), '-Y', String(upY)]);
-  let r2b = 'pending';
-  for (let i = 0; i < 14; i++) {
-    await sleep(1000);
-    r2b = await cdp(`(document.querySelector('.appearance-panel button[aria-pressed=true]')?.textContent)||'none'`);
-    if (String(r2b).includes('2D 数字人')) break;
-  }
-  log('shot2B renderer after import:', r2b);
+  await glide(460, 540, labX, labY, 1000);
+  await sleep(1400); // cursor at the import entry on film (no click: a click opens the native picker and wedges CDP injection)
+  const r2b = await node([resolve(HERE, 'inject-2b.mjs')]).catch(e => 'INJECT_FAIL ' + e.message);
+  log('shot2B inject:', String(r2b).trim().split('\n').pop());
   await sleep(3000); // Hiyori idles on film
   // off-film cleanup: remove imported model, back to interaction, close bubble (shot3 expects it closed)
   await cdp(`(async function(){var b=[...document.querySelectorAll('.appearance-panel button')].find(x=>x.textContent.trim()==='移除本机模型');if(b){b.click();await new Promise(r=>setTimeout(r,1500))}var back=[...document.querySelectorAll('.appearance-panel button')].find(x=>x.textContent.trim()==='返回互动');if(back)back.click();await new Promise(r=>setTimeout(r,700));var x=[...document.querySelectorAll('button')].find(e=>e.getAttribute('aria-label')==='收起气泡');if(x)x.click();return 'cleaned'})()`);
@@ -202,8 +190,15 @@ async function main() {
 
   // ---- shot 6: phone continuation (B) ----
   log('shot6 pairing code');
-  const code = await cdpPanel(`(async()=>{var b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='生成五分钟配对码');if(!b)return 'NOBTN';b.click();await new Promise(r=>setTimeout(r,2200));var m=document.body.innerText.match(/(\\d{6})\\s*\\n\\s*有效至/);return m?m[1]:'NOCODE:'+document.body.innerText.slice(700,900);})()`);
+  // the panel page persists its last view; navigate to 设备 first or the generate button (hidden
+  // in DOM) gets blind-clicked with the code never displayed — this is what failed take A.
+  await cdpPanel(`(function(){var a=[...document.querySelectorAll('a.nav-link')].find(e=>e.textContent.trim()==='设备');if(a)a.click();return a?'nav':'NO'})()`);
+  await sleep(2000);
+  const genCode = () => cdpPanel(`(async()=>{var b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='生成五分钟配对码');if(!b)return 'NOBTN';b.click();await new Promise(r=>setTimeout(r,2200));var m=document.body.innerText.match(/(\\d{6})\\s*\\n\\s*有效至/);return m?m[1]:'NOCODE:'+document.body.innerText.slice(700,900);})()`);
+  let code = await genCode();
+  if (!/^\d{6}$/.test(String(code))) { await sleep(1500); code = await genCode(); } // one retry
   log('pairing code:', code);
+  if (!/^\d{6}$/.test(String(code))) throw new Error('pairing code failed: ' + code);
   await cdp(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='收起气泡')?.click();'closed'`);
   await sleep(1200);
   await glide(1637, 871, 960, 900, 900);
@@ -247,4 +242,9 @@ async function voiceTurn() {
   return await cdp(micWaitDoneJs);
 }
 
-main().catch(e => { console.error('DRIVER_ERROR', e.message); process.exit(1); });
+// crash-safe wrap: a driver error must not leave strays parked + OBS recording (bit take A at 209.9s)
+async function emergency() {
+  try { await node([resolve(HERE, 'obs-ctl.mjs'), 'stop']); } catch {}
+  try { await ps('stray-windows.ps1', ['-Action', 'restore']); } catch {}
+}
+main().catch(async e => { console.error('DRIVER_ERROR', e.message); await emergency(); process.exit(1); });
