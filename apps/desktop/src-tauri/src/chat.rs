@@ -1696,9 +1696,7 @@ mod tests {
             assert!(inner.ensure_current("old", invalidations, version).is_ok());
             inner.store.as_mut().unwrap().clear().unwrap();
             inner.invalidate_memory(true);
-            assert!(inner
-                .ensure_current("old", invalidations, version)
-                .is_err());
+            assert!(inner.ensure_current("old", invalidations, version).is_err());
             let (signal, _) = watch::channel(false);
             inner.active = Some(("new".into(), signal));
         }
@@ -2581,8 +2579,7 @@ mod tests {
             *settled_flag.lock().unwrap() = deposited;
             release.send(()).unwrap();
         });
-        state.0.lock().unwrap().active =
-            Some(("slow-1".to_string(), watch::channel(false).0));
+        state.0.lock().unwrap().active = Some(("slow-1".to_string(), watch::channel(false).0));
         let (invalidations, version, usage_receipt) = {
             let inner = state.0.lock().unwrap();
             (
