@@ -492,3 +492,66 @@ test('the svg mouth follows playback amplitude in coarse steps', async ({ page }
   await page.evaluate(() => (window as any).releasePlays());
   await expect(mic(page)).toHaveText('语音说话');
 });
+
+test('wide reading keeps a live inert companion figure that lip-syncs during a voice turn', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Same forced audio context + synthesised analyser as the compact mouth
+  // test: the mouth chain must run in the wide surface too.
+  await page.evaluate(() => {
+    const w = window as any;
+    const real = window.AudioContext;
+    class Forced extends real {
+      get state() { return 'running'; }
+      async resume() { try { await super.resume(); } catch { /* forced */ } }
+    }
+    window.AudioContext = Forced;
+    const read = AnalyserNode.prototype.getByteTimeDomainData;
+    AnalyserNode.prototype.getByteTimeDomainData = function (array: Uint8Array) {
+      if (w.mouthDrive) { for (let i = 0; i < array.length; i++) array[i] = i % 2 ? 230 : 26; return; }
+      return read.call(this, array);
+    };
+  });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.replyDeltas = ['第一句。'];
+    w.hangPlayCount = 1;
+  });
+  await openChat(page);
+  await page.getByRole('button', { name: '展开阅读', exact: true }).click();
+  const shell = page.locator('.pet-shell');
+  await expect(shell).toHaveClass(/pet-shell-wide/);
+  await expect(page.locator('.pet-scene')).toBeHidden();
+  // The figure is a shrunken thumbnail beside the reader, no longer hidden.
+  const figure = page.locator('.pet-character');
+  await expect(figure).toBeVisible();
+  const box = (await figure.boundingBox())!;
+  expect(box.width).toBeLessThanOrEqual(120);
+  expect(box.height).toBeGreaterThanOrEqual(150);
+  // Presentation only: inert to pointer, keyboard and native hit regions.
+  expect(await figure.evaluate(e => getComputedStyle(e).pointerEvents)).toBe('none');
+  await expect(figure).not.toHaveAttribute('data-pet-hit');
+  await expect(figure).toHaveAttribute('tabindex', '-1');
+  // A voice turn in the expanded view: the visible thumbnail's mouth follows
+  // the playback amplitude exactly like compact mode.
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).playLog.length)).toBe(1);
+  const mouth = figure.locator('svg .avatar-mouth');
+  await page.evaluate(() => { (window as any).mouthDrive = true; });
+  await expect.poll(() => mouth.getAttribute('data-level')).toBe('4');
+  await page.evaluate(() => { (window as any).mouthDrive = false; });
+  await expect.poll(() => mouth.getAttribute('data-level')).toBe('0');
+  await page.evaluate(() => (window as any).releasePlays());
+  await expect(mic(page)).toHaveText('语音说话');
+  // Small windows keep the figure too, just smaller.
+  await page.setViewportSize({ width: 390, height: 620 });
+  await expect.poll(async () => (await figure.boundingBox())?.width ?? 0).toBeLessThanOrEqual(70);
+  // Collapsing the reader restores the full-size interactive figure.
+  await page.getByRole('button', { name: '收回气泡', exact: true }).click();
+  await expect(shell).not.toHaveClass(/pet-shell-wide/);
+  await expect.poll(async () => (await figure.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(170);
+  await expect(figure).toHaveAttribute('data-pet-hit');
+  await expect(figure).not.toHaveAttribute('tabindex', '-1');
+});
