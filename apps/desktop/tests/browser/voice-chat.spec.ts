@@ -78,11 +78,19 @@ async function mockVoiceChat(page: Page) {
       },
     } });
     const context = new AudioContext();
+    // gumMode 'instant' (default) resolves on the spot; 'hang' parks each call
+    // in w.gumPending for the test to settle, so the preparing label can be
+    // observed while the device call itself is still in flight.
+    w.gumStreams = []; w.gumPending = [];
     navigator.mediaDevices.getUserMedia = () => {
       w.gumCalls++;
-      const stream = context.createMediaStreamDestination().stream;
-      w.lastStream = stream;
-      return Promise.resolve(stream);
+      const make = () => {
+        const stream = context.createMediaStreamDestination().stream;
+        w.gumStreams.push(stream); w.lastStream = stream;
+        return stream;
+      };
+      if (w.gumMode === 'hang') return new Promise((resolve, reject) => { w.gumPending.push({ resolve: () => resolve(make()), reject }); });
+      return Promise.resolve(make());
     };
     window.MediaRecorder = class {
       stream: MediaStream; state = 'inactive'; mimeType = 'audio/wav';
@@ -136,6 +144,8 @@ test('unconfigured or unreadable voice settings keep the mic disabled', async ({
   await expect(mic(page)).toBeDisabled();
   await expect(mic(page)).toHaveText('语音未配置');
   await expect(mic(page)).toHaveAttribute('title', /语音未配置或缺密钥/);
+  // Unconfigured voice never touches the input device — no prewarm either.
+  expect(await page.evaluate(() => (window as any).gumCalls)).toBe(0);
   // A failing settings read fails closed too: reopen with a rejecting invoke.
   await page.evaluate(() => {
     const inner = (window as any).__TAURI_INTERNALS__;
@@ -156,9 +166,10 @@ test('recording uploads once, blur cancels an open recording, and 10 seconds aut
   await openChat(page);
   await expect(mic(page)).toHaveText('语音说话');
   // One manual stop → exactly one upload carrying the whole WAV payload.
+  // gumCalls = the bubble-open prewarm + this take's own acquire.
   await mic(page).click();
   await expect(mic(page)).toHaveText('结束录音');
-  expect(await page.evaluate(() => (window as any).gumCalls)).toBe(1);
+  expect(await page.evaluate(() => (window as any).gumCalls)).toBe(2);
   await mic(page).click();
   await expect.poll(() => page.evaluate(() => (window as any).transcribeCalls.length)).toBe(1);
   const first = await page.evaluate(() => (window as any).transcribeCalls[0]);
@@ -182,6 +193,53 @@ test('recording uploads once, blur cancels an open recording, and 10 seconds aut
   await expect(mic(page)).toHaveText('结束录音');
   await page.clock.fastForward(10000);
   await expect.poll(() => page.evaluate(() => (window as any).transcribeCalls.length)).toBe(2);
+});
+
+test('the mic flips to 准备中 before the device answers, and a denied device recovers', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  // Every getUserMedia parks until the test settles it, so the pending label
+  // must appear with the device call still in flight — the flip cannot wait
+  // for the device (the cold-start case is 2-3.5s; the label is same-frame).
+  await page.evaluate(() => { (window as any).gumMode = 'hang'; });
+  await openChat(page);
+  await expect(mic(page)).toHaveText('语音说话');
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('准备中…');
+  await expect(mic(page)).toBeDisabled();
+  // gumPending[0] is the bubble-open prewarm, [1] this take — both parked.
+  expect(await page.evaluate(() => (window as any).gumPending.length)).toBe(2);
+  await page.evaluate(() => (window as any).gumPending[1].resolve());
+  await expect(mic(page)).toHaveText('结束录音');
+  await mic(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).transcribeCalls.length)).toBe(1);
+  // A take whose device call is denied leaves preparing cleanly.
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('准备中…');
+  await page.evaluate(() => (window as any).gumPending[2].reject('fixture denial'));
+  await expect(mic(page)).toHaveText('语音说话');
+  await expect(page.getByText('无法使用麦克风：请检查系统权限或设备后重试。')).toBeVisible();
+});
+
+test('opening the chat prewarms the input device once per session and releases it immediately', async ({ page }) => {
+  await mockVoiceChat(page);
+  await page.goto('/');
+  await openChat(page);
+  await expect(mic(page)).toHaveText('语音说话');
+  // One sacrificial acquire at bubble open whose tracks stop the moment the
+  // handle arrives — no frame is ever captured, the device reads ended.
+  await expect.poll(() => page.evaluate(() => (window as any).gumCalls)).toBe(1);
+  expect(await page.evaluate(() => (window as any).gumStreams[0].getTracks().map((t: MediaStreamTrack) => t.readyState))).toEqual(['ended']);
+  // Reopening the bubble does not re-acquire: the prewarm is once per session.
+  await page.getByRole('button', { name: '收起气泡', exact: true }).click();
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByRole('button', { name: '聊一聊', exact: true }).click();
+  await expect(mic(page)).toHaveText('语音说话');
+  expect(await page.evaluate(() => (window as any).gumCalls)).toBe(1);
+  // The first real take acquires its own stream and records normally.
+  await mic(page).click();
+  await expect(mic(page)).toHaveText('结束录音');
+  expect(await page.evaluate(() => (window as any).gumCalls)).toBe(2);
 });
 
 test('the transcript auto-sends through the real chat chain with the expected scope', async ({ page }) => {
