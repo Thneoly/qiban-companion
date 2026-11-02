@@ -24,6 +24,7 @@
     "allow-voice-settings-get",
     "allow-voice-transcribe",
     "allow-voice-speak",
-    "allow-voice-turn-cancel"
+    "allow-voice-turn-cancel",
+    "allow-live2d-pick-folder"
   ]
 }

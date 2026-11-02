@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { nativeDesktop } from '../../lib/surface';
-import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeContextEpoch, type ChatTurn, decodeContextPreview, sameScope, type ContextPreview, type MemoryUsage } from '@companion/contracts';
+import { decodeChatConfig, decodeChatDelta, decodeChatResult, decodeChatHistory, decodeMemoryChanged, type ChatTurn, decodeContextPreview, sameScope, type ContextPreview, type MemoryUsage } from '@companion/contracts';
 import { ConversationReader } from './ConversationReader';
 import { useVoiceTurn, type MicState, type VoiceTurnContext } from '../voice/useVoiceTurn';
 import type { ConversationPhase as Phase } from '../companion/presentation';
@@ -11,6 +11,25 @@ const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等�
 const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', preparing: '准备中…', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
 /** Hostname only for the persistent boundary line; the full base URL stays in the expandable preview. */
 const hostOf = (baseUrl: string): string => { try { return new URL(baseUrl).host; } catch { return baseUrl; } };
+/** True when two same-scope previews differ only by the epoch: every
+ * selected app memory keeps its id AND revision, and the personal family
+ * keeps its policy, status and active set. Such a move (a settled task
+ * fact, a remote create) only added rows the user never selected — nothing
+ * the sender approved changed, so the additive event handler can refresh
+ * the bookkeeping in place (TUWE-19). */
+function additiveOnly(fresh: ContextPreview, shown: ContextPreview): boolean {
+  if (!sameScope(fresh.scope, shown.scope)) return false;
+  if (fresh.items.length !== shown.items.length
+    || fresh.items.some((m, i) => { const s = shown.items[i]; return s === undefined || m.id !== s.id || m.revision !== s.revision; })) return false;
+  const f = fresh.personal, s = shown.personal;
+  if (f.policy.enabled !== s.policy.enabled
+    || f.policy.selectedIds.length !== s.policy.selectedIds.length
+    || f.policy.selectedIds.some((id, i) => s.policy.selectedIds[i] !== id)
+    || f.status !== s.status
+    || f.items.length !== s.items.length
+    || f.items.some((m, i) => { const o = s.items[i]; return o === undefined || m.id !== o.id || m.seq !== o.seq; })) return false;
+  return true;
+}
 export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActive, mouth }: { readingRequest?: number; onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; /** Reports whether a voice turn is under way (transcribing or speaking). The pet surface uses it to keep the bubble alive across window blur — cutting speech because the user looked elsewhere reads as the companion stopping mid-sentence. */ onVoiceActive?: (active: boolean) => void; mouth?: { current: number } }) {
   const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState('');
@@ -50,8 +69,30 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
     if (!alive.current) return false;
     if (contextEpoch.current === null) return false;
     if (previewRef.current && sameScope(value.scope,previewRef.current.scope) && value.contextEpoch===contextEpoch.current) return true;
+    // An UNEXPLAINED epoch move is never silently adopted: the preview diff
+    // cannot see pruned history, so a missed destructive notification must
+    // still take the hard reconcile (TUWE-19 keeps this backstop).
     await reconcileMemory(value.contextEpoch);
     return false;
+  }
+  /** An additive memory change landed mid-flight: the running turn's
+   * premises still hold, so only the preview/epoch bookkeeping refreshes —
+   * no chat_cancel, no session reset, the reply keeps streaming. The
+   * host's interrupts:false flag is the authority; the diff below only
+   * guards against a flag that disagrees with what we show. */
+  async function refreshAfterAdditiveChange(epoch: number) {
+    if (contextEpoch.current !== null && epoch <= contextEpoch.current) return;
+    try {
+      const value = decodeContextPreview(await invoke('chat_context_preview'));
+      if (!alive.current || contextEpoch.current === null || !previewRef.current) return;
+      if (!sameScope(value.scope, previewRef.current.scope) || !additiveOnly(value, previewRef.current)) {
+        // Not additive against what we show (raced with a real change):
+        // the hard path owns it.
+        await reconcileMemory(value.contextEpoch);
+        return;
+      }
+      previewRef.current = value; setPreview(value); contextEpoch.current = value.contextEpoch;
+    } catch { /* keep the old preview; the send-time re-check re-admits */ }
   }
   /** Fire-and-forget preview refresh for non-epoch failures (e.g. a personal
    * admission rejection leaves the epoch unchanged, so checkEpoch would keep
@@ -114,8 +155,12 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
       }).catch(() => {});
     }).then(remove => { if (disposed) remove(); else unlistenRoots = remove; }).catch(() => {});
     let unlisten: (() => void) | undefined;
-    if (nativeDesktop) void listen<{ contextEpoch: number }>('memory-changed', event => {
-      try { void reconcileMemory(decodeContextEpoch(event.payload.contextEpoch)); }
+    if (nativeDesktop) void listen<unknown>('memory-changed', event => {
+      try {
+        const changed = decodeMemoryChanged(event.payload);
+        if (changed.interrupts) void reconcileMemory(changed.contextEpoch);
+        else void refreshAfterAdditiveChange(changed.contextEpoch);
+      }
       catch { setConfigured(false); setStatus('记忆通知不兼容，请重开客户端。'); }
     }).then(remove => { if (disposed) remove(); else unlisten = remove; }).catch(() => { if (!disposed) setStatus('窗口通知连接失败，将在发送前重新核对记录。'); });
     const focus = () => { if (nativeDesktop) void checkEpoch().catch(() => { if (!disposed) { setConfigured(false); setStatus('无法核对当前会话，请收起后重开。'); } }); };

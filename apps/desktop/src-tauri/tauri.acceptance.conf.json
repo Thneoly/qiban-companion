@@ -1,4 +1,12 @@
 {
   "productName": "Qiban Acceptance",
-  "identifier": "dev.qiban.companion.acceptance"
+  "identifier": "dev.qiban.companion.acceptance",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFNjA0MEI1Q0QxQkJFMjIKUldRaXZodk50VUJnem55cDNrU3F1dnhIZit5V01xaThhTHQxSkd4VFUrelhwWU5MbHpZamVOOGcK",
+      "endpoints": [
+        "https://127.0.0.1:1/latest.json"
+      ]
+    }
+  }
 }

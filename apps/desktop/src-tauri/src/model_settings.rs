@@ -231,6 +231,7 @@ pub fn model_settings_save(
                 context_epoch: epoch,
                 chat_cleared: false,
                 remote: false,
+                interrupts: true,
             },
         );
     }

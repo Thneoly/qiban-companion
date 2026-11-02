@@ -243,3 +243,126 @@ test('tool status deltas render as a transient line and never join the reply', a
   // With localSearchEnabled the boundary sentence discloses search results.
   await expect(page.locator('.chat-boundary')).toContainText('已授权目录的检索结果也会发送给该服务');
 });
+
+test('additive memory change mid-stream keeps the reply and adopts the fresh epoch (TUWE-19)', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'isTauri', { value: true });
+    const w = window as any;
+    w.generateRequests = []; w.cancelCount = 0;
+    let epoch = 5, count = 0;
+    const history: { user: string; assistant: string }[] = [];
+    let next = 0; const callbacks = new Map<number, (value: unknown) => void>(); w.__callbacks = callbacks;
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
+    const usage = () => ({ scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: epoch, memories: [], bodyChars: 0, contextChars: 0, personal: { status: 'offline', memories: [], bodyChars: 0, contextChars: 0 } });
+    const preview = () => ({ scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: epoch,
+      policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], bodyChars: 0, contextChars: 0,
+      personal: { status: 'offline', policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], inactiveSelectedIds: [], bodyChars: 0, contextChars: 0 } });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: (cb: (value: unknown) => void) => { callbacks.set(++next, cb); return next; }, unregisterCallback: () => {},
+      invoke: async (cmd: string, args: any) => {
+        if (cmd === 'plugin:event|listen') { (window as any).memoryListener = args.handler; return ++next; }
+        if (cmd === 'chat_context_preview') return preview();
+        if (cmd === 'chat_config') return { configured: true, model: 'glm-test-fixture', maxOutputTokens: 1024 };
+        if (cmd === 'chat_history') return history;
+        if (cmd === 'chat_cancel') { w.cancelCount++; return; }
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'guide_status') return true;
+        if (cmd === 'personal_memory_overview') return { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' };
+        if (cmd === 'chat_generate') {
+          count++; w.generateRequests.push(structuredClone(args.request));
+          const id = args.request.requestId;
+          if (count === 1) {
+            // A slow reply held open across the settlement: the first delta
+            // paints, then the turn only finishes when the test releases it.
+            args.onDelta.onmessage({ requestId: id, text: '第一段', memoryUsage: null });
+            return new Promise(resolve => { w.finishTurn = () => {
+              args.onDelta.onmessage({ requestId: id, text: '第二段', memoryUsage: usage() });
+              history.push({ user: args.request.prompt, assistant: '第一段第二段' });
+              resolve({ requestId: id, elapsedMs: 9, historySaved: true, usage: { total_tokens: 12 }, memoryUsage: usage() });
+            }; });
+          }
+          args.onDelta.onmessage({ requestId: id, text: '新回答', memoryUsage: usage() });
+          history.push({ user: args.request.prompt, assistant: '新回答' });
+          return { requestId: id, elapsedMs: 3, historySaved: true, usage: { total_tokens: 2 }, memoryUsage: usage() };
+        }
+        return 1;
+      },
+    } });
+    // The background loops' additive change: epoch moves, nothing approved
+    // changed (a settled task fact the user has not selected).
+    w.settle = () => { epoch = 6; const handler = w.memoryListener as number | undefined; callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: epoch, chatCleared: false, remote: false, interrupts: false } }); };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByRole('button', { name: '聊一聊', exact: true }).click();
+  const bubble = page.locator('.chat-bubble');
+  await page.getByLabel('和栖栖说句话').fill('任务做完了吗');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByLabel('栖栖的回复')).toContainText('第一段');
+  // The settlement lands while the reply is still streaming.
+  await page.evaluate(() => (window as any).settle());
+  await page.waitForTimeout(50);
+  await page.evaluate(() => (window as any).finishTurn());
+  // The stream absorbed the additive change: full reply, honest receipt, no
+  // cancel, no "记忆或会话已变化" reset.
+  await expect(page.getByLabel('栖栖的回复')).toHaveText('第一段第二段');
+  await expect(page.getByRole('status')).toContainText('12 tokens');
+  await expect(page.getByRole('status')).not.toContainText('记忆或会话已变化');
+  expect(await page.evaluate(() => (window as any).cancelCount)).toBe(0);
+  await expect(page.getByText('最近 1 轮', { exact: true })).toBeVisible();
+  // The next send admits against the adopted epoch instead of being dropped.
+  await page.getByLabel('和栖栖说句话').fill('继续说');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByLabel('栖栖的回复')).toHaveText('新回答');
+  const second = await page.evaluate(() => (window as any).generateRequests[1]);
+  expect(second.expectedContextEpoch).toBe(6);
+});
+
+test('legacy memory-changed payload without the interrupts flag still resets the session', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'isTauri', { value: true });
+    const w = window as any;
+    w.cancelCount = 0;
+    let epoch = 5, count = 0;
+    let next = 0; const callbacks = new Map<number, (value: unknown) => void>(); w.__callbacks = callbacks;
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: (cb: (value: unknown) => void) => { callbacks.set(++next, cb); return next; }, unregisterCallback: () => {},
+      invoke: async (cmd: string, args: any) => {
+        if (cmd === 'plugin:event|listen') { (window as any).memoryListener = args.handler; return ++next; }
+        if (cmd === 'chat_context_preview') return { scope: { baseUrl: 'https://fixture.test', model: 'glm-test-fixture' }, contextEpoch: epoch,
+          policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], bodyChars: 0, contextChars: 0,
+          personal: { status: 'offline', policy: { enabled: false, revision: 0, selectedIds: [] }, items: [], inactiveSelectedIds: [], bodyChars: 0, contextChars: 0 } };
+        if (cmd === 'chat_config') return { configured: true, model: 'glm-test-fixture', maxOutputTokens: 1024 };
+        if (cmd === 'chat_history') return [];
+        if (cmd === 'chat_cancel') { w.cancelCount++; return; }
+        if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'guide_status') return true;
+        if (cmd === 'personal_memory_overview') return { online: false, stats: null, serviceUrl: 'http://127.0.0.1:4322' };
+        if (cmd === 'chat_generate') {
+          count++;
+          const id = args.request.requestId;
+          if (count === 1) {
+            args.onDelta.onmessage({ requestId: id, text: '开始回答', memoryUsage: null });
+            return new Promise(() => { /* never resolves: the interrupt kills it */ });
+          }
+          return { requestId: id, elapsedMs: 1, historySaved: true, usage: null, memoryUsage: { scope: args.request.expectedScope, memories: [], bodyChars: 0, contextChars: 0, personal: { status: 'offline', memories: [], bodyChars: 0, contextChars: 0 } } };
+        }
+        return 1;
+      },
+    } });
+    // Pre-split host payload: no interrupts field at all.
+    w.interrupt = () => { epoch = 6; const handler = w.memoryListener as number | undefined; callbacks.get(handler)?.({ event: 'memory-changed', id: 0, payload: { contextEpoch: 6, chatCleared: true, remote: true } }); };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '和栖栖互动' }).click();
+  await page.getByRole('button', { name: '聊一聊', exact: true }).click();
+  await page.getByLabel('和栖栖说句话').fill('会被打断的问题');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByLabel('栖栖的回复')).toContainText('开始回答');
+  await page.evaluate(() => (window as any).interrupt());
+  // The hard path still owns real invalidations: cancel issued, session reset.
+  await expect(page.getByRole('status')).toContainText('记忆或会话已变化');
+  expect(await page.evaluate(() => (window as any).cancelCount)).toBeGreaterThan(0);
+  await expect(page.getByLabel('栖栖的回复')).toHaveText('想聊点什么？');
+});

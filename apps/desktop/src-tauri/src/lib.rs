@@ -6,6 +6,7 @@ mod credentials;
 mod embedded;
 mod execution;
 mod instance;
+mod live2d_import;
 mod local_search;
 mod memory;
 mod memory_context;
@@ -259,8 +260,10 @@ pub fn run() {
             commands::list_tasks,
             commands::create_task,
             commands::cancel_task,
+            commands::delete_task,
             pet::pet_action,
             pet::set_pet_regions,
+            live2d_import::live2d_pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("桌面伴侣启动失败；请检查 WebView2、托盘和本地数据目录")
