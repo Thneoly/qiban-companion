@@ -32,22 +32,55 @@ export function localPath(value: unknown): string {
     throw Error('模型引用必须是目录内的相对路径');
   return value;
 }
+/** One picked file: folder-relative path plus its bytes (from the web file input or the native picker). */
+export type ImportedFile = { path: string; blob: Blob };
+/** live2d_pick_folder's raw ipc::Response: [4-byte BE manifest length][manifest UTF-8 JSON][file bytes].
+ * The ArrayBuffer form is the documented raw-IPC shape (voice_speak pattern);
+ * Uint8Array/array are the JSON seam for tests. Rust mirror: live2d_import.rs. */
+export type PickedFolder = { cancelled: boolean; files: ImportedFile[] };
+export function decodePickedFolder(value: unknown): PickedFolder {
+  if (value instanceof ArrayBuffer) return decodePickedBytes(new Uint8Array(value));
+  // Copy foreign-backed views so every Blob part is ArrayBuffer-backed.
+  if (value instanceof Uint8Array) return decodePickedBytes(new Uint8Array(value));
+  if (Array.isArray(value)) return decodePickedBytes(Uint8Array.from(value as number[]));
+  throw Error('模型文件夹数据格式不兼容');
+}
+function decodePickedBytes(bytes: Uint8Array<ArrayBuffer>): PickedFolder {
+  if (bytes.length < 4) throw Error('模型文件夹数据不完整');
+  const manifestLength = ((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>> 0;
+  if (manifestLength > bytes.length - 4) throw Error('模型文件夹数据不完整');
+  let manifest: { cancelled?: unknown; files?: unknown };
+  try { manifest = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + manifestLength))); }
+  catch { throw Error('模型文件夹数据不完整'); }
+  if (manifest.cancelled === true) return { cancelled: true, files: [] };
+  if (!Array.isArray(manifest.files)) throw Error('模型文件夹数据不完整');
+  const base = 4 + manifestLength;
+  const files: ImportedFile[] = [];
+  for (const entry of manifest.files) {
+    const record = entry as { path?: unknown; offset?: unknown; len?: unknown };
+    if (typeof record.path !== 'string' || typeof record.offset !== 'number' || typeof record.len !== 'number'
+      || !Number.isInteger(record.offset) || !Number.isInteger(record.len) || record.offset < 0 || record.len < 0
+      || record.offset + record.len > bytes.length - base) throw Error('模型文件夹数据不完整');
+    files.push({ path: record.path, blob: new Blob([bytes.subarray(base + record.offset, base + record.offset + record.len)]) });
+  }
+  return { cancelled: false, files };
+}
 /** Rebuild the resource table so a model cannot cause remote fetches, script or audio execution. */
-export async function importModel(selected: File[]): Promise<ModelBundle> {
-  if (!selected.length || selected.length > 256 || selected.reduce((n, f) => n + f.size, 0) > 80 * 1024 * 1024)
+export async function importModel(selected: ImportedFile[]): Promise<ModelBundle> {
+  if (!selected.length || selected.length > 256 || selected.reduce((n, f) => n + f.blob.size, 0) > 80 * 1024 * 1024)
     throw Error('请选择单个模型文件夹：最多 256 个文件、80 MB');
-  const all = new Map<string, File>();
+  const all = new Map<string, Blob>();
   for (const file of selected) {
-    const key = localPath(file.webkitRelativePath || file.name);
+    const key = localPath(file.path);
     if (all.has(key)) throw Error('模型文件路径重复');
-    all.set(key, file);
+    all.set(key, file.blob);
   }
   const entries = [...all.keys()].filter(x => x.endsWith('.model3.json'));
   if (entries.length !== 1) throw Error('文件夹中需要且只能有一个 .model3.json');
   const entry = entries[0]!;
-  const sourceFile = all.get(entry)!;
-  if (sourceFile.size > 1024 * 1024) throw Error('模型描述文件过大');
-  const source = object(JSON.parse(await sourceFile.text()));
+  const sourceBlob = all.get(entry)!;
+  if (sourceBlob.size > 1024 * 1024) throw Error('模型描述文件过大');
+  const source = object(JSON.parse(await sourceBlob.text()));
   if (source.Version !== 3) throw Error('当前支持 Cubism 3/4 的 model3 格式');
   const refs = object(source.FileReferences);
   const directory = entry.slice(0, entry.lastIndexOf('/') + 1);

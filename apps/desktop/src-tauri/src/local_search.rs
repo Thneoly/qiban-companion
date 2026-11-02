@@ -386,7 +386,7 @@ fn is_text_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_link(metadata: &Metadata) -> bool {
+pub(crate) fn is_link(metadata: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -491,10 +491,12 @@ pub async fn local_roots_add(
     let parent = 0;
     let picked = match path {
         Some(manual) => Some(std::path::PathBuf::from(manual)),
-        None => tauri::async_runtime::spawn_blocking(move || choose_folder(parent))
-            .await
-            .map_err(|_| "目录选择失败")?
-            .map_err(|_| "目录选择失败")?,
+        None => tauri::async_runtime::spawn_blocking(move || {
+            choose_folder(parent, "选择允许栖伴检索的目录")
+        })
+        .await
+        .map_err(|_| "目录选择失败")?
+        .map_err(|_| "目录选择失败")?,
     };
     let Some(raw) = picked else {
         return Ok(LocalRootsAddResult::Cancelled);
@@ -568,11 +570,13 @@ pub fn local_roots_remove(
 }
 
 /// Native folder picker on a dedicated STA thread (memory_export.rs pattern,
-/// IFileOpenDialog + FOS_PICKFOLDERS instead of the save dialog).
+/// IFileOpenDialog + FOS_PICKFOLDERS instead of the save dialog). Shared by
+/// local roots and the Live2D model import; the title names the feature so
+/// the dialog tells the user what the choice is for.
 #[cfg(windows)]
-fn choose_folder(parent: isize) -> Result<Option<PathBuf>, ()> {
+pub(crate) fn choose_folder(parent: isize, title: &str) -> Result<Option<PathBuf>, ()> {
     use windows::{
-        core::{w, HRESULT},
+        core::HRESULT,
         Win32::{
             Foundation::{ERROR_CANCELLED, HWND},
             System::Com::{
@@ -599,7 +603,7 @@ fn choose_folder(parent: isize) -> Result<Option<PathBuf>, ()> {
             let _apartment = Apartment;
             let dialog: IFileOpenDialog =
                 CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-            dialog.SetTitle(w!("选择允许栖伴检索的目录"))?;
+            dialog.SetTitle(&windows::core::HSTRING::from(title))?;
             dialog.SetOptions(
                 FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR,
             )?;
@@ -619,7 +623,7 @@ fn choose_folder(parent: isize) -> Result<Option<PathBuf>, ()> {
 }
 
 #[cfg(not(windows))]
-fn choose_folder(_parent: isize) -> Result<Option<PathBuf>, ()> {
+pub(crate) fn choose_folder(_parent: isize, _title: &str) -> Result<Option<PathBuf>, ()> {
     Err(())
 }
 
