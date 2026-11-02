@@ -70,7 +70,7 @@ export function LocalSearchSettings() {
       ) : (
         <p className="helper">还没有授权目录；添加后，聊天里的栖栖即可检索它们。</p>
       )}
-      {note && <p className="model-settings-note" role="status">{note}</p>}
+      {note && <p className="local-search-note" role="status">{note}</p>}
     </section>
   );
 }

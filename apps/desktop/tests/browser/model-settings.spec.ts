@@ -13,6 +13,7 @@ test('output budget is validated, saved, and reloaded without changing provider 
         if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
+        if (cmd === 'local_roots_get') return [];
         if (cmd === 'model_settings_get') return config;
         if (cmd === 'model_settings_save') { config = { ...config, ...args.config }; w.savedBudgets.push(args.config); return; }
         return 1;
@@ -51,6 +52,7 @@ test('test connection probes the draft values and reports the classified outcome
         if (cmd === 'get_runtime_info') return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
         if (cmd === 'list_tasks') return [];
         if (cmd === 'personal_memory_overview') return {online:false,stats:null,serviceUrl:'http://127.0.0.1:4322'};
+        if (cmd === 'local_roots_get') return [];
         if (cmd === 'model_settings_get') return config;
         if (cmd === 'model_settings_test') { w.probes.push(args.config); return w.probeOutcome; }
         return 1;
