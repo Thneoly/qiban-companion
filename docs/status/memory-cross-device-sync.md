@@ -23,7 +23,7 @@ chat-history.db schema v4 → **v5**（`companion-storage/src/memory_sync_outbox
 - **入队即折叠**：memory_create/update/delete/delete_all 在各自事务内入队，每条记忆至多一行 pending（create+update→create、update+update→一行、update+delete→delete、create+delete→净零）。**折叠必换 requestId**——在途旧 push 的迟到回执既删不掉折叠行也污染不了 mirror。
 - **base 在 push 时按当前 owner 的 mirror 解析**：行不含 owner——update 遇到"该 owner 的服务端没见过此条"降级为 create（账号切换=合并语义）；delete 无 mirror = 净零本地清行。
 - **事件应用真值表**（本机与服务端 revision 永不比较，mirror 是唯一汇合点）：新 id 物化为 user_manual 行；活跃行走域更新（含精准清；选择预算超限在同事务内自动取消该选择）；删除走与本机删除共享的 `tombstone_and_prune`；**无 pending 的墓碑被服务端活跃版复活**（聊天不恢复——诚实边界）；task_fact 只记 mirror 永不物化；**pending 行永远优先于远端条目**（只推 mirror）。upsert 的幂等门是 `mirror >= revision`（历史不倒退）；**delete 永不按 mirror 跳过**（快照会预记墓碑 revision 而本地无行可删）。
-- **第三条独立 5s 循环**（`apps/desktop/src-tauri/src/remote_memory.rs`）：每 tick 先 PULL 后 PUSH（重连先应用删除再恢复上传）；锁纪律——chat 锁只套同步存储操作绝不跨 await，account 锁可跨 HTTP（remote_documents 先例），两锁不同持。**pull-first 顺带把 pending 行 rebase 到最新 base（按 revision 的后写胜出）**；409 只覆盖 push 先于 pull 的竞态窗口——此时**放弃=删行+清该条 mirror+游标归零**，下一 tick 快照三向 diff 收敛；永不改 base 重推。`memory-changed` 增加 serde-default 的 `remote` 字段（旧 UI 兼容）。
+- **第三条独立 5s 循环**（`apps/desktop/src-tauri/src/remote_memory.rs`）：每 tick 先 PULL 后 PUSH（重连先应用删除再恢复上传）；锁纪律——chat 锁只套同步存储操作绝不跨 await，account 锁可跨 HTTP（remote_documents 先例），两锁不同持。**pull-first 顺带把 pending 行 rebase 到最新 base（按 revision 的后写胜出）**；409 只覆盖 push 先于 pull 的竞态窗口——此时**放弃=删行+清该条 mirror+游标归零**，下一 tick 快照三向 diff 收敛；永不改 base 重推。`memory-changed` 增加 serde-default 的 `remote` 字段（旧 UI 兼容）；TUWE-19 起再增 `interrupts` 字段——**空转 pull（仅游标）与纯加性 apply（远端新建、无人引用的措辞变更）不再取消在途回复**，只有剪枝性 apply（cleared_turns>0）才 invalidate+前缀重载，且仍在同一把 chat 锁内完成（DEL12 时序不放松）。
 
 ## 手机（C3）
 
@@ -57,14 +57,14 @@ chat-history.db schema v4 → **v5**（`companion-storage/src/memory_sync_outbox
 | E 崩溃竞争 | E1 本机事务中途崩→同生同灭 | enqueue 与变更同事务（q6 crash 注入点现含入队）+ native case 1（重启后行仍在） |
 | | E2 push 达服务端响应丢失→重放幂等 | 服务端 journal 重放（同 requestId 同回执；集成 offline 镜像断言） |
 | | E3 批应用中崩→重拉幂等 | 一批一事务：全落地或全回滚（游标只在批末推进；SQLite 提交语义，同 q6 先例） |
-| | E4 远端删除到达时流在途 | apply 后 invalidate_memory 取消活跃流 + 前缀重载；迟到回包由既有 epoch 门拒绝（DEL12/q6 既有覆盖） |
+| | E4 远端删除到达时流在途 | 剪枝性 apply（cleared_turns>0）后 invalidate_memory 取消活跃流 + 前缀重载；空转/加性 apply 不取消（TUWE-19）；迟到回包由 invalidations 失效计数门拒绝（原 epoch 门收窄，DEL12/q6 既有覆盖） |
 
 **两轮 PR 前对抗审查**（2026-10-11，Workflow 四维×3 票）：C1 抓到 13 条确认（含 HIGH：pull 在递出时推游标——丢失响应永久跳过事件，已改客户端申报制；MIN/MAX 压缩不可区分、delete 形状宽松等，全部当场修复并有测试钉住）。C2/C3 抓到 8 条确认，全部修复或文档化：HIGH——远端物化无本地容量预检（并集 >30 时 apply 整体失败、循环永久卡死；现为满载跳过+计数+记 mirror，游标照常推进）；在途 create push 与 create+delete 折叠的竞态（净零折叠让行消失、迟到 ack 无从记服务端事实、服务端遗留幽灵条目并在下次 pull 复活——现折叠保留 delete 行、ack 无条件记录服务端已接受的 revision）；pull 循环无界（服务端恒报 pending 可独占一个 tick；现有页数上限+游标不前进即退出）；每 tick 在账号锁内打 /v1/me（现缓存 owner，401 失效）；MemoryPanel 双框同开与网络失败丢草稿（现互斥关框、网络错保留编辑框）；跨账号删除不在原账号形成墓碑（合并语义固有，完整解需 per-owner 本地状态——诚实边界记录）。
 
 ## 诚实边界
 
 1. **冲突放弃不可逆**：败者路径的本地清理（清聊天）不恢复；放弃仅由面板刷新体现（remote 标记的 memory-changed），无专门弹窗。
-2. **收敛是轮询级**（桌面 5s/手机 10s，无推送）；"离线端暂停记忆注入"强门未做，以 invalidate+epoch 拒绝在途回复兜底。
+2. **收敛是轮询级**（桌面 5s/手机 10s，无推送）；"离线端暂停记忆注入"强门未做，以 invalidate+失效计数拒绝在途回复兜底（TUWE-19 起纯加性变更——任务事实沉淀、远端新建——不打断在途回复，下一请求按新 epoch 准入；通知丢失时发送前核对仍走硬重置）。
 3. **鉴权是账号级**：任意有效账号会话可管理记忆（无配对门槛/独立 scope）——后续可收紧。
 4. **同步迭代持 AccountState 锁跨 HTTP**（remote_documents 先例），最坏 ~2×12s 超时阻塞账号命令；chat 锁绝不跨 await。
 5. **远端更正致预算超限**→同事务自动取消该条选择（面板可见变化，非弹窗）。
@@ -80,3 +80,4 @@ chat-history.db schema v4 → **v5**（`companion-storage/src/memory_sync_outbox
 - `cargo fmt --check` / `clippy --workspace --all-targets --locked` 干净；`cargo test --workspace --locked` 全绿（storage 98、coordinator 13、core 15、desktop 68）。
 - `npm run check` + `test:browser`（55 过 1 跳）+ BFF node:test（9 过）+ contracts vitest（66 过）。
 - native 真机（2026-10-11，验收标识 `dev.qiban.companion.acceptance.m2-msync-20261011b`，[memory-sync.cjs](../../apps/desktop/tests/native/memory-sync.cjs)）：真实 UI 三例——创建入队且重启后仍在（同事务+持久）、更正折叠为一行并换 requestId、删除全部后每条保留内容为空的 delete 行（在途 create 保护）且墓碑不变式保持。证据在 gitignored `.cache/`；HTTP 收敛半边由上述 Rust 集成对真路由覆盖。native 既有脚本的 schema 断言已随 v5 同步（memory-panel/memory-context/voice-chat/single-instance/q6 harness）。
+- TUWE-19 修复（2026-11-02）：`cargo fmt --check`/`clippy --workspace --all-targets --locked -D warnings` 干净，`cargo test --workspace --locked` 全绿（desktop chat 22 例含新增「慢流跨沉淀存活」「加性 epoch 变化不作废在途完成」两例）；`npm run check` 全绿；`test:browser` 68 过 1 跳（含新增「加性变更不打断在途回复并收养新 epoch」「旧式无 interrupts 负载仍硬重置」两例；model-settings 一例为基线既有失败——C1 起挂载期 `local_roots_get` 未 mock——本次顺手补 mock 修复）。

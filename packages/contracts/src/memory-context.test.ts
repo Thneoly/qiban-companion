@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest';
 import fixture from '../fixtures/manual-memory.json';
-import { decodeContextPreview, decodeMemoryUsage, personalPolicyErrorMessage } from './memory-context';
+import { decodeContextPreview, decodeMemoryChanged, decodeMemoryUsage, personalPolicyErrorMessage } from './memory-context';
 import { decodeChatResult, decodeChatDelta, decodeRuntime } from './index';
 const scope={baseUrl:'https://fixture.test',model:'m'};
 const offlineFamily={status:'offline',policy:{enabled:false,revision:0,selectedIds:[]},items:[],inactiveSelectedIds:[],bodyChars:0,contextChars:0};
@@ -28,6 +28,12 @@ it('personal family accepts ordered subsets and rejects silent shrinkage',()=>{
   expect(()=>decodeContextPreview({...preview,personal:{...online,bodyChars:801}})).toThrow();
   expect(()=>decodeContextPreview({...preview,personal:{...online,status:'offline'}})).toThrow();
   expect(()=>decodeContextPreview({...preview,personal:{...online,policy:{...online.policy,enabled:false}}})).toThrow();
+});
+it('memory-changed payload defaults a missing interrupts flag to the legacy hard reset',()=>{
+  expect(decodeMemoryChanged({contextEpoch:4,chatCleared:false,remote:true,interrupts:false})).toEqual({contextEpoch:4,interrupts:false});
+  // Old host, pre-split payload: absent flag stays interrupting.
+  expect(decodeMemoryChanged({contextEpoch:4,chatCleared:false,remote:false})).toEqual({contextEpoch:4,interrupts:true});
+  for(const value of [undefined,{contextEpoch:-1},{contextEpoch:1.5},{contextEpoch:1,interrupts:'no'},{contextEpoch:1,interrupts:null}])expect(()=>decodeMemoryChanged(value)).toThrow();
 });
 it('usage receipt separates app and personal families',()=>{
   const usage={scope,contextEpoch:1,memories:[{id:fixture.id,revision:2}],bodyChars:10,contextChars:500,personal:{status:'sent',memories:[{id:9,seq:9}],bodyChars:10,contextChars:300}};

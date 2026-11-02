@@ -156,6 +156,7 @@ pub fn memory_policy_set(
                 context_epoch: result.context_epoch,
                 chat_cleared: result.chat_cleared,
                 remote: false,
+                interrupts: true,
             },
         )
         .is_ok();

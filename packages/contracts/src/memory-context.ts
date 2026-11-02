@@ -73,6 +73,19 @@ export function decodeContextPreview(value: unknown): ContextPreview {
   if(bodyChars>800 || bodyChars!==v.bodyChars || contextChars<bodyChars || contextChars>20000 || (!items.length && contextChars!==0)) return bad();
   return {scope,contextEpoch,policy:{enabled:p.enabled,revision,selectedIds:items.map(m=>m.id)},items,bodyChars,contextChars,personal:decodePersonalFamily(v.personal)};
 }
+export interface MemoryChangedEvent { contextEpoch: number; interrupts: boolean }
+/** The host's memory-changed payload. `interrupts` is false only for purely
+ * additive changes (a settled task fact, a remote create): the UI refreshes
+ * its preview without stopping the in-flight turn (TUWE-19). An ABSENT flag
+ * is an older host speaking the pre-split contract — treat it as
+ * interrupting, the safe legacy behavior. */
+export function decodeMemoryChanged(value: unknown): MemoryChangedEvent {
+  const v=object(value);
+  const contextEpoch=decodeContextEpoch(v.contextEpoch);
+  const interrupts=v.interrupts===undefined ? true : v.interrupts;
+  if(typeof interrupts!=='boolean') return bad();
+  return {contextEpoch,interrupts};
+}
 function decodePersonalUsage(value: unknown): PersonalUsageFamily {
   const v = object(value);
   if (v.status !== 'sent' && v.status !== 'offline') return bad();
