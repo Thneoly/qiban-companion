@@ -51,8 +51,10 @@ test("native account UI separates local data, deduplicates retry and clears late
           }
         : null,
       tasks: authenticated ? structuredClone(tasks) : [],
+      embedded: w.embedded === true,
     });
     w.holdSnapshot = false;
+    w.embedded = false;
     w.offlineLogout = false;
     w.requests = [];
     w.finishRevocation = () => {
@@ -89,6 +91,12 @@ test("native account UI separates local data, deduplicates retry and clears late
               useApiKey: false,
               hasApiKey: false,
               maxOutputTokens: 1024,
+            };
+          if (cmd === "account_lan_info")
+            return {
+              port: 4318,
+              embedded: w.embedded === true,
+              lanAddress: w.embedded === true ? "192.168.1.5" : null,
             };
           if (cmd === "account_snapshot") {
             const value = snapshot();
@@ -317,4 +325,35 @@ test("native account UI separates local data, deduplicates retry and clears late
     .getByRole("button", { name: "重试服务端撤销", exact: true })
     .click();
   await expect(page.getByLabel("账号邮箱", { exact: true })).toBeVisible();
+});
+
+test('embedded mode replaces the unreachable email form with a reconnect note', async ({ page }) => {
+  // P1-b: with the embedded coordinator owning the connection, signed_out
+  // means "service not ready" — the email OTP form would never complete and
+  // must not even render.
+  await page.addInitScript(() => {
+    const w = window as any;
+    Object.defineProperty(window, 'isTauri', { value: true });
+    w.snapshotEmbedded = true;
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
+      transformCallback: () => 1, unregisterCallback: () => {},
+      invoke: async (cmd: string) => {
+        if (cmd === 'get_runtime_info')
+          return { protocolVersion: 3, appVersion: 'test', runtime: 'desktop', persistence: 'sqlite', executorAvailable: false };
+        if (cmd === 'account_snapshot')
+          return {
+            port: 4318,
+            status: 'signed_out',
+            profile: null,
+            tasks: [],
+            embedded: w.snapshotEmbedded === true,
+          };
+        return 1;
+      },
+    } });
+  });
+  await page.goto('/?view=panel#devices');
+  await expect(page.getByTestId('embedded-connecting')).toContainText('本机服务启动中');
+  await expect(page.getByLabel('账号邮箱')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '账号与共享待办' })).toContainText('同一 WiFi');
 });
