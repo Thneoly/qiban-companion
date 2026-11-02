@@ -83,9 +83,9 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
     const realCreate=URL.createObjectURL,realRevoke=URL.revokeObjectURL;
     URL.createObjectURL=value=>{w.testBlob.created++;return realCreate.call(URL,value);};
     URL.revokeObjectURL=value=>{w.testBlob.revoked++;return realRevoke.call(URL,value);};
-    // The capture graph is built lazily inside getUserMedia, i.e. behind the
-    // user gesture that clicked the mic, so autoplay policy cannot leave a
-    // suspended context producing unplayable frames.
+    // The capture graph is built lazily inside getUserMedia — the bubble-open
+    // prewarm and the mic clicks alike, all after real user activation — so
+    // autoplay policy cannot leave a suspended context producing unplayable frames.
     let audio=null,gain=null;
     const ensureGraph=()=>{
       if(audio)return;
@@ -176,9 +176,10 @@ const invoke=(page,command,args)=>page.evaluate(({command,args})=>window.__TAURI
   await expect(mic).toHaveText('语音说话',{timeout:15000});
   assert(await pet.evaluate(()=>window.testPlays.length)===2,'second turn should play two clips');
   assert.deepEqual(await invoke(pet,'chat_history'),[{user:'本机语音测试',assistant:'第二句。结束了。'}]);
-  // Device release and blob hygiene across both turns.
+  // Device release and blob hygiene across both turns: 3 tracks = the
+  // bubble-open prewarm (dropped immediately) + one per recording take.
   const released=await pet.evaluate(()=>({tracks:window.testMic.tracks.map(t=>t.readyState),blob:{...window.testBlob},plays:window.testPlays.length}));
-  assert(released.tracks.length===2&&released.tracks.every(state=>state==='ended'),'capture tracks not released');
+  assert(released.tracks.length===3&&released.tracks.every(state=>state==='ended'),'capture tracks not released');
   assert(released.blob.created===released.blob.revoked,'object urls leaked');
   await pet.evaluate(()=>{try{void window.testAudio.close();}catch{}});
   await pet.screenshot({path:path.join(evidence,'voice-turn-complete.png')});

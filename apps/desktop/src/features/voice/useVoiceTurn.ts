@@ -11,7 +11,10 @@ import { nativeDesktop } from '../../lib/surface';
 import { normalizeRecording } from './audio';
 import { feedSentence, flushSentences } from './sentences';
 
-export type MicState = 'off' | 'idle' | 'recording' | 'transcribing' | 'speaking';
+/** 'preparing' spans the getUserMedia wait (cold start 2-3.5s, warm ~45ms):
+ * the button flips to it the moment the mic is clicked, before any device
+ * work, so the user sees the take has not started yet. */
+export type MicState = 'off' | 'idle' | 'preparing' | 'recording' | 'transcribing' | 'speaking';
 /** The chat leg reports stream deltas and settlement through this context. */
 export interface VoiceTurnContext {
   onDelta(text: string): void;
@@ -28,6 +31,24 @@ function toWav(value: unknown): Uint8Array<ArrayBuffer> {
 }
 const MAX_CLIPS = 64; // Rust rejects seq > 64; longer replies stop early
 const SINGLE_SHOT_CHARS = 500;
+/** WebView2 initializes the OS input device inside the session's first
+ * getUserMedia — 2-3.5s cold, every later call ~45ms warm (TUWE-15 b1:
+ * 2159/1991/3494ms cold vs 44-49ms warm, warmth surviving track stop). One
+ * sacrificial acquire-and-drop when the chat bubble opens moves that cost off
+ * the first mic click. Nothing is listened to: no MediaRecorder, no analyser,
+ * no upload — the tracks stop the instant the device handle arrives, so not a
+ * single frame is read or kept. Once per webview session; a failed warm-up
+ * retries on the next bubble open (the click path still works either way,
+ * behind the preparing label). */
+const inputConstraints: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true };
+let inputPrewarm: Promise<void> | null = null;
+function prewarmInput() {
+  if (!inputPrewarm) {
+    inputPrewarm = navigator.mediaDevices.getUserMedia({ audio: inputConstraints, video: false })
+      .then(stream => { stream.getTracks().forEach(track => track.stop()); })
+      .catch(() => { inputPrewarm = null; /* cold start stays on the click path; retry next bubble open */ });
+  }
+}
 
 export function useVoiceTurn(options: {
   onTranscript(text: string, turn: VoiceTurnContext): boolean | Promise<boolean>;
@@ -311,15 +332,20 @@ export function useVoiceTurn(options: {
   }
 
   async function startRecording() {
-    if (micRef.current === 'off') return;
+    if (micRef.current === 'off' || micRef.current === 'preparing') return;
     // Recording and speaking are mutually exclusive: stop the old turn first.
     if (micRef.current !== 'idle') { onStopChat.current(); interrupt(); setMicState('idle'); }
     const id = ++generation.current;
     release(); setTranscript(null); setNotice(null);
     recording.current = true;
+    // The pending label is committed in the same render as the click: the
+    // cold-start wait happens entirely inside getUserMedia, so it must not
+    // gate the feedback. A second click is ignored while preparing (the
+    // button is disabled too; blur or collapsing the bubble still cancels).
+    setMicState('preparing');
     try {
       const acquired = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }, video: false,
+        audio: inputConstraints, video: false,
       });
       if (generation.current !== id) { acquired.getTracks().forEach(track => track.stop()); return; }
       stream.current = acquired;
@@ -364,7 +390,10 @@ export function useVoiceTurn(options: {
       if (!saved.voiceBaseUrl || (saved.useVoiceKey && !saved.hasVoiceKey)) {
         setMicState('off');
         setGuidance('语音未配置或缺密钥：请在任务面板的“语音实验”里保存语音配置并设置密钥，再重开气泡。');
-      } else setMicState('idle');
+      } else {
+        setMicState('idle');
+        prewarmInput();
+      }
     }).catch(() => {
       if (!disposed) { setMicState('off'); setGuidance('语音配置读取失败，已停用麦克风；请收起后重开气泡重试。'); }
     });

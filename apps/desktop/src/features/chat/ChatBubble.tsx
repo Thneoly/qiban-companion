@@ -8,7 +8,7 @@ import { useVoiceTurn, type MicState, type VoiceTurnContext } from '../voice/use
 import type { ConversationPhase as Phase } from '../companion/presentation';
 
 const phaseNames: Record<Phase, string> = { idle: '准备好了', waiting: '等待回复', streaming: '正在回复', complete: '已完成', stopped: '已停止', error: '未完成' };
-const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
+const micLabels: Record<MicState, string> = { off: '语音未配置', idle: '语音说话', preparing: '准备中…', recording: '结束录音', transcribing: '取消语音', speaking: '停止朗读' };
 /** Hostname only for the persistent boundary line; the full base URL stays in the expandable preview. */
 const hostOf = (baseUrl: string): string => { try { return new URL(baseUrl).host; } catch { return baseUrl; } };
 export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActive, mouth }: { readingRequest?: number; onPhase: (phase: Phase) => void; onReading: (active: boolean) => void; /** Reports whether a voice turn is under way (transcribing or speaking). The pet surface uses it to keep the bubble alive across window blur — cutting speech because the user looked elsewhere reads as the companion stopping mid-sentence. */ onVoiceActive?: (active: boolean) => void; mouth?: { current: number } }) {
@@ -270,7 +270,7 @@ export function ChatBubble({ readingRequest = 0, onPhase, onReading, onVoiceActi
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); if (!e.repeat) void send(draft.trim()); }
       }}/>
       {reading && <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>}
-      <button type="button" className="pet-voice" aria-label={micLabels[voice.micState]} title={voice.micState === 'off' ? voice.guidance : undefined} disabled={voice.micState === 'off'} onClick={() => {
+      <button type="button" className="pet-voice" aria-label={micLabels[voice.micState]} title={voice.micState === 'off' ? voice.guidance : undefined} disabled={voice.micState === 'off' || voice.micState === 'preparing'} onClick={() => {
         if (voice.micState === 'recording') voice.finishRecording();
         else if (voice.micState === 'transcribing' || voice.micState === 'speaking') voice.stopSpeaking();
         else voice.startRecording();
