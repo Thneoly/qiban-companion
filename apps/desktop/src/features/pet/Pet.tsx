@@ -185,7 +185,11 @@ export function Pet() {
           <button onClick={() => void act('hide')}>隐藏</button>
         </div></>}
       </section>}
-      <button data-pet-hit data-pet-drag className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
+      {/* TUWE-13/A1: in the wide reader this button becomes a presentation-only
+          thumbnail (pet.css makes it pointer-events:none) — it must not take
+          focus or a native hit region either, or tapping the figure beside the
+          reader would collapse the whole bubble. */}
+      <button data-pet-hit={wide ? undefined : true} data-pet-drag tabIndex={wide ? -1 : 0} className="pet-character" aria-label="和栖栖互动" aria-expanded={open} disabled={quiet || !ready} onClick={() => { if (!open) setGuide(needsGuide); setOpen(value => !value); setNote('慢慢来，我在这里。'); }}>
         {avatar.appearance.renderer === 'live2d' && avatar.model && !live2dFailed && !hidden ? <Live2DRenderer active={!quiet} state={presence} bundle={avatar.model} onError={live2dError} mouth={mouth}/> : <AvatarArtwork state={presence} mouth={mouth}/>}
       </button>
       {!open && error && <button data-pet-hit className="pet-error-reopen" onClick={() => setOpen(true)}>操作未完成，点击查看</button>}
